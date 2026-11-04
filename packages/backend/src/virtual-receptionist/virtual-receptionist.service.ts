@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LLMService } from './services/llm.service';
@@ -20,6 +20,7 @@ import { SalonToolsService, SALON_TOOLS, executeSalonTool } from './tools/salon-
 import { AppointmentsService } from '../appointments/appointments.service';
 import { isReadOnlyStatus } from '../common/guards/read-only-tenant.guard';
 import { logId } from './log-id';
+import { asksForPerson, AttentionReason, ReceptionistInboxService } from './inbox/receptionist-inbox.service';
 import { AI_USAGE_SELECT, aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 
 /** What the fixed replies need to know about the salon. */
@@ -72,6 +73,8 @@ export class VirtualReceptionistService {
     private readonly subscriptions: SubscriptionsService,
     private readonly salonTools: SalonToolsService,
     private readonly appointmentsService: AppointmentsService,
+    // The panel's Conversaciones: who to tell when a client needs the salon.
+    @Optional() private readonly inbox?: ReceptionistInboxService,
   ) {}
 
   /**
@@ -113,6 +116,28 @@ export class VirtualReceptionistService {
       // Get or create conversation
       conversation = await this.conversationService.findOrCreateConversation(dto);
       const current = conversation;
+
+      // Paused from the panel (Conversaciones): her message is kept, the
+      // assistant does not answer -- on every channel; the callers send
+      // nothing for a paused reply.
+      if (await this.isPaused(current.id)) {
+        await this.conversationService.addMessage(current.id, {
+          role: 'user',
+          content: dto.message,
+          timestamp: new Date(),
+        });
+        this.logger.log(`Conversation ${current.id} is paused: message kept, not answered (${who})`);
+        return {
+          id: current.id,
+          content: '',
+          provider: LLMProvider.SYSTEM,
+          model: 'paused',
+          responseTime: Date.now() - startTime,
+          requiresHandoff: false,
+          intent: ChatIntent.OTHER,
+          paused: true,
+        } as MessageResponseDto;
+      }
       // The client's messages so far, this one included.
       const currentUserTurn = (current.messages ?? []).filter((m: { role?: string }) => m.role === 'user').length + 1;
 
@@ -135,6 +160,14 @@ export class VirtualReceptionistService {
       // that looks just like one, and the model could not tell them apart.
       const notes: string[] = [];
       let requiresHandoff = false;
+
+      // She asks for a person: the salon is told (once, until someone marks
+      // the conversation attended). The model can also ask for it with
+      // request_salon_attention; this catches what it misses.
+      if (asksForPerson(dto.message)) {
+        await this.flagAttention(dto.salonId, current.id, 'client_asked_person');
+        notes.push(this.askedForPersonNote(salon));
+      }
 
       switch (analysis.intent) {
         // No note for these. BOOK_APPOINTMENT used to prepend the legacy
@@ -218,7 +251,10 @@ export class VirtualReceptionistService {
           },
         });
       const toolExecutor = async (name: string, input: unknown) => {
-        const result = await runTool(name, input);
+        const result =
+          name === 'request_salon_attention'
+            ? await this.requestAttentionTool(dto.salonId, current.id, input, salon)
+            : await runTool(name, input);
         // Which tool ran and how it ended -- without the payload, which may
         // carry the client's details.
         const r = result as Record<string, unknown>;
@@ -354,6 +390,7 @@ export class VirtualReceptionistService {
       // fixed line, plus where the client can ask instead.
       if (generationResult.finishReason === 'refusal') {
         generationResult = { ...generationResult, text: `${generationResult.text}${this.callSalonSentence(salon)}` };
+        await this.flagAttention(dto.salonId, current.id, 'assistant_could_not_answer');
       }
 
       // Add assistant message to conversation. The time it took is kept so
@@ -430,6 +467,11 @@ export class VirtualReceptionistService {
         ? this.bookedConfirmationText(bookedNow, salon)
         : this.configService.get('VIRTUAL_RECEPTIONIST_FALLBACK_MESSAGE') || this.technicalErrorText(salon);
 
+      // The salon hears about a client the assistant could not answer.
+      if (conversation && !bookedNow) {
+        await this.flagAttention(dto.salonId, conversation.id, 'assistant_could_not_answer');
+      }
+
       // The conversation keeps a reply for every message, the failures too.
       if (conversation) {
         await this.conversationService
@@ -455,6 +497,48 @@ export class VirtualReceptionistService {
         // it to any visitor under "Debug:". It is in the log above.
       };
     }
+  }
+
+  /** Paused from the panel. */
+  private async isPaused(conversationId: string): Promise<boolean> {
+    const row = await this.prisma.chatConversation
+      .findUnique({ where: { id: conversationId }, select: { assistantPausedAt: true } as any })
+      .catch(() => null);
+    return !!(row as { assistantPausedAt?: Date | null } | null)?.assistantPausedAt;
+  }
+
+  private async flagAttention(tenantId: string, conversationId: string, reason: AttentionReason): Promise<void> {
+    if (!this.inbox) return;
+    const told = await this.inbox.flagAttention(tenantId, conversationId, reason);
+    if (told) this.logger.log(`Salon told about conversation ${conversationId}: ${reason}`);
+  }
+
+  /** request_salon_attention: the model's way to tell the salon. */
+  private async requestAttentionTool(
+    tenantId: string,
+    conversationId: string,
+    input: unknown,
+    salon: SalonContact | null,
+  ): Promise<Record<string, unknown>> {
+    const reason: AttentionReason =
+      (input as { reason?: string } | null)?.reason === 'cannot_answer' ? 'assistant_could_not_answer' : 'client_asked_person';
+    await this.flagAttention(tenantId, conversationId, reason);
+    return {
+      notified: true,
+      next:
+        'The salon has been told and can see this conversation in its panel. You may say so, but never promise ' +
+        'that anyone will contact the client or reply here.' +
+        (salon?.phone ? ` Give the salon phone: ${salon.phone}.` : ''),
+    };
+  }
+
+  private askedForPersonNote(salon: SalonContact | null): string {
+    return (
+      'El cliente pide hablar con una persona del salón. Ya se ha avisado al salón, que verá esta conversación en su panel. ' +
+      'Puedes decírselo, pero no prometas que nadie le llamará ni le contestará por aquí' +
+      (salon?.phone ? `: dale el teléfono del salón, ${salon.phone}.` : '.') +
+      ' Si aun así puedes ayudarle con lo que pregunta, hazlo.'
+    );
   }
 
   /** The salon's name, phone and plan state, for the fixed replies. */

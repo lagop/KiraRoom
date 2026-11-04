@@ -184,6 +184,9 @@ model Tenant {
   /// Time off requests by email too (Resend), besides the panel: each new
   /// request to the owner and admins, each answer to the professional.
   timeOffEmailNotices Boolean @default(true)
+  /// Ajustes > Recepcionista "Chat en mi web": off, the salon page shows no
+  /// chat and the public chat endpoint refuses its messages.
+  webChatEnabled      Boolean @default(true)
 
   /// Till (POS) discounts: the most a staff member may take off a line, in
   /// percent (0-100). 0, the default: only the owner or a manager discount.
@@ -1034,6 +1037,14 @@ model ChatConversation {
   handoffAt      DateTime?
   lastActivityAt DateTime    @default(now())
   context        Json        @default("{}")
+  /// Set from the panel (Conversaciones): the assistant stores the client's
+  /// messages but does not answer, on every channel, until it is resumed.
+  assistantPausedAt   DateTime?
+  assistantPausedById String?
+  /// The salon was told this conversation needs it: client_asked_person or
+  /// assistant_could_not_answer. attentionAt is cleared when it is attended.
+  attentionReason     String?
+  attentionAt         DateTime?
 
   messages      ChatMessage[]
   intentHistory IntentHistoryItem[]
@@ -1046,6 +1057,7 @@ model ChatConversation {
   @@index([channel])
   @@index([status])
   @@index([lastActivityAt])
+  @@index([tenantId, lastActivityAt])
   @@map("chat_conversations")
 }
 

@@ -4,17 +4,13 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
-  IsDate,
   IsEnum,
-  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
-  IsObject,
   IsOptional,
   IsString,
   IsUrl,
-  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -33,28 +29,6 @@ import { LLMProvider } from "@kira/shared";
  * A conversation opened from the panel. The salon is the caller's (the
  * controller sets it): the body used to name `salonId` and `tenantId`.
  */
-export class CreateConversationBodyDto {
-  @IsUUID()
-  clientId!: string;
-
-  @IsIn(["whatsapp", "web"])
-  channel!: "whatsapp" | "web";
-
-  @IsOptional() @IsObject()
-  metadata?: Record<string, unknown>;
-}
-
-export class UpdateConversationBodyDto {
-  @IsOptional() @IsIn(["active", "completed", "handoff"])
-  status?: "active" | "completed" | "handoff";
-
-  @IsOptional() @IsUUID()
-  handoffUserId?: string;
-
-  @IsOptional() @Type(() => Date) @IsDate()
-  handoffAt?: Date;
-}
-
 export class CreateLlmProviderConfigDto {
   @IsString() @IsNotEmpty() @MaxLength(200)
   name!: string;

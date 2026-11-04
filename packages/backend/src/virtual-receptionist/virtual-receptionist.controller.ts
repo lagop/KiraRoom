@@ -1,13 +1,10 @@
 import { Throttle } from "@nestjs/throttler";
-import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Post, Req, Get, Put, Delete, Body, Param, Query, UseGuards, Logger, ForbiddenException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole } from '@prisma/client';
 import { VirtualReceptionistService } from './virtual-receptionist.service';
-import { ConversationService } from './services/conversation.service';
 import { BookingService } from './services/booking.service';
 import { LLMService } from './services/llm.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
@@ -15,12 +12,12 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
 import { PublicChatMessageDto } from './public-chat/public-chat-message.dto';
 import { publicChatReply } from './public-chat/public-chat-reply';
 import { logId } from './log-id';
+import { InboxView, ReceptionistInboxService } from './inbox/receptionist-inbox.service';
+import { PrismaService } from '../common/prisma/prisma.service';
 import { SendMessageDto } from '@kira/shared';
 import {
-  CreateConversationBodyDto,
   CreateLlmProviderConfigDto,
   TestLlmProviderDto,
-  UpdateConversationBodyDto,
   UpdateLlmProviderConfigDto,
 } from './dto/receptionist-bodies.dto';
 import { FeatureGuard } from '../common/guards/feature.guard';
@@ -37,11 +34,12 @@ export class VirtualReceptionistController {
 
   constructor(
     private readonly virtualReceptionistService: VirtualReceptionistService,
-    private readonly conversationService: ConversationService,
     private readonly bookingService: BookingService,
     private readonly llmService: LLMService,
     private readonly statsService: ReceptionistStatsService,
     private readonly publicChat: PublicChatAccessService,
+    private readonly inbox: ReceptionistInboxService,
+    private readonly prisma: PrismaService,
   ) {}
 
   // POST/GET/PUT /virtual-receptionist/config[/:salonId] used to be here.
@@ -96,59 +94,61 @@ export class VirtualReceptionistController {
     return this.llmService.deleteProviderConfig(id);
   }
 
-  // Conversation Management
-  @Post('conversations')
-  @ApiOperation({ summary: 'Create new conversation' })
-  @Roles(...SALON_MANAGERS)
-  async createConversation(@CurrentUser() user: any, @Body() data: CreateConversationBodyDto) {
-    this.logger.log(`Creating new conversation: ${logId(data.clientId)} - ${user.tenantId}`);
-    // The caller's salon: the body used to name salonId and tenantId.
-    return this.conversationService.createConversation({
-      clientId: data.clientId,
-      salonId: user.tenantId,
-      tenantId: user.tenantId,
-      channel: data.channel,
-      metadata: data.metadata,
-    });
-  }
+  // Conversation management. The routes here took a conversation id (or a
+  // salonId in the query) and never checked it against the caller's salon:
+  // a manager of any salon could read, change or close another salon's
+  // conversations. Nothing in the panel called them. The panel's
+  // Conversaciones uses the inbox routes below, always the caller's salon.
 
-  @Get('conversations/:id')
-  @ApiOperation({ summary: 'Get conversation by ID' })
+  /** Conversaciones: every channel, newest first; read-only. */
+  @Get('inbox')
+  @ApiOperation({ summary: "The salon's receptionist conversations" })
   @Roles(...SALON_MANAGERS)
-  async getConversation(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Getting conversation: ${id}`);
-    return this.conversationService.getConversation(id);
-  }
-
-  @Get('conversations')
-  @ApiOperation({ summary: 'Get conversations' })
-  @Roles(...SALON_MANAGERS)
-  async getConversations(@Query('salonId') salonId?: string) {
-    this.logger.log(`Getting conversations for salon: ${salonId}`);
-    return this.conversationService.getConversations(salonId);
-  }
-
-  @Put('conversations/:id')
-  @ApiOperation({ summary: 'Update conversation' })
-  @Roles(...SALON_MANAGERS)
-  async updateConversation(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() data: UpdateConversationBodyDto,
+  async listInbox(
+    @CurrentUser() user: any,
+    @Query('view') view?: string,
+    @Query('channel') channel?: string,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
   ) {
-    this.logger.log(`Updating conversation: ${id}`);
-    return this.conversationService.updateConversation(id, {
-      ...(data.status !== undefined && { status: data.status }),
-      ...(data.handoffUserId !== undefined && { handoffUserId: data.handoffUserId }),
-      ...(data.handoffAt !== undefined && { handoffAt: data.handoffAt }),
-    });
+    const v: InboxView = view === 'attention' || view === 'paused' ? view : 'all';
+    return this.inbox.list(user.tenantId, { view: v, channel, q, page: Number(page) || 1 });
   }
 
-  @Delete('conversations/:id')
-  @ApiOperation({ summary: 'Delete conversation' })
+  @Get('inbox/attention-count')
+  @ApiOperation({ summary: 'Conversations waiting for the salon' })
   @Roles(...SALON_MANAGERS)
-  async deleteConversation(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Deleting conversation: ${id}`);
-    return this.conversationService.deleteConversation(id);
+  async inboxAttentionCount(@CurrentUser() user: any) {
+    return { count: await this.inbox.attentionCount(user.tenantId) };
+  }
+
+  @Get('inbox/:id')
+  @ApiOperation({ summary: 'One conversation with its messages' })
+  @Roles(...SALON_MANAGERS)
+  async getInboxConversation(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.inbox.get(user.tenantId, id);
+  }
+
+  /** The assistant stops answering in this conversation, on every channel. */
+  @Post('inbox/:id/pause')
+  @ApiOperation({ summary: 'Pause the assistant in a conversation' })
+  @Roles(...SALON_MANAGERS)
+  async pauseConversation(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.inbox.pause({ id: user.id, role: user.role, tenantId: user.tenantId }, id);
+  }
+
+  @Post('inbox/:id/resume')
+  @ApiOperation({ summary: 'Resume the assistant in a conversation' })
+  @Roles(...SALON_MANAGERS)
+  async resumeConversation(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.inbox.resume({ id: user.id, role: user.role, tenantId: user.tenantId }, id);
+  }
+
+  @Post('inbox/:id/attended')
+  @ApiOperation({ summary: 'Mark a conversation the salon was told about as attended' })
+  @Roles(...SALON_MANAGERS)
+  async markConversationAttended(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.inbox.markAttended({ id: user.id, role: user.role, tenantId: user.tenantId }, id);
   }
 
   // Chat Messaging
@@ -169,6 +169,12 @@ export class VirtualReceptionistController {
   @Public()
   @ApiOperation({ summary: 'Send message to virtual receptionist' })
   async sendMessage(@Body() body: PublicChatMessageDto, @Req() req?: { ip?: string; socket?: { remoteAddress?: string } }) {
+    // Ajustes > Recepcionista "Chat en mi web" off: the page shows no chat,
+    // and a page loaded before the change, or a script, is refused here.
+    const salon = await this.prisma.tenant.findUnique({ where: { id: body.salonId }, select: { webChatEnabled: true } });
+    if (salon && salon.webChatEnabled === false) {
+      throw new ForbiddenException('El chat de este salón no está disponible.');
+    }
     const identity = this.publicChat.identify(body);
     // The address the rate limiter counts (ThrottlerBehindProxyGuard).
     const ip = req?.ip ?? req?.socket?.remoteAddress ?? undefined;
@@ -180,17 +186,12 @@ export class VirtualReceptionistController {
       message: body.message,
       channel: 'web',
       // A visitor's name is whatever they type in the chat, not a field.
-      metadata: { serviceId: body.metadata?.serviceId },
+      metadata: {
+        serviceId: body.metadata?.serviceId,
+        ...(body.metadata?.newConversation ? { newConversation: true } : {}),
+      },
     } as SendMessageDto);
     return publicChatReply(reply, identity.visitorToken);
-  }
-
-  @Get('conversations/:id/messages')
-  @ApiOperation({ summary: 'Get conversation messages' })
-  @Roles(...SALON_MANAGERS)
-  async getConversationMessages(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Getting messages for conversation: ${id}`);
-    return this.conversationService.getConversationMessages(id);
   }
 
   // Booking Management

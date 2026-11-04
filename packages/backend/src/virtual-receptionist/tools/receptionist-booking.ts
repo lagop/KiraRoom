@@ -49,6 +49,11 @@ export interface PendingBooking {
   notes?: string;
   /** One of the salon's locations, when it has several (receptionist-locations.ts). */
   locationId?: string;
+  /**
+   * She said she does not want promotions: recorded like the booking page's
+   * unticked "No quiero recibir promociones" (a refusal). Absent records nothing.
+   */
+  refusesPromotions?: boolean;
   /** Client messages in the conversation when this was proposed. */
   proposedAtUserTurn: number;
   /** When it was proposed (ISO). Older proposals have none. */
@@ -168,7 +173,19 @@ function toDto(p: Omit<PendingBooking, 'proposedAtUserTurn' | 'bookedAppointment
       email: p.email || undefined,
       phone: p.phone || undefined,
     },
+    ...(p.refusesPromotions ? { refusesMarketingEmail: true } : {}),
   });
+}
+
+/**
+ * "Sí, pero no quiero promociones": the yes books, and the refusal counts
+ * even though the model did not propose again with it.
+ */
+const REFUSES_PROMOTIONS =
+  /\b(no|sin)\b[^.!?\n]{0,30}\b(promociones|publicidad|ofertas|novedades|marketing|newsletter|promotions|offers|ads)\b/i;
+
+export function refusesPromotions(message: string | undefined): boolean {
+  return REFUSES_PROMOTIONS.test(message ?? '');
 }
 
 async function readState(ctx: SalonToolContext): Promise<ConversationState> {
@@ -274,6 +291,8 @@ export async function proposeAppointment(
     notes: input.notes ? String(input.notes) : undefined,
     // Set by resolveLocation for a salon with several locations; else absent.
     locationId: input.locationId ? String(input.locationId) : undefined,
+    // Unticked by default: only her explicit "no quiero promociones" counts.
+    refusesPromotions: input.refusesPromotions === true || refusesPromotions(ctx.conversation?.lastUserMessage) || undefined,
   };
 
   const invalid = validateSync(toDto(details), { whitelist: true });
@@ -451,7 +470,8 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
   }
 
   try {
-    const appointment: any = await ctx.appointmentsService!.bookOnline(ctx.tenantId, toDto(pending));
+    const choice = refusesPromotions(ctx.conversation?.lastUserMessage) ? { ...pending, refusesPromotions: true } : pending;
+    const appointment: any = await ctx.appointmentsService!.bookOnline(ctx.tenantId, toDto(choice));
     state.pendingBooking = bookedOnly(pending, appointment.id);
     state.chatBookings = (state.chatBookings ?? 0) + 1;
     // A conversation already linked to someone (a WhatsApp client) stays so.

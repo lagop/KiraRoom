@@ -1,5 +1,5 @@
 import { Transform, Type } from "class-transformer";
-import { IsIn, IsOptional, IsString, IsUUID, Length, MaxLength, ValidateNested } from "class-validator";
+import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, Length, MaxLength, ValidateNested } from "class-validator";
 
 /**
  * Longest message a visitor can send. Each message goes to the model with the
@@ -18,6 +18,11 @@ export class PublicChatMetadataDto {
   @IsOptional()
   @IsUUID()
   serviceId?: string;
+
+  /** "Nueva conversación": the visitor starts over, with no memory. */
+  @IsOptional()
+  @IsBoolean()
+  newConversation?: boolean;
 }
 
 /**
