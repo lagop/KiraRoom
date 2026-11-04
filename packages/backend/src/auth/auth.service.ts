@@ -6,6 +6,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Optional,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
@@ -37,6 +38,7 @@ import {
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../common/jwt-duration";
 import { AuthSessionsService } from "./sessions/auth-sessions.service";
+import { AuthRateLimitsService } from "./abuse/auth-rate-limits.service";
 import {
   normalizeWorkingHours,
   weekFromOpeningPair,
@@ -46,6 +48,15 @@ import { TwoFactorService } from "./two-factor/two-factor.service";
 import { sessionRevocations } from "./sessions/session-revocations";
 import { SALON_DELETED_MESSAGE } from "./salon-deleted";
 import { fiscalSettingsForTerritory, territoryTaxRegime } from "../invoices/salon-tax-settings";
+import {
+  ACCESS_TOKEN_TYPE,
+  REFRESH_TOKEN_TYPE,
+  SUPPORT_SESSION_MAX_SECONDS,
+  isRefreshTokenPayload,
+  supportClaims,
+  supportReasonProblem,
+  type SupportSessionClaims,
+} from "./session-token";
 
 /** D4: the chosen web address cannot be used (the form shows the message next to it). */
 export const WEB_ADDRESS_UNAVAILABLE_CODE = "WEB_ADDRESS_UNAVAILABLE";
@@ -231,6 +242,9 @@ export class AuthService {
     private readonly email: EmailService,
     private readonly sessions: AuthSessionsService,
     private readonly twoFactor: TwoFactorService,
+    // The platform owner's per-address lockout (C12). Optional so the specs
+    // that build this service by hand keep working; Nest always injects it.
+    @Optional() private readonly limits?: AuthRateLimitsService,
   ) {}
 
   async register(
@@ -568,6 +582,7 @@ export class AuthService {
 
   async login(
     loginDto: LoginDto,
+    context: { ip?: string | null } = {},
   ): Promise<{ user: AuthUser; tokens: TokenResponse } | TwoFactorChallenge> {
     const email = normalizeEmail(loginDto.email);
     const candidates = await this.loginCandidates(email);
@@ -589,9 +604,20 @@ export class AuthService {
       const now = new Date();
       // SEC-8: the lockout is honoured (it used to be written and never
       // read). A lock still running stops even the right password, below.
-      const lockRunning = Boolean(user.lockedUntil && user.lockedUntil > now);
+      const accountLocked = Boolean(user.lockedUntil && user.lockedUntil > now);
+      // C12: the platform owner's wrong passwords lock the address they come
+      // from, not the account, so a stranger who knows the email cannot keep
+      // the console shut. (Wrong 2FA codes, which need the password, still
+      // count towards the account's lock.)
+      const perAddress = user.role === UserRole.saas_owner && Boolean(this.limits);
+      const addressLocked = perAddress ? await this.limits!.platformOwnerLockedFrom(user.id, context.ip) : false;
+      const lockRunning = accountLocked || addressLocked;
 
       if (!isPasswordValid) {
+        if (perAddress) {
+          if (!addressLocked && user.isActive) await this.limits!.platformOwnerFailedFrom(user.id, context.ip);
+          throw new UnauthorizedException(INVALID_CREDENTIALS);
+        }
         // A locked or deactivated account does not count more failures: a
         // caller cannot extend a lock by guessing on during it.
         if (!lockRunning && user.isActive) {
@@ -614,9 +640,15 @@ export class AuthService {
       if (!user.isActive) {
         throw new UnauthorizedException("Esta cuenta está desactivada. Pide acceso a quien gestiona el salón.");
       }
-      if (lockRunning) {
+      if (accountLocked) {
         throw new UnauthorizedException(lockedMessage(user.lockedUntil!));
       }
+      if (addressLocked) {
+        throw new UnauthorizedException(
+          "Demasiados intentos desde esta conexión: vuelve a intentarlo en 30 minutos o entra desde otra red.",
+        );
+      }
+      if (perAddress) await this.limits!.platformOwnerSignedInFrom(user.id, context.ip);
 
       // Two-step sign-in: the password was right, now the code. The failed
       // attempts are not reset here, so someone who has the password cannot
@@ -673,11 +705,22 @@ export class AuthService {
     throw new UnauthorizedException(INVALID_CREDENTIALS);
   }
 
-  async refreshToken(refreshToken: string): Promise<TokenResponse> {
+  /**
+   * Renews a session from its refresh token. `expect.supportTenantId` is set
+   * when the refresh comes from a support session's own cookie (C10): the
+   * token must then be that salon's support session, and a token from the
+   * normal cookie must not be one, so the two never stand in for each other.
+   */
+  async refreshToken(
+    refreshToken: string,
+    expect: { supportTenantId?: string } = {},
+  ): Promise<TokenResponse> {
     try {
       const payload = this.jwtService.verify(refreshToken, {
         secret: process.env.JWT_REFRESH_SECRET,
       });
+      // Only a refresh token renews a session (C11).
+      if (!isRefreshTokenPayload(payload)) throw new UnauthorizedException("Invalid refresh token");
 
       if (payload.role === "client") {
         // Client sessions from before client accounts were removed end here.
@@ -695,19 +738,21 @@ export class AuthService {
           throw new UnauthorizedException("Invalid refresh token");
         }
 
-        // Carry impersonation claims forward so a silent access-token
-        // refresh (lib/api.ts:refreshAccessToken, ~15 min cadence) does
-        // not strip the SaaS owner's "you are being impersonated" banner
-        // or break any future server-side audit attribution that keys off
-        // impersonatedBy / impersonationId. The claims were stamped into
-        // the refresh token at mint time by /auth/impersonate, and the
-        // refresh token is signed by generateTokens with the same
-        // payload object.
-        const impersonationClaims = {
-          impersonatedBy: payload.impersonatedBy,
-          impersonationId: payload.impersonationId,
-          impersonatedTenantId: payload.impersonatedTenantId,
-        };
+        // A support session carries its claims forward, so the banner stays
+        // and its audit rows keep naming the platform owner; but only until
+        // its cap, and only while the platform owner's own sessions stand
+        // (C2, C13). One from before the cap existed ends here.
+        const support = payload.impersonatedBy ? supportClaims(payload) : null;
+        if (payload.impersonatedBy && !support) throw new UnauthorizedException("Invalid refresh token");
+        if (Boolean(expect.supportTenantId) !== Boolean(support)) {
+          throw new UnauthorizedException("Invalid refresh token");
+        }
+        if (support) {
+          if (support.impersonatedTenantId !== expect.supportTenantId) {
+            throw new UnauthorizedException("Invalid refresh token");
+          }
+          await this.assertImpersonatorLive(support);
+        }
 
         return this.generateTokens(
           user.id,
@@ -715,18 +760,11 @@ export class AuthService {
           user.role,
           user.tenantId,
           user.professional?.id,
-          {
-            ...(impersonationClaims.impersonatedBy && {
-              impersonatedBy: impersonationClaims.impersonatedBy,
-            }),
-            ...(impersonationClaims.impersonationId && {
-              impersonationId: impersonationClaims.impersonationId,
-            }),
-            ...(impersonationClaims.impersonatedTenantId && {
-              impersonatedTenantId: impersonationClaims.impersonatedTenantId,
-            }),
-          },
-          await this.continueSession(payload),
+          support ?? undefined,
+          await this.continueSession(
+            payload,
+            support ? new Date(support.impersonationEndsAt * 1000) : undefined,
+          ),
         );
       }
     } catch {
@@ -735,13 +773,44 @@ export class AuthService {
   }
 
   /**
+   * A support session stands while it is within its cap and the platform
+   * owner who opened it is still an active saas_owner with the same session
+   * version (logout everywhere and a password change raise it).
+   */
+  private async assertImpersonatorLive(support: SupportSessionClaims): Promise<void> {
+    if (support.impersonationEndsAt * 1000 <= Date.now()) {
+      throw new UnauthorizedException("La sesión de soporte ha terminado.");
+    }
+    const impersonator = await this.prisma.user.findUnique({
+      where: { id: support.impersonatedBy },
+      select: { role: true, isActive: true, tokenVersion: true },
+    });
+    if (
+      !impersonator ||
+      !impersonator.isActive ||
+      impersonator.role !== UserRole.saas_owner ||
+      impersonator.tokenVersion !== support.impersonatorTv
+    ) {
+      throw new UnauthorizedException("La sesión de soporte ha terminado.");
+    }
+  }
+
+  /**
    * Rotates the session a refresh token belongs to. A token issued before
    * sessions existed has no sid: it starts one, so the browsers signed in at
    * deploy time move to the cookie on their next refresh.
    */
-  private async continueSession(payload: { sid?: string; jti?: string }): Promise<SessionOptions> {
+  private async continueSession(
+    payload: { sid?: string; jti?: string },
+    endsAt?: Date,
+  ): Promise<SessionOptions> {
     if (!payload.sid || !payload.jti) return {};
-    const outcome = await this.sessions.rotate(payload.sid, payload.jti, this.refreshExpiry());
+    const expiry = this.refreshExpiry();
+    const outcome = await this.sessions.rotate(
+      payload.sid,
+      payload.jti,
+      endsAt && endsAt < expiry ? endsAt : expiry,
+    );
     return outcome.kind === "rotated"
       ? { session: { sid: payload.sid, jti: outcome.jti } }
       : { accessOnly: true };
@@ -842,6 +911,29 @@ export class AuthService {
       if (payload?.sid) await this.sessions.revoke(payload.sid);
     } catch {
       // An expired or forged token has no session worth ending.
+    }
+  }
+
+  /**
+   * "Salir del modo soporte": ends this support session (its refresh cookie's
+   * session) and records the end next to the start (audit 8, C4). The row is
+   * written on the support session's own request, so AuditLogService names
+   * the platform owner as the actor.
+   */
+  async endSupportSession(
+    refreshToken: string | undefined,
+    user: { id: string; role: string; impersonatedTenantId?: string; impersonationId?: string },
+  ): Promise<void> {
+    await this.endSession(refreshToken);
+    try {
+      await this.auditLog.record("saas.impersonate.end", {
+        actorId: user.id,
+        actorRole: user.role as UserRole,
+        tenantId: user.impersonatedTenantId,
+        metadata: { impersonationId: user.impersonationId ?? null, endedBy: "exit" },
+      });
+    } catch (err) {
+      this.logger.error(`Audit log of the end of support session ${user.impersonationId} failed: ${(err as Error).message}`);
     }
   }
 
@@ -956,9 +1048,8 @@ export class AuthService {
    */
   async impersonate(
     token: string,
-    reason: string,
     expectedAudience: string,
-  ): Promise<{ user: AuthUser; tokens: TokenResponse }> {
+  ): Promise<{ user: AuthUser; tokens: TokenResponse; support: { tenantId: string; endsAt: string } }> {
     if (!token) {
       throw new UnauthorizedException("Missing impersonation token");
     }
@@ -981,6 +1072,28 @@ export class AuthService {
 
     const { tenantId, ownerId } = payload.impersonate;
     const jti: string = payload.jti;
+    // C17: the reason is the one the platform owner typed in the console,
+    // signed into the token; nothing the browser sends at redeem replaces it.
+    const reason = supportReasonProblem(payload.impersonate.reason) ? null : String(payload.impersonate.reason).trim();
+    if (!reason) {
+      throw new UnauthorizedException("Invalid impersonation token payload");
+    }
+
+    // C13: the platform owner who asked for the token must still be one, with
+    // the same session version (logout everywhere and a password change end
+    // the console's sessions, and so the way into a salon too).
+    const impersonator = await this.prisma.user.findUnique({
+      where: { id: String(payload.sub) },
+      select: { id: true, role: true, isActive: true, tokenVersion: true },
+    });
+    if (
+      !impersonator ||
+      !impersonator.isActive ||
+      impersonator.role !== UserRole.saas_owner ||
+      (typeof payload.tv === "number" && payload.tv !== impersonator.tokenVersion)
+    ) {
+      throw new UnauthorizedException("Invalid impersonation token payload");
+    }
 
     // (1) Validate FIRST. If the target went away since the token was
     // minted, we want to fail-fast without burning the one-shot jti so
@@ -1004,6 +1117,8 @@ export class AuthService {
     // would be a forensic inconsistency. AuditLogService.record() takes
     // the same transaction client so the shape stays canonical with the
     // rest of the platform.
+    // C2: a support session lasts at most this long, refreshes included.
+    const endsAt = Math.floor(Date.now() / 1000) + SUPPORT_SESSION_MAX_SECONDS;
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.usedImpersonationToken.create({
@@ -1019,11 +1134,13 @@ export class AuthService {
             actorId: payload.sub as string,
             actorRole: UserRole.saas_owner,
             tenantId,
+            // The owner's id, not her email (C15): the row is kept, and
+            // personal data in it would outlive the salon's anonymisation.
             metadata: {
               reason,
               targetOwnerId: owner.id,
-              targetOwnerEmail: owner.email,
               impersonationId: jti,
+              endsAt: new Date(endsAt * 1000).toISOString(),
             },
           },
           tx,
@@ -1049,9 +1166,11 @@ export class AuthService {
       owner.tenantId,
       owner.professional?.id,
       {
-        impersonatedBy: payload.sub as string,
+        impersonatedBy: impersonator.id,
         impersonationId: jti,
         impersonatedTenantId: tenantId,
+        impersonationEndsAt: endsAt,
+        impersonatorTv: impersonator.tokenVersion,
       },
     );
 
@@ -1065,6 +1184,7 @@ export class AuthService {
         tenantId: owner.tenantId,
       },
       tokens,
+      support: { tenantId, endsAt: new Date(endsAt * 1000).toISOString() },
     };
   }
 
@@ -1192,11 +1312,7 @@ export class AuthService {
     role: string,
     tenantId: string,
     professionalId?: string,
-    extraClaims?: {
-      impersonatedBy?: string;
-      impersonationId?: string;
-      impersonatedTenantId?: string;
-    },
+    extraClaims?: SupportSessionClaims,
     sessionOptions: SessionOptions = {},
   ): Promise<TokenResponse> {
     // The account's session version, so logout and a password change can
@@ -1213,30 +1329,32 @@ export class AuthService {
       tenantId,
       tv: owner?.tokenVersion ?? 0,
       ...(professionalId && { professionalId }),
-      ...(extraClaims?.impersonatedBy && {
-        impersonatedBy: extraClaims.impersonatedBy,
-      }),
-      ...(extraClaims?.impersonationId && {
-        impersonationId: extraClaims.impersonationId,
-      }),
-      ...(extraClaims?.impersonatedTenantId && {
-        impersonatedTenantId: extraClaims.impersonatedTenantId,
-      }),
+      // A support session's claims (impersonation), on its access and
+      // refresh tokens alike, so a refresh carries them forward.
+      ...(extraClaims ?? {}),
     };
 
     // Parse expiresIn values. Accepts both seconds ("3600") and
     // stringified durations as the Nest JWT module does: "15m", "1h",
     // "7d", "30s". Defaults: 15m access, 7d refresh (long enough that a
     // legitimate actively-used user never sees a forced re-login).
-    const accessTokenExpiresIn = parseJwtDuration(
+    let accessTokenExpiresIn = parseJwtDuration(
       process.env.JWT_EXPIRES_IN,
       DEFAULT_ACCESS_TOKEN_SECONDS,
     );
-    const refreshTokenExpiresIn = this.refreshTokenSeconds();
+    let refreshTokenExpiresIn = this.refreshTokenSeconds();
+    // A support session never outlives its cap (C2): neither token is
+    // valid past impersonationEndsAt.
+    if (extraClaims) {
+      const left = Math.max(1, extraClaims.impersonationEndsAt - Math.floor(Date.now() / 1000));
+      accessTokenExpiresIn = Math.min(accessTokenExpiresIn, left);
+      refreshTokenExpiresIn = Math.min(refreshTokenExpiresIn, left);
+    }
 
-    const accessToken = this.jwtService.sign(payload, {
-      expiresIn: accessTokenExpiresIn,
-    });
+    const accessToken = this.jwtService.sign(
+      { ...payload, typ: ACCESS_TOKEN_TYPE },
+      { expiresIn: accessTokenExpiresIn },
+    );
 
     if (sessionOptions.accessOnly) {
       return { accessToken, expiresIn: accessTokenExpiresIn, tokenType: "Bearer" };
@@ -1251,7 +1369,7 @@ export class AuthService {
       ));
 
     const refreshToken = this.jwtService.sign(
-      { ...payload, sid: session.sid, jti: session.jti },
+      { ...payload, typ: REFRESH_TOKEN_TYPE, sid: session.sid, jti: session.jti },
       {
         secret: process.env.JWT_REFRESH_SECRET,
         expiresIn: refreshTokenExpiresIn,

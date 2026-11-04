@@ -6,6 +6,8 @@ import { SubscriptionsService } from '../services/subscriptions.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
+import { AuditLogService } from "../../saas/audit-log.service";
+import { UserRole } from "@prisma/client";
 
 /**
  * Tenant-scoped add-on surface. Distinct from the saas-admin
@@ -21,6 +23,7 @@ export class TenantAddOnsController {
     private readonly prisma: PrismaService,
     private readonly subs: SubscriptionsService,
     private readonly bundles: MessageBundlesService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /**
@@ -125,6 +128,13 @@ export class TenantAddOnsController {
       tenantId,
       credits,
       source: 'manual' });
+    // Audit 8, C9: every console change is on record, this one too.
+    await this.auditLog.record('tenant.credits.topup', {
+      actorId: req.user.id,
+      actorRole: UserRole.saas_owner,
+      tenantId,
+      metadata: { credits, source: 'manual' },
+    });
     return out;
   }
 

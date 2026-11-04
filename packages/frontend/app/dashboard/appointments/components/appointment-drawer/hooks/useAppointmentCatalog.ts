@@ -3,6 +3,7 @@ import apiClient from "../../../../../../lib/api";
 import { DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 import { getCurrentUser } from "../../../../../../lib/utils";
 import { staffOwnCatalog } from "../../appointment-drawer.utils";
+import { authStorage } from "@/lib/auth-storage";
 
 /**
  * Loads the appointment-creation catalog (services, professionals,
@@ -170,7 +171,7 @@ export function useAppointmentCatalog(
       let tenantId = "default-tenant";
       const token =
         typeof window !== "undefined"
-          ? localStorage.getItem("kira_auth_token")
+          ? authStorage().getItem("kira_auth_token")
           : null;
       if (token) {
         try {

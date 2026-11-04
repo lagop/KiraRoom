@@ -23,7 +23,7 @@ describe("deleting a salon from the console", () => {
       widgetInstance: { findMany: jest.fn(async () => []), update: jest.fn() },
     };
     const prisma: any = {
-      tenant: { findFirst: jest.fn(async () => ({ id: "t1", deletedAt: null })) },
+      tenant: { findFirst: jest.fn(async () => ({ id: "t1", deletedAt: null })), count: jest.fn(async () => 0) },
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const auditLog: any = { record: jest.fn(async () => ({ id: "audit-1" })) };
@@ -84,12 +84,12 @@ describe("a deleted salon's users", () => {
     const prisma: any = { user: { findUnique: jest.fn(async () => user) } };
     const strategy = new JwtStrategy({ get: () => SECRET } as any, prisma);
     await expect(
-      strategy.validate({ sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 }),
+      strategy.validate({ typ: "access", sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 }),
     ).rejects.toThrow(SALON_DELETED_MESSAGE);
 
     user.tenant.deletedAt = null as any;
     await expect(
-      strategy.validate({ sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 }),
+      strategy.validate({ typ: "access", sub: "u1", email: user.email, role: "owner", tenantId: "t1", tv: 0 }),
     ).resolves.toMatchObject({ id: "u1", tenantId: "t1" });
   });
 });

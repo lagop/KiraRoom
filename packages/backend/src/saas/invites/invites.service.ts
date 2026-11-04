@@ -32,6 +32,7 @@ import {
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../../common/jwt-duration";
 import { TERMS_VERSION } from "../../auth/legal-terms";
+import { ACCESS_TOKEN_TYPE, REFRESH_TOKEN_TYPE } from "../../auth/session-token";
 
 const INVITE_TTL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -324,7 +325,8 @@ export class InvitesService {
         tenantId: result.tenantId,
       };
 
-      const accessToken = this.jwt.sign(payload, {
+      // Typed like every session token (audit 8, C11).
+      const accessToken = this.jwt.sign({ ...payload, typ: ACCESS_TOKEN_TYPE }, {
         expiresIn: accessExpiresIn,
       });
       // A session like any sign-in's, so the refresh token rotates.
@@ -333,7 +335,7 @@ export class InvitesService {
         new Date(Date.now() + refreshExpiresIn * 1000),
       );
       const refreshToken = this.jwt.sign(
-        { ...payload, sid: session.sid, jti: session.jti },
+        { ...payload, typ: REFRESH_TOKEN_TYPE, sid: session.sid, jti: session.jti },
         {
           secret: process.env.JWT_REFRESH_SECRET,
           expiresIn: refreshExpiresIn,

@@ -229,7 +229,7 @@ describe("AuthController refresh, login and logout", () => {
     const { c, authService, res } = controller();
     const req = { headers: { cookie: `${STAFF_REFRESH_COOKIE}=staff.tok; ${CLIENT_REFRESH_COOKIE}=client.tok` } };
     const out = await c.refreshToken({ kind: "client" }, req as any, res as any);
-    expect(authService.refreshToken).toHaveBeenCalledWith("client.tok");
+    expect(authService.refreshToken).toHaveBeenCalledWith("client.tok", { supportTenantId: undefined });
     expect(res.cookie).toHaveBeenCalledWith(CLIENT_REFRESH_COOKIE, "r2", expect.anything());
     expect(out).not.toHaveProperty("refreshToken");
   });
@@ -237,7 +237,7 @@ describe("AuthController refresh, login and logout", () => {
   it("a browser that still has the token in localStorage sends it in the body and moves to the cookie", async () => {
     const { c, authService, res } = controller();
     await c.refreshToken({ refreshToken: "legacy.tok" }, { headers: {} } as any, res as any);
-    expect(authService.refreshToken).toHaveBeenCalledWith("legacy.tok");
+    expect(authService.refreshToken).toHaveBeenCalledWith("legacy.tok", { supportTenantId: undefined });
     expect(res.cookie).toHaveBeenCalledWith(STAFF_REFRESH_COOKIE, "r2", expect.anything());
   });
 

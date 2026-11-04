@@ -116,19 +116,19 @@ describe("JwtStrategy", () => {
   const strategy = (p: any) => new JwtStrategy({ get: () => "secret-of-sufficient-length-1234567890" } as any, p);
 
   it("refuses a token from before the last logout or password change", async () => {
-    await expect(strategy(prisma({ user })).validate({ sub: "u1", role: "owner", tv: 1 } as any)).rejects.toMatchObject({
+    await expect(strategy(prisma({ user })).validate({ typ: "access", sub: "u1", role: "owner", tv: 1 } as any)).rejects.toMatchObject({
       status: 401,
     });
   });
 
   it("accepts a token with the current session version", async () => {
-    await expect(strategy(prisma({ user })).validate({ sub: "u1", role: "owner", tv: 2 } as any)).resolves.toMatchObject({
+    await expect(strategy(prisma({ user })).validate({ typ: "access", sub: "u1", role: "owner", tv: 2 } as any)).resolves.toMatchObject({
       id: "u1",
     });
   });
 
   it("treats tokens minted before tv existed as version 0", async () => {
     const fresh = { ...user, tokenVersion: 0 };
-    await expect(strategy(prisma({ user: fresh })).validate({ sub: "u1", role: "owner" } as any)).resolves.toBeTruthy();
+    await expect(strategy(prisma({ user: fresh })).validate({ typ: "access", sub: "u1", role: "owner" } as any)).resolves.toBeTruthy();
   });
 });

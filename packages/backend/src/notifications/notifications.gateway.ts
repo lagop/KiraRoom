@@ -15,6 +15,7 @@ import { ConfigService } from '@nestjs/config';
 import { verify } from 'jsonwebtoken';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { isAccessTokenPayload } from '../auth/session-token';
 
 /**
  * Who a socket belongs to, taken from its access token: a member of a
@@ -171,6 +172,8 @@ export class NotificationsGateway
       return null;
     }
     if (!payload.sub) return null;
+    // Only a session's access token opens a socket (audit 8, C11).
+    if (!isAccessTokenPayload(payload)) return null;
 
     // Clients have no accounts any more; a client token minted before that
     // gets no socket (as in JwtStrategy).

@@ -16,9 +16,7 @@ import { InboxView, ReceptionistInboxService } from './inbox/receptionist-inbox.
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SendMessageDto } from '@kira/shared';
 import {
-  CreateLlmProviderConfigDto,
   TestLlmProviderDto,
-  UpdateLlmProviderConfigDto,
 } from './dto/receptionist-bodies.dto';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
@@ -50,49 +48,10 @@ export class VirtualReceptionistController {
   // services and FAQs, and the channel switches in
   // /virtual-receptionist/channels/config -- all saved and read for real.
 
-  // LLM Provider Configuration
-  @Post('llm-config')
-  @ApiOperation({ summary: 'Create LLM provider configuration' })
-  @SaasOwner()
-  async createLLMConfig(@Body() config: CreateLlmProviderConfigDto) {
-    this.logger.log('Creating LLM provider configuration');
-    return this.llmService.createProviderConfig(config);
-  }
-
-  @Get('llm-config')
-  @ApiOperation({ summary: 'Get all LLM provider configurations' })
-  @SaasOwner()
-  async getLLMConfigs() {
-    this.logger.log('Getting all LLM provider configurations');
-    return this.llmService.getProviderConfigs();
-  }
-
-  @Get('llm-config/:id')
-  @ApiOperation({ summary: 'Get LLM provider configuration' })
-  @SaasOwner()
-  async getLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Getting LLM provider configuration: ${id}`);
-    return this.llmService.getProviderConfig(id);
-  }
-
-  @Put('llm-config/:id')
-  @ApiOperation({ summary: 'Update LLM provider configuration' })
-  @SaasOwner()
-  async updateLLMConfig(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() config: UpdateLlmProviderConfigDto,
-  ) {
-    this.logger.log(`Updating LLM provider configuration: ${id}`);
-    return this.llmService.updateProviderConfig(id, config);
-  }
-
-  @Delete('llm-config/:id')
-  @ApiOperation({ summary: 'Delete LLM provider configuration' })
-  @SaasOwner()
-  async deleteLLMConfig(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Deleting LLM provider configuration: ${id}`);
-    return this.llmService.deleteProviderConfig(id);
-  }
+  // /virtual-receptionist/llm-config[/:id] (create, list, read, update,
+  // delete) used to be here (audit 8, C16): they answered an invented
+  // OpenAI/Anthropic/Google list and "saved" without saving anything. The
+  // platform's real LLM setting is /platform/llm-config.
 
   // Conversation management. The routes here took a conversation id (or a
   // salonId in the query) and never checked it against the caller's salon:
