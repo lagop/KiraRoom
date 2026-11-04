@@ -84,7 +84,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
   - [ ] `POSTGRES_PASSWORD` — `openssl rand -base64 24`
   - [ ] `JWT_SECRET` — `openssl rand -base64 48` (≥ 32 chars)
   - [ ] `OAUTH_STATE_SECRET` — `openssl rand -base64 48` (≥ 16 chars)
-  - [ ] `MINIMAX_API_KEY` — from MiniMax dashboard
+  - [ ] Anthropic API key — saved in the admin console (Plataforma > LLM), not in .env
   - [ ] `STRIPE_SECRET_KEY` — `sk_test_...` initially, flip to `sk_live_...` before opening payments
   - [ ] `STRIPE_WEBHOOK_SECRET` — from Stripe dashboard webhook endpoint
   - [ ] `APP_BASE_URL=https://app.kiraroom.net`

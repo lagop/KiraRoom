@@ -38,18 +38,6 @@ describe("LLMService fallback provider", () => {
     expect(calls).toEqual([LLMProvider.ANTHROPIC]);
   });
 
-  it("still falls back to a provider that runs tools", async () => {
-    const { service, calls } = setup(LLMProvider.MiniMax);
-
-    const out = await service.generateResponse("hola", [], undefined, undefined, {
-      tools: TOOLS,
-      systemPromptOverride: "s",
-    });
-
-    expect(calls).toEqual([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
-    expect(out.text).toBe("respuesta de MiniMax");
-  });
-
   it("still falls back for a request without tools", async () => {
     const { service, calls } = setup(LLMProvider.OPENAI);
 

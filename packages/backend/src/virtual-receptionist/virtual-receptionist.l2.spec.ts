@@ -197,8 +197,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'Hola, ¿en qué puedo ayudarte?',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
           timestamp: new Date(),
           latency: 10,
@@ -247,8 +247,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
             return {
               id: 'r-1',
               text: 'Aquí tienes el catálogo.',
-              provider: LLMProvider.MiniMax,
-              model: 'MiniMax-M3',
+              provider: LLMProvider.ANTHROPIC,
+              model: 'claude-haiku-5-5',
               usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
               timestamp: new Date(),
               latency: 10,
@@ -267,7 +267,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       });
 
       expect(reply.content).toBe('Aquí tienes el catálogo.');
-      expect(reply.provider).toBe(LLMProvider.MiniMax);
+      expect(reply.provider).toBe(LLMProvider.ANTHROPIC);
     });
 
     it('executor returns a structured error envelope when an unknown tool is called', async () => {
@@ -279,8 +279,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
             return {
               id: 'r-1',
               text: 'ok',
-              provider: LLMProvider.MiniMax,
-              model: 'MiniMax-M3',
+              provider: LLMProvider.ANTHROPIC,
+              model: 'claude-haiku-5-5',
               usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
               timestamp: new Date(),
               latency: 0,
@@ -306,8 +306,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'El Corte de Cabello Hombre cuesta 18.00 EUR.',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
           timestamp: new Date(),
           latency: 10,
@@ -328,7 +328,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(conversationService.addMessage.mock.calls[1][1]).toMatchObject({
         role: 'assistant',
         content: 'El Corte de Cabello Hombre cuesta 18.00 EUR.',
-        provider: LLMProvider.MiniMax,
+        provider: LLMProvider.ANTHROPIC,
       });
       expect(reply.content).toBe('El Corte de Cabello Hombre cuesta 18.00 EUR.');
     });
@@ -338,8 +338,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'Hola, ¿en qué puedo ayudarte?',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
           timestamp: new Date(),
           latency: 0,
@@ -400,7 +400,7 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
   const reply = (text: string) => ({
     id: 'r',
     text,
-    provider: LLMProvider.MiniMax,
+    provider: LLMProvider.ANTHROPIC,
     model: 'm',
     usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     timestamp: new Date(),
@@ -592,7 +592,7 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
 
 /** Receptionist core audit (V5, V8, V11, V17, V18). */
 describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only salons, notes, the cap', () => {
-  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.MiniMax, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
+  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.ANTHROPIC, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
   const send = (svc: any, message: string, extra: Record<string, unknown> = {}) =>
     svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web', ...extra });
 

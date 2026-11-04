@@ -208,7 +208,7 @@ export class AnthropicProvider {
         });
 
         // Execute every tool call and append tool_result blocks. The
-        // Anthropic / MiniMax API requires tool_result.content to be a
+        // The Anthropic API requires tool_result.content to be a
         // JSON-encoded string, not a raw object.
         const toolResultBlocks: Array<{
           type: 'tool_result';

@@ -9,7 +9,6 @@ export enum LLMProvider {
   ANTHROPIC = 'anthropic',
   GOOGLE = 'google',
   LLAMA = 'llama',
-  MiniMax = 'MiniMax',
   CUSTOM = 'custom',
   SYSTEM = 'system'
 }

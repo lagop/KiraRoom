@@ -249,10 +249,9 @@ export class VirtualReceptionistService {
         return result;
       };
 
-      // P2A-receptionist-tools: MiniMax-M3 partially honors
-      // `tool_choice: { type: 'tool', name: '...' }` — but only for tools
-      // WITHOUT required parameters. So we force only the param-free tools;
-      // availability queries fall through to `auto`.
+      // Only the param-free tools are forced (a forced tool with required
+      // parameters makes the model invent them); availability queries fall
+      // through to `auto`.
       const NO_PARAM_TOOLS = new Set([
         'list_services',
         'get_salon_info',

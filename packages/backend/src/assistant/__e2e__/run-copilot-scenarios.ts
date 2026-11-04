@@ -2,7 +2,7 @@
 /**
  * P2A-staff-copilot — L-1 end-to-end runner.
  *
- *   RUN_LLM_E2E_TESTS=1 MINIMAX_API_KEY=... npx ts-node \
+ *   RUN_LLM_E2E_TESTS=1 ANTHROPIC_API_KEY=... npx ts-node \
  *     src/assistant/__e2e__/run-copilot-scenarios.ts
  *
  * Same gating as the customer-chatbot e2e runner. The harness is
@@ -50,7 +50,7 @@ async function main() {
   if (SKIP_E2E) {
     console.log(
       yellow(
-        'P2A-staff-copilot L-1 scenarios skipped. Set RUN_LLM_E2E_TESTS=1 with a valid MINIMAX_API_KEY to run them.',
+        'P2A-staff-copilot L-1 scenarios skipped. Set RUN_LLM_E2E_TESTS=1 with a valid ANTHROPIC_API_KEY to run them.',
       ),
     );
     process.exit(0);

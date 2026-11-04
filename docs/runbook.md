@@ -170,7 +170,7 @@ in:
 
 ```bash
 ssh root@<vps-ip>
-docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+docker exec kiraroom-backend-prod env | grep -E "ANTHROPIC_API_KEY|DEFAULT_LLM_PROVIDER"
 # (value will be masked; this is for confirming presence only)
 ```
 
@@ -179,19 +179,16 @@ docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
 The virtual receptionist and Staff Copilot both call the LLM service.
 If a key is revoked or rate-limited:
 
-1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
-   Google AI Studio depending on which key is rotated).
+1. Sign in to console.anthropic.com (the receptionist and the copilot
+   run on Anthropic only).
 2. Mint a new key.
-3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
-   the `backend` service → update the matching `*_API_KEY=` env var
-   → Save → Hostinger redeploys.
+3. Paste it in the admin console (Plataforma > LLM) and press
+   "Probar conexión"; the backend picks it up on the next request.
 4. Verify a chatbot reply still works in the dashboard — the LLM
    service logs the provider + response time per call.
 
-If rotating `MINIMAX_API_KEY`, also update the per-tenant
-`VirtualReceptionistConfig` rows that store the key in the DB
-(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
-or `npx prisma studio`).
+The key is stored encrypted in the platform LLM config row, not per
+salon.
 
 ## First deploy: creating the platform owner
 
@@ -379,7 +376,7 @@ in:
 
 ```bash
 ssh root@<vps-ip>
-docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+docker exec kiraroom-backend-prod env | grep -E "ANTHROPIC_API_KEY|DEFAULT_LLM_PROVIDER"
 # (value will be masked; this is for confirming presence only)
 ```
 
@@ -388,19 +385,16 @@ docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
 The virtual receptionist and Staff Copilot both call the LLM service.
 If a key is revoked or rate-limited:
 
-1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
-   Google AI Studio depending on which key is rotated).
+1. Sign in to console.anthropic.com (the receptionist and the copilot
+   run on Anthropic only).
 2. Mint a new key.
-3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
-   the `backend` service → update the matching `*_API_KEY=` env var
-   → Save → Hostinger redeploys.
+3. Paste it in the admin console (Plataforma > LLM) and press
+   "Probar conexión"; the backend picks it up on the next request.
 4. Verify a chatbot reply still works in the dashboard — the LLM
    service logs the provider + response time per call.
 
-If rotating `MINIMAX_API_KEY`, also update the per-tenant
-`VirtualReceptionistConfig` rows that store the key in the DB
-(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
-or `npx prisma studio`).
+The key is stored encrypted in the platform LLM config row, not per
+salon.
 
 ## First deploy: creating the platform owner
 

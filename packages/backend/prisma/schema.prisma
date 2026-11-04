@@ -3516,8 +3516,8 @@ model PlatformLlmConfig {
   // last-4-chars hash is returned to the admin UI.
   apiKeyEncrypted String   @db.Text
   defaultModel    String   @default("claude-haiku-5-5")
-  // Optional fields that the provider factory needs (e.g. MiniMax
-  // requires MINIMAX_BASE_URL).
+  // Optional base URL for the provider (a proxy or gateway in front of
+  // the provider API).
   baseUrl         String?
   // P2A-anthropic-workspace: Identity-linked Anthropic keys (created
   // from console.anthropic.com since late 2025) require this header

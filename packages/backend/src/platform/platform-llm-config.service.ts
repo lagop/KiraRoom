@@ -80,10 +80,6 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
         case LLMProvider.GOOGLE:
           if (eff.apiKey) process.env.GOOGLE_API_KEY = eff.apiKey;
           break;
-        case LLMProvider.MiniMax:
-          if (eff.apiKey) process.env.MINIMAX_API_KEY = eff.apiKey;
-          if (eff.baseUrl) process.env.MINIMAX_BASE_URL = eff.baseUrl;
-          break;
       }
       // P2A-anthropic-workspace: identity-linked keys need this header.
       // Sync to env so the AnthropicProvider picks it up via the
@@ -245,17 +241,19 @@ export class PlatformLlmConfigService implements OnApplicationBootstrap {
       case "google":
         provider = LLMProvider.GOOGLE;
         break;
-      case "MiniMax":
-        provider = LLMProvider.MiniMax;
-        break;
       default:
+        // MiniMax (removed in November 2026) or anything unknown: the
+        // receptionist and the copilot run on Anthropic. A MiniMax row's
+        // model and base URL would send Claude requests to the wrong place,
+        // so they are not used; its key must be replaced in the console.
         provider = LLMProvider.ANTHROPIC;
     }
+    const known = provider !== LLMProvider.ANTHROPIC || normalized === "anthropic";
 
     return {
       provider,
-      model: row.defaultModel,
-      baseUrl: row.baseUrl ?? undefined,
+      model: known ? row.defaultModel : DEFAULT_CLAUDE_MODEL,
+      baseUrl: known ? (row.baseUrl ?? undefined) : undefined,
       apiKey,
       workspaceId: row.workspaceId ?? null,
     };
@@ -490,8 +488,6 @@ function providerLabel(p: LLMProvider): string {
       return "openai";
     case LLMProvider.GOOGLE:
       return "google";
-    case LLMProvider.MiniMax:
-      return "MiniMax";
     default:
       return String(p);
   }

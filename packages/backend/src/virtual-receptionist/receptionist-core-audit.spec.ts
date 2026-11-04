@@ -94,8 +94,8 @@ const done = { id: "r", text: "ok", usage: { promptTokens: 1, completionTokens: 
 
 describe("LLM provider, key and retries (V16, V17)", () => {
   it("passes the platform key to the provider and leaves the other providers' keys alone", async () => {
-    const before = process.env.MINIMAX_API_KEY;
-    process.env.MINIMAX_API_KEY = "fallback-provider-key";
+    const before = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "fallback-provider-key";
     try {
       const anthropic = { generateCompletion: jest.fn(async () => done) };
       const { service } = llm({
@@ -108,9 +108,10 @@ describe("LLM provider, key and retries (V16, V17)", () => {
       const [, , config, , options] = anthropic.generateCompletion.mock.calls[0] as any[];
       expect(config.model).toBe("claude-haiku-5-5");
       expect(options.credentials).toMatchObject({ apiKey: KEY });
-      expect(process.env.MINIMAX_API_KEY).toBe("fallback-provider-key");
+      expect(process.env.OPENAI_API_KEY).toBe("fallback-provider-key");
     } finally {
-      process.env.MINIMAX_API_KEY = before;
+      if (before === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = before;
     }
   });
 

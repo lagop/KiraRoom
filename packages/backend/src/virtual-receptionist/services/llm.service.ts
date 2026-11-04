@@ -21,8 +21,8 @@ import { salonPublicUrlFromEnv } from '../../web-domain/public-url';
 import { publicPrice, publicPriceSettings } from '../../common/public-price';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from '../providers/anthropic-models';
 
-/** Providers whose implementation runs the tool loop. The others ignore `tools`. */
-const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
+/** Providers whose implementation runs the tool loop: Anthropic only. The others ignore `tools`. */
+const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC]);
 
 /** Monday first: how a salon reads its own week. Data is keyed in English. */
 const WEEK_ORDER = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
@@ -141,8 +141,6 @@ function defaultModelFor(provider: LLMProvider, configured?: string): string {
   switch (provider) {
     case LLMProvider.ANTHROPIC:
       return DEFAULT_CLAUDE_MODEL;
-    case LLMProvider.MiniMax:
-      return 'MiniMax-M3';
     default:
       return 'gpt-4o-mini';
   }
@@ -210,7 +208,7 @@ export class LLMService {
   /**
    * Convert a ConfigService value (string from env, number from override,
    * or undefined) to a finite number, falling back to `fallback` when the
-   * value is missing or NaN. The Anthropic / MiniMax SDK rejects numeric
+   * value is missing or NaN. The Anthropic SDK rejects numeric
    * params sent as strings, so every env-driven numeric field must pass
    * through here.
    */
@@ -284,9 +282,9 @@ export class LLMService {
     const config: LLMGenerationConfig = {
       model: route.model,
       // ConfigService.get() returns env vars as strings. The Anthropic
-      // / MiniMax SDK requires numeric fields to be actual numbers,
+      // SDK requires numeric fields to be actual numbers,
       // so coerce here. Sending "1" / "1500" / "0.95" as strings
-      // makes MiniMax reject the request with "invalid params".
+      // makes the API reject the request with "invalid params".
       temperature: this.coerceNumber(this.configService.get('LLM_TEMPERATURE'), 0.7),
       // 500 was too low -- with the system prompt + service catalog
       // the model would hit the cap mid-word ("Corte de Cab...").
@@ -704,8 +702,8 @@ export class LLMService {
 
   /**
    * The fallback provider's route: its own key from the environment and its
-   * own model (LLM_FALLBACK_MODEL, else the provider's default). It used to
-   * get the platform model -- a Claude model id sent to MiniMax.
+   * own model (LLM_FALLBACK_MODEL, else the provider's default), never the
+   * platform's Claude model id.
    */
   private fallbackRoute(provider: LLMProvider): LlmRoute {
     return { provider, model: defaultModelFor(provider, this.configService.get('LLM_FALLBACK_MODEL')) };

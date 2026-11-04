@@ -16,7 +16,6 @@ import { OpenAIProvider } from './providers/openai.provider';
 import { AnthropicProvider } from './providers/anthropic.provider';
 import { GoogleProvider } from './providers/google.provider';
 import { LlamaProvider } from './providers/llama.provider';
-import { MiniMaxProvider } from './providers/MiniMax.provider';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ConversationMemoryRepository } from './repositories/conversation-memory.repository';
 import { ProfessionalsModule } from '../professionals/professionals.module';
@@ -67,7 +66,6 @@ import { PublicChatAccessService } from './public-chat/public-chat-access.servic
     AnthropicProvider,
     GoogleProvider,
     LlamaProvider,
-    MiniMaxProvider,
     ConversationMemoryRepository,
     WebChannelProvider,
     FacebookMessengerProvider,

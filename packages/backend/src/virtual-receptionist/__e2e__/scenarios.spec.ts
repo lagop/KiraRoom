@@ -7,14 +7,14 @@ import { buildHarness, closeApp, runScenario, SKIP_E2E } from './harness';
  * Skipped by default. Opt-in with:
  *   RUN_LLM_E2E_TESTS=1 npm test -- virtual-receptionist/__e2e__/scenarios
  *
- * The suite runs sequentially against a real MiniMax-M3. Each
+ * The suite runs sequentially against the real Anthropic API. Each
  * scenario produces one Jest `it()` so failures show up individually
  * in the test report with the failed assertions printed inline.
  */
 
 const describeFn = SKIP_E2E ? describe.skip : describe;
 
-describeFn('Virtual Receptionist L-1 scenarios (real MiniMax)', () => {
+describeFn('Virtual Receptionist L-1 scenarios (real Anthropic)', () => {
   let harness: Awaited<ReturnType<typeof buildHarness>>;
 
   beforeAll(async () => {

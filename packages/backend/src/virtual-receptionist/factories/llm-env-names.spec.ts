@@ -5,24 +5,11 @@ import { LLMProvider } from '@kira/shared';
 import { LLMProviderFactory } from './llm-provider.factory';
 
 /**
- * Environment variable names are case-sensitive on Linux, and two reads
- * here were spelled `MiniMax_API_KEY` / `MiniMax_BASE_URL` while the whole
- * rest of the repo -- the operator template, the compose, the admin-UI
- * override in platform-llm-config.service.ts, the e2e harnesses -- uses
- * `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`.
- *
- * Confirmed in the running production container:
- *
- *   MINIMAX_API_KEY: presente      <- what the operator sets
- *   MiniMax_API_KEY: AUSENTE       <- what the code read
- *
- * MiniMax was the only LLM provider with a key configured, so the effect
- * was that the virtual receptionist could not reach any model at all, and
- * the only trace was one "MiniMax API key not configured" line at startup.
- * The admin-UI override was dead for the same reason: it assigns
- * process.env.MINIMAX_API_KEY, which the provider was not reading.
- *
- * Two guards: the behaviour, and the whole class of typo.
+ * Environment variable names are case-sensitive on Linux. Two reads were
+ * once spelled in mixed case while the operator set the upper-case name, and
+ * the receptionist could not reach any model: the only trace was one
+ * startup line. Two guards: each provider reads its documented name, and no
+ * read anywhere is spelled in mixed case.
  */
 
 function stubConfig(env: Record<string, string>): ConfigService {
@@ -31,24 +18,10 @@ function stubConfig(env: Record<string, string>): ConfigService {
 
 function factoryWith(env: Record<string, string>): LLMProviderFactory {
   const noop = {} as never;
-  return new LLMProviderFactory(stubConfig(env), noop, noop, noop, noop, noop);
+  return new LLMProviderFactory(stubConfig(env), noop, noop, noop, noop);
 }
 
 describe('LLM provider environment variable names', () => {
-  it('reports MiniMax available from the MINIMAX_API_KEY the operator sets', () => {
-    const factory = factoryWith({ MINIMAX_API_KEY: 'sk-minimax-test' });
-
-    expect(factory.isProviderAvailable(LLMProvider.MiniMax)).toBe(true);
-  });
-
-  it('does not report MiniMax available from the old mixed-case name', () => {
-    // If someone reintroduces the mixed-case read, this is the test that
-    // says the operator's variable is the one that counts.
-    const factory = factoryWith({ MiniMax_API_KEY: 'sk-minimax-test' });
-
-    expect(factory.isProviderAvailable(LLMProvider.MiniMax)).toBe(false);
-  });
-
   it('reports each other provider available from its documented name', () => {
     const cases: Array<[LLMProvider, string]> = [
       [LLMProvider.OPENAI, 'OPENAI_API_KEY'],
