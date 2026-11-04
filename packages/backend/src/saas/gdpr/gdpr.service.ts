@@ -93,6 +93,8 @@ export const EXPORT_SECRET_LOOKALIKES_KEPT: Readonly<Record<string, string>> = {
   "TenantLlmUsage.cachedInputTokens": "a count",
   "TenantLlmUsage.cacheWriteTokens": "a count",
   "TenantLlmUsage.outputTokens": "a count",
+  "User.passwordResetExpires": "a date",
+  "ChatConversation.hasHandoff": "a yes/no",
 };
 
 /** Tables with no link to a salon: platform configuration, sessions, catalogues. Not exported. */
@@ -243,8 +245,8 @@ export function tenantScope(
   const links = m.fields
     .filter((f) => f.kind === "object" && (f.relationFromFields?.length ?? 0) > 0 && f.type !== model)
     .sort((a, b) => Number(b.isRequired) - Number(a.isRequired));
+  // A required link first; an optional one (a delivery and its notification) after.
   for (const link of links) {
-    if (!link.isRequired) continue;
     const inner = tenantScope(link.type, tenantId, models, depth + 1);
     if (inner) return { [link.name]: inner };
   }

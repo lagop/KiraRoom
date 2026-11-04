@@ -27,7 +27,7 @@ describe("deleting a salon from the console", () => {
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const auditLog: any = { record: jest.fn(async () => ({ id: "audit-1" })) };
-    const subscriptions: any = { cancelSubscription: jest.fn(async () => undefined) };
+    const subscriptions: any = { cancelStripeSubscriptionNow: jest.fn(async () => ({ cancelled: false })) };
     const service = new SaasService(prisma, {} as any, auditLog, subscriptions);
 
     await service.deleteTenant("t1", "owner-1");
