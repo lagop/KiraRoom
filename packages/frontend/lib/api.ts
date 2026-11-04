@@ -2756,6 +2756,16 @@ class ApiClient implements ApiClientInterface {
     return this.request("/auth/email-verification");
   }
 
+  /** D3: whether the owner must accept the current terms (salons from before, or a new version). */
+  async getTermsStatus(): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    return this.request("/auth/terms");
+  }
+
+  /** D3: "He leído y acepto los términos actualizados". */
+  async acceptTerms(): Promise<{ accepted: true; version: string }> {
+    return this.request("/auth/terms/accept", { method: "POST", body: JSON.stringify({ accept: true }) });
+  }
+
   /** A new confirmation link by email, for the signed-in user (3 an hour). */
   async resendVerificationEmail(): Promise<{ sent: boolean; alreadyVerified: boolean }> {
     return this.request("/auth/resend-verification", { method: "POST" });

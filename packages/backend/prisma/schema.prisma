@@ -504,7 +504,7 @@ model LegalAcceptance {
   termsVersion     String
   acceptedAt       DateTime @default(now())
   ip               String?
-  /// "signup" | "invite"
+  /// "signup" | "invite" | "login_prompt" (auth/legal-terms.ts)
   source           String
 
   @@index([tenantId, acceptedAt])

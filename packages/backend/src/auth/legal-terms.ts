@@ -11,4 +11,9 @@ export const TERMS_VERSION = "2026-11-04";
 /** The same date as the terms page writes it. */
 export const TERMS_LAST_UPDATED_LABEL = "4 de noviembre de 2026";
 
-export type LegalAcceptanceSource = "signup" | "invite";
+/**
+ * "signup" and "invite" when the account is created; "login_prompt" when an
+ * owner accepts a newer version in the panel (D3: salons from before the
+ * acceptance was recorded, and every later version bump).
+ */
+export type LegalAcceptanceSource = "signup" | "invite" | "login_prompt";

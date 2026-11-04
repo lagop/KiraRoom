@@ -5,6 +5,7 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcryptjs";
@@ -22,7 +23,7 @@ import {
 } from "../saas/saas.helpers";
 import { normalizeEmail } from "./email-normalize";
 import { tenantOwnerEmailVerified } from "./email-verified/owner-email-verified";
-import { TERMS_VERSION } from "./legal-terms";
+import { TERMS_LAST_UPDATED_LABEL, TERMS_VERSION } from "./legal-terms";
 import { AuditLogService } from "../saas/audit-log.service";
 import { EmailService } from "../notifications/services/email.service";
 import { createHash, randomBytes } from "crypto";
@@ -391,6 +392,50 @@ export class AuthService {
       dashboardUrl: `${frontendUrl}/dashboard`,
       verifyUrl: `${frontendUrl}/verify-email?token=${token}`,
     });
+  }
+
+  /**
+   * D3: whether the panel must ask this user to accept the current terms.
+   * Only an owner is asked (not support signed in as the salon), and only
+   * while the salon has no acceptance of TERMS_VERSION: salons from before
+   * acceptances were recorded, and all of them again when the version moves.
+   */
+  async termsStatus(user: {
+    id: string;
+    role: string;
+    impersonatedBy?: string;
+  }): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    const answer = (required: boolean) => ({ required, version: TERMS_VERSION, lastUpdated: TERMS_LAST_UPDATED_LABEL });
+    if (user.role !== "owner" || user.impersonatedBy) return answer(false);
+    const row = await this.prisma.user.findUnique({ where: { id: user.id }, select: { tenantId: true } });
+    if (!row) return answer(false);
+    const accepted = await this.prisma.legalAcceptance.count({
+      where: { tenantId: row.tenantId, termsVersion: TERMS_VERSION },
+    });
+    return answer(accepted === 0);
+  }
+
+  /** D3: records the owner's acceptance of the current terms. Once per version. */
+  async acceptCurrentTerms(userId: string, ip: string | null): Promise<{ accepted: true; version: string }> {
+    const row = await this.prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true, role: true } });
+    if (!row || row.role !== "owner") {
+      throw new ForbiddenException("Solo la dueña del salón puede aceptar los términos.");
+    }
+    const already = await this.prisma.legalAcceptance.count({
+      where: { tenantId: row.tenantId, termsVersion: TERMS_VERSION },
+    });
+    if (already === 0) {
+      await this.prisma.legalAcceptance.create({
+        data: {
+          tenantId: row.tenantId,
+          acceptedByUserId: userId,
+          termsVersion: TERMS_VERSION,
+          ip,
+          source: "login_prompt",
+        },
+      });
+    }
+    return { accepted: true, version: TERMS_VERSION };
   }
 
   /**

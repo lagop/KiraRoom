@@ -3551,6 +3551,17 @@
     "failed": "No hemos podido enviar el email. Inténtalo de nuevo en unos minutos.",
     "dismiss": "Ocultar este aviso"
   },
+  "termsUpdate": {
+    "title": "Hemos actualizado los términos",
+    "body": "Los términos del servicio (con el acuerdo de encargo del tratamiento de datos) y la política de privacidad se actualizaron el {date}. Para seguir usando KiraRoom, léelos y acéptalos.",
+    "checkbox": "He leído y acepto los términos actualizados",
+    "terms": "Términos del servicio",
+    "privacy": "Política de privacidad",
+    "accept": "Aceptar y continuar",
+    "saving": "Guardando...",
+    "signOut": "Cerrar sesión",
+    "failed": "No hemos podido guardar la aceptación. Inténtalo de nuevo."
+  },
   "emailVerifyRequired": {
     "title": "Confirma tu email para enviar campañas",
     "ownerBody": "Puedes preparar campañas, pero no enviarlas hasta confirmar {email} con el enlace que te enviamos. Tampoco podrás conectar Stripe, y tu web no aparecerá en Google hasta entonces.",
