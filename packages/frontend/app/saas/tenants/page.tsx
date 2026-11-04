@@ -592,7 +592,7 @@ export default function TenantsPage() {
         title={pendingSupport ? t("saas.support.title", { name: pendingSupport.name }) : ""}
         description={
           <div className="space-y-2">
-            <p>{t("saas.support.explain")}</p>
+            <p>{t("saas.support.explain")} {t("saas.support.owner_notified")}</p>
             <label htmlFor="support-reason" className="block font-medium text-gray-800">
               {t("saas.support.reason_label")}
             </label>

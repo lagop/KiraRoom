@@ -42,6 +42,7 @@ import {
 } from "./dto/payment-bodies.dto";
 import { PaymentFiltersDto, PaymentsListQueryDto } from "./payments-query";
 import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 /**
  * Who sees which payments:
@@ -298,6 +299,7 @@ export class PaymentsController {
     return this.subscriptionsService.getCheckoutSessionStatus(req.user.tenantId, sessionId);
   }
 
+  @NotDuringSupport()
   @Post("subscription/checkout")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -309,6 +311,7 @@ export class PaymentsController {
     );
   }
 
+  @NotDuringSupport()
   @Post("subscription/change-plan")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -317,6 +320,7 @@ export class PaymentsController {
     return this.subscriptionsService.changePlan(req.user.tenantId, body.plan);
   }
 
+  @NotDuringSupport()
   @Post("subscription/cancel")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -336,6 +340,7 @@ export class PaymentsController {
     return result;
   }
 
+  @NotDuringSupport()
   @Post("subscription/undo-cancel")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -352,6 +357,7 @@ export class PaymentsController {
     return { plan: query.plan, blockers };
   }
 
+  @NotDuringSupport()
   @Post("subscription/reactivate")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -363,6 +369,7 @@ export class PaymentsController {
     return this.subscriptionsService.reactivateSubscription(req.user.tenantId);
   }
 
+  @NotDuringSupport()
   @Post("subscription/billing-portal")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -371,6 +378,7 @@ export class PaymentsController {
     const returnUrl = (process.env.FRONTEND_URL || "http://localhost:3000") + "/dashboard/billing";
     return this.subscriptionsService.createBillingPortalSession(req.user.tenantId, returnUrl);
   }
+  @NotDuringSupport()
   @Post("subscription/update-locations")
   @AllowWhenReadOnly()
   @Roles("owner")
@@ -541,6 +549,7 @@ export class PaymentsController {
     return this.stripeService.getTenantSettings(req.user.tenantId);
   }
 
+  @NotDuringSupport()
   @Patch("stripe/settings")
   @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Update Stripe configuration for tenant" })

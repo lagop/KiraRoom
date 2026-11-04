@@ -31,6 +31,7 @@ import { invalidateTenantWidgets } from "../widget/widget.service";
 import { SubscriptionsService } from "../payments/services/subscriptions.service";
 import { normalizePlan, PLAN_PRICES, PlanId } from "@kira/shared";
 import { assertNotPlatformTenant, NOT_PLATFORM_TENANT_WHERE } from "./platform-tenant";
+import { supportAccessAllowed, supportAccessOffException } from "../auth/support-access/support-access";
 
 /** The platform owner doing something in the console, for the audit log. */
 export interface ConsoleActor {
@@ -533,6 +534,8 @@ export class SaasService {
   async launchSalonDashboard(tenantId: string, saasOwnerId: string, reason: string) {
     const tenant = await getActiveTenant(this.prisma, tenantId);
     await assertNotPlatformTenant(this.prisma, tenantId);
+    // D2: the owner's "Permitir que soporte de KiraRoom entre en mi panel".
+    if (!supportAccessAllowed(tenant)) throw supportAccessOffException();
     // The console's session version goes into the token: logout everywhere
     // or a new password between now and the redeem voids it (C13).
     const saasOwner = await this.prisma.user.findUnique({

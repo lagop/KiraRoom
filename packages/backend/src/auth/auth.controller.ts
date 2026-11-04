@@ -53,6 +53,8 @@ import { AuthRateLimitsService } from "./abuse/auth-rate-limits.service";
 import { isDisposableEmail } from "./abuse/disposable-email-domains";
 import { normalizeEmail } from "./email-normalize";
 import { AcceptTermsDto } from "./dto/accept-terms.dto";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
+import { AllowWithoutTwoFactor } from "./two-factor/saas-owner-two-factor";
 
 /** The caller's address, as Express derives it behind the trusted proxies. */
 function clientIp(req: Request | undefined): string | null {
@@ -162,6 +164,7 @@ export class AuthController {
   }
 
   /** D3: "He leído y acepto los términos actualizados". Owner only, not support. */
+  @NotDuringSupport()
   @Post("terms/accept")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -191,6 +194,7 @@ export class AuthController {
    * hour per account (Redis). Until the owner confirms, campaigns, mass
    * sends and Stripe stay blocked (D1); this lets them get a new link.
    */
+  @NotDuringSupport()
   @Post("resend-verification")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -281,6 +285,7 @@ export class AuthController {
     return deliverSession(res, await this.authService.completeTwoFactorLogin(dto.challenge, dto.code));
   }
 
+  @AllowWithoutTwoFactor()
   @Get("2fa")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -291,6 +296,8 @@ export class AuthController {
     return this.twoFactor.status(user.id);
   }
 
+  @NotDuringSupport()
+  @AllowWithoutTwoFactor()
   @Post("2fa/setup")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -303,6 +310,8 @@ export class AuthController {
     return this.twoFactor.setup(user.id);
   }
 
+  @NotDuringSupport()
+  @AllowWithoutTwoFactor()
   @Post("2fa/enable")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -325,6 +334,7 @@ export class AuthController {
     return { ...result, ...(await this.renewSession(user, req, res)) };
   }
 
+  @NotDuringSupport()
   @Post("2fa/disable")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -346,6 +356,7 @@ export class AuthController {
     return { ...result, ...(await this.renewSession(user, req, res)) };
   }
 
+  @NotDuringSupport()
   @Post("2fa/recovery-codes")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -374,6 +385,8 @@ export class AuthController {
    * session ends; this browser gets new tokens (refresh cookie + access
    * token in the body), so it stays signed in.
    */
+  @NotDuringSupport()
+  @AllowWithoutTwoFactor()
   @Patch("password")
   @SignedIn()
   @AllowWhenReadOnly()
@@ -465,6 +478,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @AllowWithoutTwoFactor()
   @Post("logout")
   @AllowWhenReadOnly()
   @HttpCode(HttpStatus.OK)
@@ -501,6 +515,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @AllowWithoutTwoFactor()
   @Get("me")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Get current user profile" })

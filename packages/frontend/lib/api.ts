@@ -273,6 +273,27 @@ export interface TwoFactorRequired {
 /** The exports offered before deleting the salon (backend exports.controller). */
 export type SalonExportKind = "clients" | "appointments" | "payments" | "services" | "professionals" | "gift-cards";
 
+/** Audit 8 D15: the console's answer while it requires 2FA the platform owner has not set up. */
+export const SAAS_OWNER_2FA_REQUIRED_CODE = "SAAS_OWNER_2FA_REQUIRED";
+export const SAAS_OWNER_2FA_SETUP_PATH = "/saas/seguridad";
+
+/** Audit 8 D2: one support session in the salon, from the audit log. */
+export interface SupportSessionRow {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  reason: string | null;
+  supportName: string | null;
+  status: "active" | "ended" | "expired";
+}
+
+/** Ajustes > Seguridad: whether KiraRoom support may enter, and its recent sessions. */
+export interface SupportAccessStatus {
+  allowed: boolean;
+  sessions: SupportSessionRow[];
+}
+
 export interface SalonDeletionStatus {
   pending: boolean;
   requestedAt: string | null;
@@ -2691,6 +2712,16 @@ class ApiClient implements ApiClientInterface {
         errorData.message,
         `API Error: ${response.status} ${response.statusText}`,
       );
+      // Audit 8 D15: the console requires 2FA and the platform owner has
+      // none yet: everything but setting it up sends her to Seguridad.
+      if (
+        response.status === 403 &&
+        errorData.code === SAAS_OWNER_2FA_REQUIRED_CODE &&
+        typeof window !== "undefined" &&
+        window.location.pathname !== SAAS_OWNER_2FA_SETUP_PATH
+      ) {
+        window.location.href = `${SAAS_OWNER_2FA_SETUP_PATH}?2fa=required`;
+      }
       throw new ApiError(
         message,
         response.status,
@@ -6295,6 +6326,19 @@ class ApiClient implements ApiClientInterface {
    */
   async downloadSalonExport(kind: SalonExportKind): Promise<{ blob: Blob; filename: string }> {
     return this.downloadWithToken(`${API_BASE_URL}/exports/${kind}.csv`, `${kind}.csv`);
+  }
+
+  /** "Permitir que soporte de KiraRoom entre en mi panel" and the recent support sessions (owner). */
+  async getSupportAccess(): Promise<SupportAccessStatus> {
+    return this.request<SupportAccessStatus>("/settings/support-access");
+  }
+
+  /** The owner allows or refuses support sessions; a support session cannot change it. */
+  async updateSupportAccess(allowed: boolean): Promise<SupportAccessStatus> {
+    return this.request<SupportAccessStatus>("/settings/support-access", {
+      method: "PATCH",
+      body: JSON.stringify({ allowed }),
+    });
   }
 
   /** "Borrar mi salón" (owner only): whether it is pending, and its dates. */
