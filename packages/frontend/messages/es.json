@@ -1443,7 +1443,8 @@
       "explain": "Se abrirá en una pestaña nueva; tu sesión de la consola sigue abierta aquí. La sesión de soporte dura como máximo 2 horas, y lo que hagas queda en el registro de actividad a tu nombre.",
       "reason_label": "Motivo",
       "reason_placeholder": "Por ejemplo: la dueña pidió ayuda para configurar los horarios",
-      "open": "Abrir panel"
+      "open": "Abrir panel",
+      "owner_notified": "La dueña recibe un email con tu nombre, la hora y el motivo."
     },
     "security": {
       "title": "Seguridad",
@@ -1453,7 +1454,9 @@
       "sign_out_all_button": "Cerrar todas las sesiones",
       "sign_out_all_confirm_title": "¿Cerrar todas las sesiones?",
       "sign_out_all_confirm_body": "Tendrás que volver a entrar con tu contraseña (y el código, si tienes la verificación en dos pasos).",
-      "sign_out_all_failed": "No se han podido cerrar las sesiones."
+      "sign_out_all_failed": "No se han podido cerrar las sesiones.",
+      "two_factor_required_title": "Activa la verificación en dos pasos",
+      "two_factor_required_body": "La consola exige la verificación en dos pasos. Actívala aquí abajo y guarda los códigos de recuperación; después podrás usar el resto de la consola."
     },
     "audit": {
       "title": "Actividad",
@@ -1507,6 +1510,7 @@
         "invoice_emailed": "Factura enviada por email"
       }
     },
+    "forgot_password": "¿Has olvidado la contraseña?",
     "internal_salon": {
       "title": "Salón interno o de pruebas",
       "on": "Es uno de nuestros salones: no cuenta en las cifras ni en las alertas de la plataforma.",
@@ -3936,6 +3940,33 @@
     "ends_at": "La sesión se cierra sola a las {time}.",
     "ends_max": "La sesión se cierra sola como máximo 2 horas después de entrar.",
     "session_id": "sesión",
-    "exit": "Salir del modo soporte"
+    "exit": "Salir del modo soporte",
+    "limits": "En modo soporte no se puede pagar ni cambiar el plan, tocar los datos fiscales, contraseñas, accesos ni la verificación en dos pasos, exportar clientas ni borrar el salón."
+  },
+  "supportAccess": {
+    "title": "Soporte de KiraRoom",
+    "body": "Si nos pides ayuda, el equipo de soporte puede entrar en tu panel para verlo como tú. Puede revisar todo y configurar la agenda, los servicios, el equipo y la web; nunca puede pagar ni cambiar tu plan, tocar tus datos fiscales, contraseñas o accesos, ni exportar tus clientas. Cada vez que entra te enviamos un email.",
+    "toggle": "Permitir que soporte de KiraRoom entre en mi panel",
+    "on": "Soporte puede entrar en tu panel cuando lo necesite.",
+    "off": "Soporte no puede entrar en tu panel. Si nos pides ayuda, tendrás que activarlo antes.",
+    "saved_on": "Soporte puede volver a entrar en tu panel",
+    "saved_off": "Soporte ya no puede entrar en tu panel",
+    "save_failed": "No se ha podido guardar",
+    "confirm_off_title": "¿Impedir que soporte entre en tu panel?",
+    "confirm_off_body": "Si hay una sesión de soporte abierta, se cierra ahora. Podrás volver a activarlo cuando quieras.",
+    "confirm_off": "Impedir el acceso",
+    "support_mode": "Solo la dueña puede cambiar esto, no una sesión de soporte.",
+    "sessions_title": "Últimas sesiones de soporte",
+    "sessions_empty": "Soporte no ha entrado en tu panel en los últimos 6 meses.",
+    "col_date": "Fecha",
+    "col_reason": "Motivo",
+    "col_duration": "Duración",
+    "col_who": "Quién",
+    "status_active": "Abierta ahora",
+    "status_expired": "Se cerró sola (máx. 2 h)",
+    "minutes": "{n} min",
+    "less_than_minute": "Menos de 1 min",
+    "hours_minutes": "{h} h {m} min",
+    "no_reason": "Sin motivo"
   }
 }

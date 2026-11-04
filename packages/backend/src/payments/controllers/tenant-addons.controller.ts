@@ -8,6 +8,7 @@ import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
 import { AuditLogService } from "../../saas/audit-log.service";
 import { UserRole } from "@prisma/client";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 /**
  * Tenant-scoped add-on surface. Distinct from the saas-admin
@@ -71,6 +72,7 @@ export class TenantAddOnsController {
    * includes, or a salon without a paid subscription. Answers the row as
    * Stripe left it, so the page shows "Activo" only when it is.
    */
+  @NotDuringSupport()
   @Post('tenants/current/add-ons/:key')
   // A charge on the owner's card: billing is the owner's (B7), like the
   // subscription routes in PaymentsController. Admins still read the
@@ -88,6 +90,7 @@ export class TenantAddOnsController {
   }
 
   /** Stop an add-on: removed from the Stripe subscription, then ended here. */
+  @NotDuringSupport()
   @Delete('tenants/current/add-ons/:key')
   @Roles('owner')
   async cancel(
@@ -107,6 +110,7 @@ export class TenantAddOnsController {
   }
 
   /** SaaS-admin manual top-up (used in dev / promo flows). */
+  @NotDuringSupport()
   @Post('message-bundles/tenants/current/topup')
   @SaasOwner()
   async topup(

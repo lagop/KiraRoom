@@ -79,7 +79,10 @@ The "external-link" button on a tenant row opens that salon's panel as its owner
 - Entry token: 60 s, single use (`used_impersonation_tokens`).
 - Support session: **2 hours hard cap** from entry (`SUPPORT_SESSION_MAX_SECONDS`, `auth/session-token.ts`). Neither the access nor the refresh token lives past it; a refresh after it is refused.
 - It also ends when the platform owner signs out everywhere, changes the password, or is deactivated (the owner's `tokenVersion` at entry is in the token).
-- What support can do inside the salon is unchanged for now (pending owner decision, audit 8 C2).
+- The owner can refuse support sessions: **Ajustes > Seguridad > "Permitir que soporte de KiraRoom entre en mi panel"** (`tenants.allowSupportAccess`, on by default, owner only). Off, the launch and the redeem answer 403 `SUPPORT_ACCESS_OFF` with a Spanish message the console shows, and an open support session ends on its next request. The same page lists the salon's last support sessions (date, reason, duration) from the audit log.
+- Every support session start emails the owner in Spanish: who, when, the reason, and a link to that setting.
+
+**What support may do (audit 8 D1):** read everything and configure the agenda, services, team (not staff passwords or panel access) and website. Refused with 403 `SUPPORT_MODE` "No disponible en modo soporte" (`@NotDuringSupport()` + the global `SupportScopeGuard`, keyed off the impersonation claim): plan checkout, change, cancel, reactivation, billing portal, locations, add-ons and packs, the salon's Stripe settings; fiscal data and certificates, Holded connect/disconnect, the invoice export; own password, 2FA, terms acceptance, resend verification; staff passwords and panel access; all CSV/XLSX exports and client GDPR export/anonymize; salon deletion and the once-only web-address change; the support-access setting itself. The full list is asserted route by route in `common/guards/support-scope.guard.spec.ts`: a new route of that kind must be added there and decorated.
 - Not for the "Platform" tenant (the platform owner's own account): it is hidden from the salon list and cannot be deleted, suspended, anonymised or entered.
 
 ---

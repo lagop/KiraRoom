@@ -26,6 +26,7 @@ import { Feature } from "../common/decorators/feature.decorator";
 import { EmailQuotaService } from "./email-quota.service";
 import { EmailPacksService } from "./email-packs.service";
 import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 @ApiTags("Email Campaigns")
 @ApiBearerAuth()
@@ -78,6 +79,7 @@ export class EmailCampaignsController {
   }
 
   /** "Comprar bono de emails": the Stripe page to pay for it. */
+  @NotDuringSupport()
   @Post("quota/pack-checkout")
   @ApiOperation({ summary: "Start paying for a bono de emails (Stripe Checkout)" })
   @Roles(UserRole.owner, UserRole.admin)

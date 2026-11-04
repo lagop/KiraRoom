@@ -3,7 +3,7 @@
  * storage and the audit-log page's helpers.
  * Run with: ts-node --project tsconfig.test.json --transpile-only lib/console-access.spec.ts
  */
-import { supportEntryUrl, supportReasonProblem } from "./support-session";
+import { supportEntryUrl, supportReasonProblem, supportSessionDuration } from "./support-session";
 import { auditActionKey, auditPersonLabel } from "./audit-log-view";
 
 let failures = 0;
@@ -65,6 +65,15 @@ check("action key", auditActionKey("tenant.taxId.change"), "saas.audit.actions.t
 check("person with name", auditPersonLabel({ email: "a@b.es", firstName: "Ana", lastName: "López" }), "Ana López (a@b.es)");
 check("person without name", auditPersonLabel({ email: "a@b.es", firstName: null, lastName: "" }), "a@b.es");
 check("nobody", auditPersonLabel(null), "—");
+
+// D2: the duration column of Ajustes > Seguridad
+const es = require("../messages/es.json");
+const tr = (key: string, params: Record<string, string | number> = {}) =>
+  String(key.split(".").reduce((n: any, k) => n?.[k], es) ?? key).replace(/\{(\w+)\}/g, (_m, p) => String(params[p] ?? ""));
+check("duration: under a minute", supportSessionDuration(20, tr), "Menos de 1 min");
+check("duration: minutes", supportSessionDuration(25 * 60, tr), "25 min");
+check("duration: hours", supportSessionDuration(95 * 60, tr), "1 h 35 min");
+check("duration: not ended", supportSessionDuration(null, tr), null);
 
 if (failures) {
   console.error(`${failures} failure(s)`);

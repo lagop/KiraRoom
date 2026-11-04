@@ -8,6 +8,7 @@ import { Roles } from "../../auth/decorators/roles.decorator";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
 import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
 import { SalonDeletionService } from "./salon-deletion.service";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 export class RequestSalonDeletionDto {
   @IsString()
@@ -36,6 +37,7 @@ export class SalonDeletionController {
     return this.deletion.status(user.tenantId, user.id);
   }
 
+  @NotDuringSupport()
   @Post()
   // A read-only salon can be deleted too.
   @AllowWhenReadOnly()
@@ -45,6 +47,7 @@ export class SalonDeletionController {
     return this.deletion.request(user.tenantId, { id: user.id, role: user.role }, dto);
   }
 
+  @NotDuringSupport()
   @Delete()
   // Pending deletion means read-only: cancelling it must work then.
   @AllowWhenReadOnly()

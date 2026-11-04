@@ -46,6 +46,7 @@ import { livemodeOf, sameStripeMode } from "../platform/stripe-settings";
 import { BILLING_IDENTITY_SELECT, syncBillingCustomer } from "../payments/billing-customer";
 import { taxLabelOf, taxRegimeOf, TAX_REGIME_DEFAULT_RATE } from "@kira/shared";
 import { territoryTaxRegime } from "./salon-tax-settings";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string; id?: string; role?: UserRole; impersonatedBy?: string };
@@ -285,6 +286,7 @@ export class InvoicesController {
     };
   }
 
+  @NotDuringSupport()
   @Patch("settings/fiscal")
   @Roles(UserRole.owner)
   async updateFiscalSettings(
@@ -409,6 +411,7 @@ export class InvoicesController {
 
   // ---- Certificates ----
 
+  @NotDuringSupport()
   @Post("certificates")
   @Roles(UserRole.owner)
   async uploadCertificate(
@@ -432,6 +435,7 @@ export class InvoicesController {
     }
   }
 
+  @NotDuringSupport()
   @Patch("certificates/:id/deactivate")
   @Roles(UserRole.owner)
   deactivateCertificate(
