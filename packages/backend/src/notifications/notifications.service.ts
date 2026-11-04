@@ -19,6 +19,7 @@ import {
   NotificationType,
 } from "./dto";
 import { DEFAULT_PREFERENCES } from "./notification-defaults";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 @Injectable()
 export class NotificationsService {
@@ -418,6 +419,7 @@ export class NotificationsService {
    * Cron job to clean up old archived notifications (90 days)
    */
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @MonitoredJob("NotificationsService.cleanupOldNotifications")
   async cleanupOldNotifications() {
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);

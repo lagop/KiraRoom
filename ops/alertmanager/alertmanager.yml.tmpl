@@ -1,0 +1,48 @@
+# Alertmanager for KiraRoom (audit 8 D7).
+#
+# Prometheus had four alert rules (ops/prometheus/rules/kiraroom.yml) and
+# nowhere to send them. This routes every alert by email to the platform
+# owner, through Resend's SMTP relay (the same account the app sends with).
+#
+# Alertmanager does not read environment variables, so this is a template:
+# the alertmanager service in docker-compose.observability.yml fills in the
+# __PLACEHOLDERS__ with sed at start and writes the SMTP password to a file
+# (auth_password_file) instead of into this config.
+#
+#   __OPS_ALERT_EMAIL__  OPS_ALERT_EMAIL, default admin@kiraroom.net
+#   __ALERT_FROM__       ALERTMANAGER_FROM, a sender on a domain verified in
+#                        Resend, default alertas@kiraroom.net
+#
+# Check after editing:
+#   docker compose -f docker-compose.observability.yml exec alertmanager \
+#     amtool check-config /alertmanager/alertmanager.yml
+
+global:
+  smtp_smarthost: smtp.resend.com:587
+  smtp_from: __ALERT_FROM__
+  smtp_auth_username: resend
+  smtp_auth_password_file: /alertmanager/.smtp-password
+  smtp_require_tls: true
+  resolve_timeout: 5m
+
+route:
+  receiver: owner-email
+  group_by: [alertname]
+  # First email 1 minute after an alert fires, then at most every 4 hours
+  # while it keeps firing: a page, not a flood.
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 4h
+
+receivers:
+  - name: owner-email
+    email_configs:
+      - to: __OPS_ALERT_EMAIL__
+        send_resolved: true
+        headers:
+          Subject: '[KiraRoom] {{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+
+inhibit_rules:
+  # While the API is down, the "no inbound messages" warning is noise.
+  - source_matchers: [alertname="BackendDown"]
+    target_matchers: [severity="warning"]

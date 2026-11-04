@@ -32,6 +32,7 @@ import {
   isRejectionReason,
   withinSendingHours,
 } from "./review-rules";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /** The add-on that pays for automatic review requests. */
 export const REVIEW_ADDON_KEY = "google_reviews_auto" as const;
@@ -592,6 +593,7 @@ export class ReviewsService {
    * request is not a campaign).
    */
   @Cron(CronExpression.EVERY_HOUR)
+  @MonitoredJob("ReviewsService.dispatchReviewRequests")
   async dispatchReviewRequests(now: Date = new Date()) {
     await this.publishUnmoderated(now).catch((err) =>
       this.logger.error(`Publishing unmoderated reviews failed: ${err.message}`),

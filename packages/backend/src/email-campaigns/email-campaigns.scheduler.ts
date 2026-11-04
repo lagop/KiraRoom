@@ -17,6 +17,7 @@ import {
   withPreheader,
   withoutPromotion,
 } from './campaign-content';
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -39,6 +40,7 @@ export class EmailCampaignsScheduler {
    * Runs daily to clean up analytics data older than 90 days
    */
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  @MonitoredJob("EmailCampaignsScheduler.cleanupOldCampaignData")
   async cleanupOldCampaignData() {
     this.logger.log('Cleaning up old campaign data...');
 
@@ -65,6 +67,7 @@ export class EmailCampaignsScheduler {
    * Finds clients who haven't visited in X days and sends them personalized emails
    */
   @Cron(CronExpression.EVERY_DAY_AT_6AM)
+  @MonitoredJob("EmailCampaignsScheduler.processReengagementCampaigns")
   async processReengagementCampaigns() {
     this.logger.log('Processing re-engagement campaigns...');
 

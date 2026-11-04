@@ -1,6 +1,8 @@
 ﻿import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { SentryExceptionFilter } from "./common/observability/sentry-exception.filter";
+import { OpsAlertsModule } from "./common/ops-alerts/ops-alerts.module";
 import { JwtModule } from "@nestjs/jwt";
 import {
   parseJwtDuration,
@@ -161,6 +163,8 @@ import { PublicModule } from "./public-site/public.module";
 
     // Notifications module
     NotificationsModule,
+    // Emails the platform owner: AEAT rejections, failed jobs, bounce spikes (audit 8 D15).
+    OpsAlertsModule,
 
     // Virtual Receptionist module
     VirtualReceptionistModule,
@@ -267,6 +271,11 @@ import { PublicModule } from "./public-site/public.module";
     CspReportController,
   ],
   providers: [
+    // 5xx and unexpected errors reach GlitchTip (audit 8 D6).
+    {
+      provide: APP_FILTER,
+      useClass: SentryExceptionFilter,
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerBehindProxyGuard,
