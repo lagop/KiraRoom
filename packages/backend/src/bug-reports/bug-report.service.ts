@@ -22,7 +22,7 @@ interface BugReportInput {
  * existing `EmailService` to the founder.
  *
  * The "founder email" is read from `FOUNDER_EMAIL` env var (default:
- * `founder@kiraroom.com`). When unset (early dev), the report is
+ * `admin@kiraroom.net`). When unset (early dev), the report is
  * logged to stdout instead.
  *
  * Sprint 2 / 2.3: if the reporter supplied an email, an automated
@@ -41,7 +41,7 @@ export class BugReportService {
 
   async submit(input: BugReportInput): Promise<string> {
     const id = randomUUID();
-    const recipient = process.env.FOUNDER_EMAIL ?? "founder@kiraroom.com";
+    const recipient = process.env.FOUNDER_EMAIL ?? "admin@kiraroom.net";
 
     const body = [
       `Subject: ${input.subject}`,

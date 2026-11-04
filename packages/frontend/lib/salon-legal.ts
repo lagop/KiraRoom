@@ -10,9 +10,9 @@
  * advisor must review them before relying on them.
  */
 
-/** KiraRoom's product domain and the mailbox its privacy texts give. */
+/** KiraRoom's product domain, and the mailbox its privacy texts give (the public contact, info@kiraroom.com). */
 export const KIRAROOM_DOMAIN = "kiraroom.net";
-export const KIRAROOM_PRIVACY_EMAIL = `privacidad@${KIRAROOM_DOMAIN}`;
+export const KIRAROOM_PRIVACY_EMAIL = "info@kiraroom.com";
 
 /** How long the receptionist's conversations are kept (backend retention job). */
 export const CONVERSATION_RETENTION_MONTHS = 12;

@@ -3,7 +3,7 @@ import planMatrix from "../data/planMatrix.json";
 const { plans } = planMatrix;
 const signupUrl = (id: string) => `https://app.kiraroom.net/signup?plan=${id}`;
 // Empresa's button says "Hablar con ventas": it opens an email to us, not the signup.
-const salesUrl = "mailto:hola@kiraroom.com?subject=" + encodeURIComponent("Plan Empresa de KiraRoom");
+const salesUrl = "mailto:info@kiraroom.com?subject=" + encodeURIComponent("Plan Empresa de KiraRoom");
 const ctaUrl = (id: string) => (id === "empresa" ? salesUrl : signupUrl(id));
 ---
 
@@ -46,7 +46,7 @@ const ctaUrl = (id: string) => (id === "empresa" ? salesUrl : signupUrl(id));
       ))}
     </div>
     <p class="plans__footnote">
-      ¿Necesitas algo a medida? Escríbenos a <a href="mailto:hola@kiraroom.com">hola@kiraroom.com</a>.
+      ¿Necesitas algo a medida? Escríbenos a <a href="mailto:info@kiraroom.com">info@kiraroom.com</a>.
     </p>
   </div>
 </section>
