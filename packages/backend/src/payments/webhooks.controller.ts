@@ -12,6 +12,7 @@ import { activationFromCheckout, activationFromSubscription, liveStatusFor, Plan
 import { ReadOnlyNoticeService } from './read-only-notice.service';
 import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
 import { creditEmailPackFromCheckout, isEmailPackSession } from '../email-campaigns/email-packs.service';
+import { appBaseUrl } from '../common/app-base-url';
 
 @Controller('webhooks')
 export class WebhooksController {
@@ -670,10 +671,7 @@ export class WebhooksController {
       return;
     }
 
-    const baseUrl =
-      this.configService.get<string>("APP_BASE_URL") ||
-      this.configService.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.com";
+    const baseUrl = appBaseUrl((k) => this.configService.get<string>(k));
 
     const amountDue =
       typeof invoice.amount_due === "number"

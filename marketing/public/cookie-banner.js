@@ -33,7 +33,7 @@
   var CONSENT_EVENT = "kiraroom:consent-changed";
   var EMAIL_DOMAIN = (window.KIRA_EMAIL_DOMAIN || "kiraroom.com");
   var PREF_URL =
-    (window.KIRA_PREF_URL || "https://app.kiraroom.com/dashboard/settings/notifications");
+    (window.KIRA_PREF_URL || "https://app.kiraroom.net/dashboard/settings/notifications");
 
   function readConsent() {
     try {
