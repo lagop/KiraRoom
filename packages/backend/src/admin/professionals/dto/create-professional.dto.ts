@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, Min, Max, ArrayMaxSize, ValidateIf } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsDateString, IsArray, IsNumber, IsBoolean, IsUUID, Min, Max, ArrayMaxSize, ValidateIf, IsIn } from 'class-validator';
 import { IsWorkingHours } from '../../../professionals/working-hours-input';
 
 export class CreateProfessionalDto {
@@ -70,6 +70,21 @@ export class CreateProfessionalDto {
   @IsString()
   @IsOptional()
   position?: string;
+
+  /**
+   * "Mostrar en la web" (public-site/public-professional.ts): her full name,
+   * her first name and initial (the default), or not at all (still bookable,
+   * as "Profesional"). The salon needs her consent to show more.
+   */
+  @ApiProperty({ description: 'How the public page and widget name her: full, initial (default) or hidden', required: false, enum: ['full', 'initial', 'hidden'] })
+  @IsIn(['full', 'initial', 'hidden'], { message: 'Elige cómo se muestra en la web: nombre completo, nombre e inicial o no mostrar.' })
+  @IsOptional()
+  webNameDisplay?: 'full' | 'initial' | 'hidden';
+
+  @ApiProperty({ description: '"Mostrar foto": her photo and portfolio on the public page and widget (default off)', required: false })
+  @IsBoolean()
+  @IsOptional()
+  webShowPhoto?: boolean;
 
   @ApiProperty({ description: 'Commission rate, a percent (0-100)', example: 40 })
   @IsNumber({}, { message: 'La comisión debe ser un número.' })

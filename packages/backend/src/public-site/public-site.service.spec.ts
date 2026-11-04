@@ -1,5 +1,5 @@
-import { NotFoundException } from "@nestjs/common";
-import { PublicSiteService } from "./public-site.service";
+import { GoneException, NotFoundException } from "@nestjs/common";
+import { PublicSiteService, ownPrivacyPolicyUrl, whatsappDigits } from "./public-site.service";
 
 // Empresa: the multi-location feature only (client-locations.ts asks).
 const EMPRESA: any = { isFeatureUnlocked: async (_t: string, key: string) => key === "multi_location", isEnabled: async (_t: string, key: string) => key === "multi_location" };
@@ -346,8 +346,9 @@ describe("PublicSiteService.getPage", () => {
   it("takes bookings unless the salon is read-only (trial ended, cancelled, suspended)", async () => {
     expect((await makeService({ tenant: { subscriptionStatus: "trialing" } }).svc.getPage("x")).acceptsBookings).toBe(true);
     expect((await makeService({ tenant: { subscriptionStatus: "past_due" } }).svc.getPage("x")).acceptsBookings).toBe(true);
+    const inPeriod = new Date(Date.now() + 10 * 86_400_000);
     for (const status of ["cancelled", "suspended"]) {
-      const page = await makeService({ tenant: { subscriptionStatus: status } }).svc.getPage("x");
+      const page = await makeService({ tenant: { subscriptionStatus: status, readOnlyUntil: inPeriod } }).svc.getPage("x");
       // Still the page, with the phone; only the form goes.
       expect(page.acceptsBookings).toBe(false);
       expect(page.phone).toBe("+34 600 000 000");
@@ -444,5 +445,150 @@ describe("PublicSiteService.resolveHost", () => {
     const { svc } = makeService();
     await expect(svc.resolveHost("otro.example.com")).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.resolveHost("not a host")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe("PublicSiteService: a salon that is gone", () => {
+  it("answers 410 once the read-only period is over, or with none (cancelled from the console)", async () => {
+    const past = new Date(Date.now() - 86_400_000);
+    for (const tenant of [
+      { subscriptionStatus: "cancelled", readOnlyUntil: past },
+      { subscriptionStatus: "cancelled", readOnlyUntil: null },
+      { subscriptionStatus: "suspended", readOnlyUntil: past },
+    ]) {
+      await expect(makeService({ tenant }).svc.getPage("x")).rejects.toBeInstanceOf(GoneException);
+      await expect(makeService({ tenant }).svc.legal("x")).rejects.toBeInstanceOf(GoneException);
+    }
+    // An old readOnlyUntil on an active salon (it paid again) changes nothing.
+    const page = await makeService({ tenant: { subscriptionStatus: "active", readOnlyUntil: past } }).svc.getPage("x");
+    expect(page.acceptsBookings).toBe(true);
+  });
+});
+
+describe("PublicSiteService: links on the page", () => {
+  it("WhatsApp as wa.me digits, a Spanish number without prefix gets 34", () => {
+    expect(whatsappDigits("+34 600 11 22 33")).toBe("34600112233");
+    expect(whatsappDigits("600 11 22 33")).toBe("34600112233");
+    expect(whatsappDigits("+351 912 345 678")).toBe("351912345678");
+    expect(whatsappDigits("123")).toBeNull();
+    expect(whatsappDigits(null)).toBeNull();
+  });
+
+  it("the salon's own privacy policy only as https", () => {
+    expect(ownPrivacyPolicyUrl(" https://salonluna.example/privacidad ")).toBe("https://salonluna.example/privacidad");
+    expect(ownPrivacyPolicyUrl("http://salonluna.example/privacidad")).toBeNull();
+    expect(ownPrivacyPolicyUrl("ftp://salonluna.example/x")).toBeNull();
+    expect(ownPrivacyPolicyUrl("")).toBeNull();
+  });
+
+  it("sends the WhatsApp link digits and the salon's own privacy URL", async () => {
+    const page: any = await makeService({
+      tenant: { whatsapp: "600 11 22 33", privacyPolicyUrl: "https://salonluna.example/privacidad" },
+    }).svc.getPage("x");
+    expect(page.whatsapp).toBe("34600112233");
+    expect(page.privacyPolicyUrl).toBe("https://salonluna.example/privacidad");
+    const none: any = await makeService().svc.getPage("x");
+    expect([none.whatsapp, none.privacyPolicyUrl]).toEqual([null, null]);
+  });
+});
+
+describe("PublicSiteService.legal", () => {
+  it("only who runs the salon and how to reach it", async () => {
+    const { svc, prisma } = makeService({ tenant: { legalName: " Luna Estética SL ", taxId: "B12345678" } });
+    const legal: any = await svc.legal("salon-luna");
+    expect(legal).toEqual({
+      name: "Salón Luna",
+      slug: "salon-luna",
+      legalName: "Luna Estética SL",
+      taxId: "B12345678",
+      email: "hola@salonluna.example",
+      phone: "+34 600 000 000",
+      address: { street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" },
+      privacyPolicyUrl: null,
+    });
+    const args = (prisma.tenant.findFirst.mock.calls[0] as any[])[0];
+    expect(args.where.deletedAt).toBeNull();
+    for (const key of ["stripeTestSecretKey", "stripeLiveSecretKey", "features", "fiscalSettings", "logo"]) {
+      expect(args.select).not.toHaveProperty(key);
+    }
+    // Missing identity: nulls, the page says so.
+    const bare: any = await makeService({ tenant: { legalName: "  ", taxId: null } }).svc.legal("x");
+    expect([bare.legalName, bare.taxId]).toEqual([null, null]);
+    await expect(makeService({ tenant: null }).svc.legal("x")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe("PublicSiteService: the team as the salon shows it", () => {
+  const photo = `data:image/jpeg;base64,${Buffer.from("jpeg-bytes").toString("base64")}`;
+  const pro = (over: Record<string, unknown>) => ({
+    id: "p1",
+    firstName: "Ana",
+    lastName: "García",
+    profileImage: photo,
+    bio: "Colorista",
+    position: "Estilista",
+    specialties: ["color"],
+    portfolioImages: [photo],
+    yearsExperience: 5,
+    languages: [],
+    certifications: [],
+    workingHours: [],
+    services: [{ serviceId: "s1" }],
+    ...over,
+  });
+  const withTeam = (rows: any[]) => {
+    const made = makeService();
+    made.prisma.professional.findMany = jest.fn(async () => rows) as any;
+    return made;
+  };
+
+  it("names and pictures per Mostrar en la web, hidden ones bookable but not listed", async () => {
+    const { svc } = withTeam([
+      pro({ id: "p1", webNameDisplay: "full", webShowPhoto: true }),
+      pro({ id: "p2", firstName: "Bea", lastName: "López", webNameDisplay: "initial", webShowPhoto: false }),
+      pro({ id: "p3", firstName: "Carla", lastName: "Ruiz", webNameDisplay: "hidden", webShowPhoto: true }),
+    ]);
+    const page: any = await svc.getPage("x");
+    const [a, b, c] = page.professionals;
+    expect([a.firstName, a.lastName, a.listed]).toEqual(["Ana", "García", true]);
+    expect(a.profileImage).toMatch(/^\/public-site\/professional-image\/p1\/photo\?v=/);
+    expect(a.portfolioImages[0]).toMatch(/^\/public-site\/professional-image\/p1\/portfolio-0\?v=/);
+    expect([b.firstName, b.lastName, b.profileImage, b.portfolioImages, b.listed]).toEqual(["Bea", "L.", null, [], true]);
+    expect([c.id, c.firstName, c.lastName, c.profileImage, c.bio, c.position, c.listed]).toEqual([
+      "p3",
+      "Profesional",
+      "",
+      null,
+      null,
+      null,
+      false,
+    ]);
+    expect(c.services).toEqual([{ serviceId: "s1" }]);
+    const json = JSON.stringify(page);
+    expect(json).not.toContain("data:");
+    expect(json).not.toContain("Carla");
+    expect(json).not.toContain("webNameDisplay");
+  });
+
+  it("serves her picture only while it is shown", async () => {
+    const { svc, prisma } = makeService();
+    const pros: any = prisma.professional;
+    pros.findFirst = jest.fn(async () => ({
+      profileImage: photo,
+      portfolioImages: [photo],
+      webNameDisplay: "initial",
+      webShowPhoto: true,
+    }));
+    const image = await svc.professionalImage("p1", "photo");
+    expect(image?.body.toString()).toBe("jpeg-bytes");
+    expect((await svc.professionalImage("p1", "portfolio-0"))?.contentType).toBe("image/jpeg");
+    expect(await svc.professionalImage("p1", "portfolio-3")).toBeNull();
+    expect(await svc.professionalImage("p1", "logo")).toBeNull();
+    expect(pros.findFirst.mock.calls[0][0].where).toEqual({ id: "p1", isActive: true, tenant: { deletedAt: null } });
+
+    pros.findFirst = jest.fn(async () => ({ profileImage: photo, webNameDisplay: "full", webShowPhoto: false }));
+    expect(await svc.professionalImage("p1", "photo")).toBeNull();
+    pros.findFirst = jest.fn(async () => ({ profileImage: photo, webNameDisplay: "hidden", webShowPhoto: true }));
+    expect(await svc.professionalImage("p1", "photo")).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { Store } from "lucide-react";
-import { useTenantTranslations } from "@/lib/use-translation";
+import { translatorFor } from "@/lib/use-translation";
 
 /**
  * When the salon's page cannot be built (the API did not answer and there is
@@ -11,7 +11,9 @@ import { useTenantTranslations } from "@/lib/use-translation";
  * salon's phone is not known here; a retry is what can help.
  */
 export default function SalonPageError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  const { t } = useTenantTranslations();
+  // The page data is what failed, so its language is not known: Spanish,
+  // never the visitor's panel language.
+  const t = translatorFor("es");
   useEffect(() => {
     console.error(error);
   }, [error]);

@@ -9,6 +9,19 @@ export function isReadOnlyStatus(status: string | null | undefined): boolean {
   return status === "cancelled" || status === "suspended";
 }
 
+/**
+ * Whether a salon's public page (and widget) is gone: read-only and past
+ * its read-only period, or read-only with none (cancelled from the console).
+ * During the period the page stays, with its phone and no booking form.
+ */
+export function publicPageGone(
+  tenant: { subscriptionStatus?: string | null; readOnlyUntil?: Date | null },
+  now: Date = new Date(),
+): boolean {
+  if (!isReadOnlyStatus(tenant.subscriptionStatus)) return false;
+  return !tenant.readOnlyUntil || tenant.readOnlyUntil.getTime() <= now.getTime();
+}
+
 /** The refusal a read-only salon gets; same payload as FeatureGuard's. */
 export function readOnlyException(status: string): ForbiddenException {
   const suspended = status === "suspended";
