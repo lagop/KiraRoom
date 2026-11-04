@@ -27,6 +27,7 @@ import {
   withNoticeChannels,
 } from "./client-notices";
 import { samePhone } from "../common/phone";
+import { clientReachWhere } from "../clients/client-reach";
 
 /** Why a consent form with signatures can't be deleted. */
 export const CONSENT_FORM_HAS_SIGNATURES = "Este formulario tiene firmas; no se puede borrar.";
@@ -445,8 +446,9 @@ export class ConsentService {
 
   /**
    * The client file's rule (ClientsController): owner and admin reach every
-   * client of the salon, staff only those with an appointment with them.
-   * Anyone else answers 404, as the client file does.
+   * client of the salon, staff only those with an appointment with them that
+   * is not cancelled (clients/client-reach.ts). Anyone else answers 404, as
+   * the client file does.
    */
   async assertClientInReach(
     tenantId: string,
@@ -455,7 +457,7 @@ export class ConsentService {
   ): Promise<void> {
     const where =
       user.role === "staff"
-        ? { id: clientId, tenantId, appointments: { some: { professional: { userId: user.id } } } }
+        ? { id: clientId, tenantId, ...clientReachWhere({ professional: { userId: user.id } }) }
         : { id: clientId, tenantId };
     const found = await this.prisma.client.findFirst({ where, select: { id: true } });
     if (!found) throw new NotFoundException("Cliente no encontrado");

@@ -74,6 +74,17 @@ describe("AnalyticsService", () => {
     expect(prisma.client.count).not.toHaveBeenCalled();
   });
 
+  it("leaves the onboarding wizard's test booking out of every appointment query (D27)", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-15T10:00:00Z"));
+    const prisma = makePrisma();
+    const svc = new AnalyticsService(prisma as any);
+    await svc.getOverview("t1");
+    await svc.getTodayOccupancy("t1");
+    const queries = [...prisma.appointment.findMany.mock.calls, ...prisma.appointment.count.mock.calls];
+    expect(queries.length).toBeGreaterThan(0);
+    for (const [args] of queries) expect(args.where.isTest).toBe(false);
+  });
+
   it("cuts the overview at the salon's midnight, not the server's", async () => {
     // 22:30 UTC on 30 September is 00:30 on 1 October in Madrid: the salon
     // is already in October.

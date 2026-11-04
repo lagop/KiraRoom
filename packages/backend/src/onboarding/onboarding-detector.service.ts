@@ -81,8 +81,6 @@ export class OnboardingDetectorService {
         return this.hasFirstService(tenantId);
       case "allProsHaveWorkingHours":
         return this.allProsHaveWorkingHours(tenantId);
-      case "hasStripeCustomer":
-        return this.hasStripeCustomer(tenantId);
       case "hasCoverImageAndDescription":
         return this.hasCoverImageAndDescription(tenantId);
       // hasActiveReminderTemplate: the old name, until the seeder rewrites
@@ -155,14 +153,6 @@ export class OnboardingDetectorService {
     });
   }
 
-  private async hasStripeCustomer(tenantId: string): Promise<boolean> {
-    const t = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { stripeCustomerId: true },
-    });
-    return Boolean(t?.stripeCustomerId);
-  }
-
   private async hasCoverImageAndDescription(tenantId: string): Promise<boolean> {
     const t = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -201,13 +191,14 @@ export class OnboardingDetectorService {
   }
 
   private async hasClients(tenantId: string): Promise<boolean> {
-    const count = await this.prisma.client.count({ where: { tenantId } });
+    // The wizard's test client is not one of hers (D27).
+    const count = await this.prisma.client.count({ where: { tenantId, isTest: false } });
     return count >= 1;
   }
 
-  /** The activation milestone: a real booking exists. */
+  /** The activation milestone: a real booking exists (the wizard's test one is not, D27). */
   private async hasFirstBooking(tenantId: string): Promise<boolean> {
-    const count = await this.prisma.appointment.count({ where: { tenantId } });
+    const count = await this.prisma.appointment.count({ where: { tenantId, isTest: false } });
     return count >= 1;
   }
 

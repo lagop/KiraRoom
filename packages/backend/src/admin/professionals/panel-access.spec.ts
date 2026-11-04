@@ -91,6 +91,19 @@ describe("giving a professional access to the panel", () => {
     expect(args.data).toEqual({ isActive: false, tokenVersion: { increment: 1 } });
   });
 
+  it("removing access also cuts their calendar feed link (D21): their feed version moves on", async () => {
+    const { db, updates } = professionalsDb({ ...ana, user: { id: "u-ana", role: UserRole.staff } });
+    await new AdminProfessionalsService(db).revokePanelAccess(TENANT, "p1");
+    const [, args] = updates.find(([m]) => m === "professional");
+    expect(args).toEqual({ where: { id: "p1" }, data: { icsFeedVersion: { increment: 1 } } });
+  });
+
+  it("a professional with no login has no access to remove: nothing changes", async () => {
+    const { db, updates } = professionalsDb({ ...ana, user: null });
+    expect(await new AdminProfessionalsService(db).revokePanelAccess(TENANT, "p1")).toEqual({ active: false });
+    expect(updates).toEqual([]);
+  });
+
   it("the team list says who has access", () => {
     expect(panelAccessOf(null)).toEqual({ status: "none" });
     expect(panelAccessOf({ role: UserRole.staff, isActive: true, email: "a@b.test", lastLoginAt: null })).toMatchObject({ status: "active" });

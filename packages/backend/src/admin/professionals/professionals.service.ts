@@ -596,7 +596,13 @@ export class AdminProfessionalsService {
     return { active: true, email };
   }
 
-  /** Removes a professional's login: the account is deactivated and its sessions end. */
+  /**
+   * Removes a professional's login: the account is deactivated, its sessions
+   * end, and the link to their calendar feed (ics.controller.ts) stops
+   * working (their feed version moves on), so a calendar app they subscribed
+   * no longer gets the salon's appointments. A new link is made for them in
+   * Ajustes > Calendario if they come back.
+   */
   async revokePanelAccess(tenantId: string, id: string) {
     const professional = await this.prisma.professional.findFirst({
       where: { id, tenantId },
@@ -607,9 +613,10 @@ export class AdminProfessionalsService {
     if (professional.user.role !== UserRole.staff) {
       throw new BadRequestException("La cuenta principal del salón no se puede desactivar desde aquí.");
     }
-    await this.prisma.user.update({
-      where: { id: professional.user.id },
-      data: { isActive: false, tokenVersion: { increment: 1 } },
+    const userId = professional.user.id;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { isActive: false, tokenVersion: { increment: 1 } } });
+      await tx.professional.update({ where: { id: professional.id }, data: { icsFeedVersion: { increment: 1 } } });
     });
     // Signed out everywhere at once: requests (tokenVersion) and live sockets.
     sessionRevocations.revoke({ userId: professional.user.id });

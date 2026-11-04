@@ -191,7 +191,8 @@ describe("GET /clients", () => {
     expect(calls.raw[0].values).toContain("%perez%");
     expect(calls.findMany[0].where).toEqual({
       tenantId: "t1",
-      appointments: { some: { professionalId: "p1" } },
+      isTest: false,
+      appointments: { some: { professionalId: "p1", status: { not: "cancelled" } } },
       id: { in: ["c1", "c2"] },
     });
   });

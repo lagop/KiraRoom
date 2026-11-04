@@ -2154,6 +2154,8 @@ export class AppointmentsService {
   ) {
     const where: any = {
       tenantId: user.tenantId,
+      // The wizard's test booking is nothing to collect (D27).
+      isTest: false,
       paymentStatus: { in: [PaymentStatus.pending, PaymentStatus.failed] },
       status: { notIn: [AppointmentStatus.cancelled, AppointmentStatus.no_show] },
     };

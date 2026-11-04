@@ -62,15 +62,6 @@ const DEFAULT_STEP_DEFS: Array<{
     detectName: "hasFirstBooking",
   },
   {
-    key: "payment_method",
-    order: 9,
-    group: OnboardingGroup.checklist_optional,
-    titleI18nKey: "onboarding.payment_method.title",
-    descI18nKey: "onboarding.payment_method.desc",
-    href: "/dashboard/settings/stripe",
-    detectName: "hasStripeCustomer",
-  },
-  {
     key: "branding",
     order: 10,
     group: OnboardingGroup.checklist_optional,
@@ -112,6 +103,17 @@ const DEFAULT_STEP_DEFS: Array<{
   },
 ];
 
+/**
+ * Steps taken out of the checklist. Their rows stay (states point at them by
+ * key) but are disabled, so getState and the checklist no longer list or
+ * count them.
+ *
+ * payment_method ("Conecta los pagos"): there is no online payment for
+ * salons yet (the Stripe settings page redirects, #239), and its detector
+ * read the salon's KiraRoom subscription customer, not a payment account.
+ */
+export const RETIRED_STEP_KEYS: readonly string[] = ["payment_method"];
+
 @Injectable()
 export class OnboardingStepSeeder implements OnModuleInit {
   private readonly logger = new Logger(OnboardingStepSeeder.name);
@@ -134,6 +136,10 @@ export class OnboardingStepSeeder implements OnModuleInit {
           },
         });
       }
+      await this.prisma.onboardingStepDef.updateMany({
+        where: { key: { in: [...RETIRED_STEP_KEYS] }, enabled: true },
+        data: { enabled: false },
+      });
       this.logger.log(`Seeded ${DEFAULT_STEP_DEFS.length} onboarding step defs`);
     } catch (err) {
       this.logger.warn(

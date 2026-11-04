@@ -389,10 +389,6 @@
       "title": "Set working hours",
       "desc": "Configure weekly availability for each professional so slots become visible."
     },
-    "payment_method": {
-      "title": "Connect payments",
-      "desc": "Link your Stripe account to take online payments and deposits."
-    },
     "branding": {
       "title": "Cover image and description",
       "desc": "Upload a cover photo and write a compelling description."
@@ -738,6 +734,13 @@
     "esencial": "Esencial",
     "pro": "Pro",
     "empresa": "Enterprise"
+  },
+  "trialBanner": {
+    "daysLeft": "{days} days left in your {plan} trial.",
+    "lastDay": "1 day left in your {plan} trial.",
+    "body": "Choose a plan to keep using everything without interruption.",
+    "cta": "Choose plan",
+    "dismiss": "Hide until tomorrow"
   },
   "multiLocation": {
     "consolidated": {
@@ -1744,6 +1747,7 @@
     "charged": "Amount",
     "paid": "Paid",
     "with_professional": "with {name}",
+    "others_visits_restricted": "Visits with other professionals show the date and the services, without amounts or notes.",
     "allergies": "Allergies",
     "medical_conditions": "Medical conditions",
     "no_history": "No appointments yet",
