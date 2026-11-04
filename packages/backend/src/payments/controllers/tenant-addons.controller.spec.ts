@@ -63,7 +63,7 @@ describe("message credit balance", () => {
         lastTopupAt: null,
       }),
     };
-    const controller = new TenantAddOnsController({} as any, {} as any, {} as any, bundles as any);
+    const controller = new TenantAddOnsController({} as any, {} as any, {} as any, bundles as any, {} as any);
 
     const out = await controller.balance({ user: { id: "u1", role: "owner", tenantId: "t-1" } });
 

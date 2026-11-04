@@ -21,6 +21,10 @@ import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "../guards/saas-owner.guard";
 import { SaasOwner } from "../decorators/saas-owner.decorator";
 import { GdprService } from "./gdpr.service";
+import { AuditLogService } from "../audit-log.service";
+import { assertNotPlatformTenant } from "../platform-tenant";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { UserRole } from "@prisma/client";
 import { clientIp } from "../../common/client-ip";
 
 /**
@@ -42,7 +46,11 @@ import { clientIp } from "../../common/client-ip";
 @SaasOwner()
 @Controller("saas/tenants")
 export class GdprController {
-  constructor(private readonly gdpr: GdprService) {}
+  constructor(
+    private readonly gdpr: GdprService,
+    private readonly auditLog: AuditLogService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get(":id/export")
   @ApiOperation({
@@ -95,6 +103,8 @@ export class GdprController {
     @Param("id", ParseUUIDPipe) id: string,
   ): Promise<{ ok: true; requestId: string }> {
     const actorId = (req as any).user?.id ?? "unknown";
+    // The Platform tenant holds the platform owner's own account (C14).
+    await assertNotPlatformTenant(this.prisma, id);
     const ipAddress =
       clientIp(req);
     const rec = await this.gdpr.recordRequest(
@@ -104,6 +114,13 @@ export class GdprController {
       ipAddress,
     );
     const updated = await this.gdpr.anonymize(id, rec.id);
+    // C9: written after the scrub, so it carries nothing personal itself.
+    await this.auditLog.record("tenant.anonymize", {
+      actorId,
+      actorRole: UserRole.saas_owner,
+      tenantId: id,
+      metadata: { gdprRequestId: rec.id },
+    });
     return { ok: true, requestId: updated.id };
   }
 }

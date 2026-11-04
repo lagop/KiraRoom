@@ -14,6 +14,8 @@ import {
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
 import { AI_PACK_ADDON_KEYS } from '@kira/shared';
 import { aiUsageThisMonth, nextAiUsagePeriodStart } from '../../common/ai-usage/ai-monthly-usage';
+import { AuditLogService } from '../../saas/audit-log.service';
+import { UserRole } from '@prisma/client';
 
 /**
  * SaaS-admin-only add-ons API. Mounted under `/saas/add-ons`.
@@ -32,6 +34,7 @@ export class AddOnsAdminController {
     private readonly addons: AddOnsService,
     private readonly prisma: PrismaService,
     private readonly subs: SubscriptionsService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /** Only saas_owner may read or mutate the add-on catalog. */
@@ -162,6 +165,13 @@ export class AddOnsAdminController {
     if (!row) {
       throw new ForbiddenException('Unknown add-on key');
     }
+    // Audit 8, C9: a gift from the console is on record.
+    await this.auditLog.record('tenant.addon.grant', {
+      actorId: user.id,
+      actorRole: UserRole.saas_owner,
+      tenantId,
+      metadata: { addOnKey: body.addOnKey, durationDays: body.durationDays ?? null, tenantAddOnId: row.id },
+    });
     // Re-fetch with the add-on row joined for the response.
     return (
       await this.tenantAddOns(tenantId, user)
@@ -180,6 +190,14 @@ export class AddOnsAdminController {
       tenantId,
       addOnKey: key,
     });
+    if (ok) {
+      await this.auditLog.record('tenant.addon.revoke', {
+        actorId: user.id,
+        actorRole: UserRole.saas_owner,
+        tenantId,
+        metadata: { addOnKey: key },
+      });
+    }
     return { ok };
   }
 }

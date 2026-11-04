@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { bindTenant } from '../../common/tenancy/tenant.context';
+import { bindActor, bindTenant } from '../../common/tenancy/tenant.context';
+import { isAccessTokenPayload, supportClaims } from '../session-token';
 import { SALON_DELETED_MESSAGE } from '../salon-deleted';
 
 export interface JwtPayload {
@@ -19,6 +20,10 @@ export interface JwtPayload {
   impersonatedBy?: string;
   impersonationId?: string;
   impersonatedTenantId?: string;
+  impersonationEndsAt?: number;
+  impersonatorTv?: number;
+  /** "access" on a session's access token (C11); see session-token.ts. */
+  typ?: string;
 }
 
 @Injectable()
@@ -35,6 +40,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    // Only a session's access token is a session (audit 8, C11): not the
+    // 2FA step's token, the support entry token, or anything else signed
+    // with this key. One minted before typ existed is refused too; the
+    // panel renews it with its refresh cookie.
+    if (!isAccessTokenPayload(payload)) {
+      throw new UnauthorizedException('Invalid token');
+    }
     if (payload.role === 'client') {
       // Clients have no accounts any more (no sign-in on the salon's site);
       // a token minted before that is refused, so no client-only route can
@@ -81,6 +93,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // authorised by SaasOwnerGuard, not by this filter).
       bindTenant(user.tenantId, user.role);
 
+      // A support session (the platform owner inside a salon) ends at its cap
+      // and as soon as the platform owner's own sessions end: logout
+      // everywhere, a new password, the account deactivated (C2, C13).
+      if (payload.impersonatedBy) {
+        await this.assertSupportSessionLive(payload);
+      }
+      bindActor({
+        userId: user.id,
+        role: user.role,
+        ...(payload.impersonatedBy && {
+          impersonatedBy: payload.impersonatedBy,
+          impersonationId: payload.impersonationId,
+        }),
+      });
+
       // Return user data with plan info
       return {
         id: user.id,
@@ -98,6 +125,26 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         impersonationId: payload.impersonationId,
         impersonatedTenantId: payload.impersonatedTenantId,
       };
+    }
+  }
+
+  private async assertSupportSessionLive(payload: JwtPayload): Promise<void> {
+    const claims = supportClaims(payload as Record<string, any>);
+    // A support token from before the cap existed has no end: it ends now.
+    if (!claims || claims.impersonationEndsAt * 1000 <= Date.now()) {
+      throw new UnauthorizedException('La sesión de soporte ha terminado.');
+    }
+    const impersonator = await this.prisma.user.findUnique({
+      where: { id: claims.impersonatedBy },
+      select: { role: true, isActive: true, tokenVersion: true },
+    });
+    if (
+      !impersonator ||
+      !impersonator.isActive ||
+      impersonator.role !== 'saas_owner' ||
+      impersonator.tokenVersion !== claims.impersonatorTv
+    ) {
+      throw new UnauthorizedException('La sesión de soporte ha terminado.');
     }
   }
 }

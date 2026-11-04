@@ -36,7 +36,7 @@ import { CurrentUser } from "./decorators/current-user.decorator";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { RolesGuard } from "./guards/roles.guard";
 import { UserRole } from "@prisma/client";
-import { IMPERSONATION_AUDIENCE, IMPERSONATION_DEFAULT_REASON } from "../saas/saas.constants";
+import { IMPERSONATION_AUDIENCE } from "../saas/saas.constants";
 import { SignedIn } from "./decorators/signed-in.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 import {
@@ -45,6 +45,7 @@ import {
   cookieKindForRole,
   deliverTokens,
   readRefreshCookie,
+  supportCookieKind,
 } from "./sessions/refresh-cookie";
 import { ImpersonateDto, LogoutDto, RefreshTokenDto } from "./dto/session-bodies.dto";
 import { TurnstileService, CAPTCHA_MESSAGE, CAPTCHA_REQUIRED_CODE } from "./abuse/turnstile.service";
@@ -257,7 +258,7 @@ export class AuthController {
     }
     let result: Awaited<ReturnType<AuthService["login"]>>;
     try {
-      result = await this.authService.login(loginDto);
+      result = await this.authService.login(loginDto, { ip });
     } catch (err) {
       if (err instanceof UnauthorizedException) {
         const needsCaptcha = await this.limits.loginFailed(email, ip);
@@ -414,14 +415,13 @@ export class AuthController {
     @Body() body: ImpersonateDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    return deliverSession(
-      res,
-      await this.authService.impersonate(
-        body.token,
-        body.reason ?? IMPERSONATION_DEFAULT_REASON,
-        IMPERSONATION_AUDIENCE,
-      ),
-    );
+    // The reason is the one signed into the token in the console (C17); a
+    // reason in the body is ignored.
+    const result = await this.authService.impersonate(body.token, IMPERSONATION_AUDIENCE);
+    // Its own cookie (C10): the platform owner's console session, in
+    // kr_session, stays as it is, so entering a salon does not sign them out.
+    const kind = supportCookieKind(result.support.tenantId);
+    return { ...result, tokens: deliverTokens(res, kind, result.tokens) };
   }
 
   @Public()
@@ -443,11 +443,21 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const kind: CookieKind = body?.kind === "client" ? "client" : "staff";
-    const token = readRefreshCookie(req, kind) ?? (typeof body?.refreshToken === "string" ? body.refreshToken : undefined);
+    // "support" + tenantId: the tab where the platform owner is inside that
+    // salon, with that salon's support cookie (C10).
+    const supportTenantId = body?.kind === "support" && body.tenantId ? body.tenantId : undefined;
+    if (body?.kind === "support" && !supportTenantId) throw new UnauthorizedException("Invalid refresh token");
+    const kind: CookieKind = supportTenantId
+      ? supportCookieKind(supportTenantId)
+      : body?.kind === "client"
+        ? "client"
+        : "staff";
+    const token =
+      readRefreshCookie(req, kind) ??
+      (!supportTenantId && typeof body?.refreshToken === "string" ? body.refreshToken : undefined);
     if (!token) throw new UnauthorizedException("Invalid refresh token");
     try {
-      return deliverTokens(res, kind, await this.authService.refreshToken(token));
+      return deliverTokens(res, kind, await this.authService.refreshToken(token, { supportTenantId }));
     } catch (err) {
       if (err instanceof UnauthorizedException) clearRefreshCookie(res, kind);
       throw err;
@@ -470,11 +480,19 @@ export class AuthController {
    * session from the cookie.
    */
   async logout(
-    @CurrentUser() user: { id: string; role: string },
+    @CurrentUser() user: { id: string; role: string; impersonatedBy?: string; impersonatedTenantId?: string; impersonationId?: string },
     @Body() body: LogoutDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
+    // A support session ends alone: its own cookie, and never the owner's
+    // other sessions ("everywhere" is the owner's to use, not support's).
+    if (user.impersonatedBy && user.impersonatedTenantId) {
+      const kind = supportCookieKind(user.impersonatedTenantId);
+      await this.authService.endSupportSession(readRefreshCookie(req, kind), user);
+      clearRefreshCookie(res, kind);
+      return { message: "Successfully logged out" };
+    }
     const kind = cookieKindForRole(user.role);
     await this.authService.endSession(readRefreshCookie(req, kind));
     if (body?.everywhere === true) await this.authService.logoutEverywhere(user.id, user.role);

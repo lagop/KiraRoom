@@ -18,6 +18,7 @@ import type { InvoiceIssuerStatus } from "./invoice-issuer";
 import type { InboxConversation, InboxFilters, InboxPage } from "./receptionist-inbox";
 import { inboxQuery } from "./receptionist-inbox";
 import { apiErrorMessage } from "./api-error-message";
+import { authStorage, endSupportTab, supportTab } from "./auth-storage";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -43,9 +44,22 @@ export class ApiError extends Error {
   }
 }
 
+/** One row of GET /saas/audit-logs. */
+export interface SaasAuditLogRow {
+  id: string;
+  createdAt: string;
+  action: string;
+  actorRole: string;
+  tenantId: string | null;
+  metadata: Record<string, unknown> | null;
+  actor: { id: string; email: string; firstName: string | null; lastName: string | null; role: string } | null;
+  tenant: { id: string; name: string; slug: string } | null;
+  onBehalfOf: { id: string; email: string; firstName: string | null; lastName: string | null; role: string } | null;
+}
+
 export const getToken = () => {
   if (typeof window !== "undefined") {
-    return localStorage.getItem(TOKEN_KEY);
+    return authStorage().getItem(TOKEN_KEY);
   }
   return null;
 };
@@ -130,14 +144,14 @@ export function loginRedirectTarget(
 
 export const setToken = (token: string) => {
   if (typeof window !== "undefined") {
-    localStorage.setItem(TOKEN_KEY, token);
+    authStorage().setItem(TOKEN_KEY, token);
   }
 };
 
 export const removeToken = () => {
   if (typeof window !== "undefined") {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    authStorage().removeItem(TOKEN_KEY);
+    authStorage().removeItem(REFRESH_TOKEN_KEY);
     if (proactiveRefreshTimer) {
       clearTimeout(proactiveRefreshTimer);
       proactiveRefreshTimer = null;
@@ -210,20 +224,20 @@ function scheduleProactiveRefresh(
 
 export const getRefreshToken = () => {
   if (typeof window !== "undefined") {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
+    return authStorage().getItem(REFRESH_TOKEN_KEY);
   }
   return null;
 };
 
 export const setRefreshToken = (token: string) => {
   if (typeof window !== "undefined") {
-    localStorage.setItem(REFRESH_TOKEN_KEY, token);
+    authStorage().setItem(REFRESH_TOKEN_KEY, token);
   }
 };
 
 export const removeRefreshToken = () => {
   if (typeof window !== "undefined") {
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    authStorage().removeItem(REFRESH_TOKEN_KEY);
   }
 };
 
@@ -2611,7 +2625,7 @@ class ApiClient implements ApiClientInterface {
         // Refresh failed, redirect to login
         removeToken();
       }
-      const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      const userJson = typeof window !== "undefined" ? authStorage().getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
       const isClient = user?.role === "client";
@@ -2619,18 +2633,26 @@ class ApiClient implements ApiClientInterface {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
         // A client is signed out where they are (see loginRedirectTarget).
-        if (isClient) localStorage.removeItem("user");
+        if (isClient) authStorage().removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
-        if (target) window.location.href = target;
+        // A support tab whose session ended (2-hour cap, the console signed
+        // out everywhere): it says so, and never falls back to the console's
+        // session (audit 8, C10).
+        if (supportTab()) {
+          endSupportTab();
+          window.location.href = "/login?support_ended=1";
+        } else {
+          const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
+          if (target) window.location.href = target;
+        }
       }
       // Throw a recognisable error so callers don't try to parse the
       // (already empty) body.
       throw new Error("Unauthorized");
     } else if (response.status === 401) {
       removeToken();
-      const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      const userJson = typeof window !== "undefined" ? authStorage().getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
       const isClient = user?.role === "client";
@@ -2638,11 +2660,19 @@ class ApiClient implements ApiClientInterface {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
         // A client is signed out where they are (see loginRedirectTarget).
-        if (isClient) localStorage.removeItem("user");
+        if (isClient) authStorage().removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
-        if (target) window.location.href = target;
+        // A support tab whose session ended (2-hour cap, the console signed
+        // out everywhere): it says so, and never falls back to the console's
+        // session (audit 8, C10).
+        if (supportTab()) {
+          endSupportTab();
+          window.location.href = "/login?support_ended=1";
+        } else {
+          const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
+          if (target) window.location.href = target;
+        }
       }
       throw new Error("Unauthorized");
     }
@@ -2841,7 +2871,7 @@ class ApiClient implements ApiClientInterface {
     const legacyRefreshToken = getRefreshToken();
     const isClient = (() => {
       try {
-        return JSON.parse(localStorage.getItem("user") || "null")?.role === "client";
+        return JSON.parse(authStorage().getItem("user") || "null")?.role === "client";
       } catch {
         return false;
       }
@@ -2861,6 +2891,8 @@ class ApiClient implements ApiClientInterface {
           ...(legacyRefreshToken && { refreshToken: legacyRefreshToken }),
           // A client on a salon's site has its own cookie, apart from the panel's.
           ...(isClient && { kind: "client" }),
+          // A support tab renews from its salon's own cookie (audit 8, C10).
+          ...(supportTab() && { kind: "support", tenantId: supportTab()!.tenantId }),
         }),
       });
 
@@ -5408,7 +5440,8 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/saas/tenants/${id}/stats`);
   }
 
-  async launchSalonDashboard(tenantId: string): Promise<{
+  /** C17: the reason is required; it is signed into the one-shot token. */
+  async launchSalonDashboard(tenantId: string, reason: string): Promise<{
     token: string;
     ownerEmail: string;
     ownerName: string;
@@ -5418,16 +5451,19 @@ class ApiClient implements ApiClientInterface {
   }> {
     return this.request(`/saas/tenants/${tenantId}/launch`, {
       method: "POST",
+      body: JSON.stringify({ reason }),
     });
   }
 
-  async impersonate(
-    token: string,
-    reason: string = "support",
-  ): Promise<{ user: any; tokens: { accessToken: string; expiresIn: number; tokenType: string } }> {
+  /** Redeems the console's one-shot token; the reason travels inside it (C17). */
+  async impersonate(token: string): Promise<{
+    user: any;
+    tokens: { accessToken: string; expiresIn: number; tokenType: string };
+    support: { tenantId: string; endsAt: string };
+  }> {
     return this.request(`/auth/impersonate`, {
       method: "POST",
-      body: JSON.stringify({ token, reason }),
+      body: JSON.stringify({ token }),
     });
   }
 
@@ -5437,6 +5473,36 @@ class ApiClient implements ApiClientInterface {
       method: "PATCH",
       body: JSON.stringify({ isInternal }),
     });
+  }
+
+  /** "Cerrar todas las sesiones": every session of this account ends, this one too. */
+  async logoutEverywhere(): Promise<void> {
+    try {
+      await this.request("/auth/logout", { method: "POST", body: JSON.stringify({ everywhere: true }) });
+    } finally {
+      removeToken();
+      removeRefreshToken();
+    }
+  }
+
+  /** C9: the audit log for the platform owner (read-only). */
+  async getSaasAuditLogs(filters: {
+    page?: number;
+    limit?: number;
+    tenantId?: string;
+    tenant?: string;
+    actor?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+  }): Promise<{ data: SaasAuditLogRow[]; meta: { total: number; page: number; limit: number; totalPages: number } }> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== "") q.set(k, String(v));
+    return this.request(`/saas/audit-logs?${q.toString()}`);
+  }
+
+  async getSaasAuditLogActions(): Promise<{ data: string[] }> {
+    return this.request("/saas/audit-logs/actions");
   }
 
   async suspendSaasTenant(id: string): Promise<any> {
