@@ -23,12 +23,12 @@ const base = { confirmed: true, readOnlyUntil: null as string | null };
 
 const cancelled = readOnlyNotice({ ...base, subscriptionStatus: "cancelled", readOnlyUntil: "2026-11-11T00:00:00.000Z" });
 check("a cancelled salon is told it is read-only", cancelled?.title === "Tu cuenta está en modo solo lectura.", cancelled);
-check("and until when its data is kept", !!cancelled?.body.includes("se conservan hasta el 11 de noviembre de 2026"), cancelled?.body);
+check("and until when its data can be exported, then anonymised", !!cancelled?.body.includes("Puedes exportarlos hasta el 11 de noviembre de 2026; después se anonimizan."), cancelled?.body);
 check("and offered a plan", cancelled?.cta === "Elegir un plan", cancelled?.cta);
 
 const suspended = readOnlyNotice({ ...base, subscriptionStatus: "suspended" });
 check("a suspended salon is asked to fix the payment", suspended?.cta === "Actualizar el pago", suspended);
-check("with no date when there is none", !!suspended && !suspended.body.includes("conservan"), suspended?.body);
+check("with no date when there is none", !!suspended && !suspended.body.includes("exportarlos hasta"), suspended?.body);
 
 for (const status of ["trialing", "active", "past_due"]) {
   check(`nothing for ${status}`, readOnlyNotice({ ...base, subscriptionStatus: status }) === null);
