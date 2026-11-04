@@ -10,6 +10,12 @@
 # The endpoint authenticates the scraper with a bearer token rather than a
 # user session: set METRICS_SCRAPE_TOKEN on the backend and the same value in
 # METRICS_SCRAPE_TOKEN here.
+#
+# Prometheus does not expand environment variables in this file: the old
+# `credentials: ${METRICS_SCRAPE_TOKEN}` sent that text literally, the
+# backend answered 401 and Grafana stayed empty (audit 8 D7). The prometheus
+# service in docker-compose.observability.yml writes the token to the file
+# read below when it starts.
 
 global:
   scrape_interval: 30s
@@ -21,13 +27,20 @@ global:
 rule_files:
   - /etc/prometheus/rules/*.yml
 
+# Fired alerts go to Alertmanager, which emails them (ops/alertmanager).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
 scrape_configs:
   - job_name: kiraroom-backend
     metrics_path: /internal/metrics
     scheme: http
     authorization:
       type: Bearer
-      credentials: ${METRICS_SCRAPE_TOKEN}
+      credentials_file: /prometheus/.scrape-token
     static_configs:
       - targets:
           - backend:3001

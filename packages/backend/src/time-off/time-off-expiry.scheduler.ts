@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { TimeOffRequestsService } from "./time-off-requests.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /**
  * Closes the time off requests nobody answered before their last day as
@@ -15,6 +16,7 @@ export class TimeOffExpiryScheduler {
   constructor(private readonly requests: TimeOffRequestsService) {}
 
   @Cron("35 * * * *")
+  @MonitoredJob("TimeOffExpiryScheduler.run")
   async run(): Promise<number> {
     try {
       const closed = await this.requests.expireStale();

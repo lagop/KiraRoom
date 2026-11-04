@@ -8,6 +8,7 @@ import { EmailPacer } from "./email-pacer";
 import { EmailSuppressionService } from "./email-suppression.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import { EmailQuotaService } from "./email-quota.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /** How long a send in flight holds its recipient before a sweep may retry it. */
 export const SEND_LEASE_MS = 10 * 60_000;
@@ -106,6 +107,7 @@ export class EmailCampaignSender {
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
+  @MonitoredJob("EmailCampaignSender.dispatch")
   async dispatch(now: Date = new Date()): Promise<void> {
     if (this.running) {
       // A run is going on: one more right after it, for what was just claimed.

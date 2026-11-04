@@ -14,6 +14,7 @@ import { publicBookingSmsHeld } from '../appointments/public-booking-sms-cap';
 import { NOT_TEST_APPOINTMENT } from '../onboarding/test-booking';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { salonHasSmsNotices } from './sms-plan-gate';
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -128,6 +129,7 @@ export class NotificationsScheduler {
    * deploy or restart is caught up on the next one.
    */
   @Cron(CronExpression.EVERY_HOUR)
+  @MonitoredJob("NotificationsScheduler.send24HourReminders")
   async send24HourReminders(now: Date = new Date()) {
     return this.runReminders(REMINDER_24H, now);
   }
@@ -138,6 +140,7 @@ export class NotificationsScheduler {
    * neither for this client.
    */
   @Cron('*/15 * * * *')
+  @MonitoredJob("NotificationsScheduler.send1HourReminders")
   async send1HourReminders(now: Date = new Date()) {
     return this.runReminders(REMINDER_1H, now);
   }
@@ -408,6 +411,7 @@ export class NotificationsScheduler {
    * Runs daily at 3 AM to delete old notifications (older than 90 days)
    */
   @Cron('0 3 * * *')
+  @MonitoredJob("NotificationsScheduler.cleanupOldNotifications")
   async cleanupOldNotifications() {
     this.logger.log('Running notification cleanup job...');
 

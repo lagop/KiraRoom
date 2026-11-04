@@ -447,6 +447,28 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
    - `GET https://app.kiraroom.net` — dashboard loads
    - `GET https://api.kiraroom.net/api/v1/invoices` — fiscal dispatch reachable
 
+### What emails the platform owner (audit 8 D6, D7, D15)
+
+| Source | What | Configured by |
+| --- | --- | --- |
+| Backend (OpsAlertService) | AEAT / TicketBAI / SII rejections, scheduled jobs that throw, more permanent bounces (20) or spam complaints (3) in a day than the threshold. One email per kind per hour. | `OPS_ALERT_EMAIL` (else `FOUNDER_EMAIL`, else admin@kiraroom.net), `OPS_ALERT_BOUNCES_PER_DAY`, `OPS_ALERT_COMPLAINTS_PER_DAY` |
+| GlitchTip | Every 5xx and unexpected exception (SentryExceptionFilter) and failed jobs | `SENTRY_DSN` on the backend; GlitchTip's own emails via `GLITCHTIP_EMAIL_URL` |
+| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend) |
+| Uptime Kuma | The probes above | Its own UI (Telegram or email notification) |
+
+To activate the observability part on the server, next to
+docker-compose.observability.yml:
+
+1. Set `METRICS_SCRAPE_TOKEN` (same value as the backend) and
+   `ALERTMANAGER_SMTP_PASSWORD`; optionally `OPS_ALERT_EMAIL`,
+   `ALERTMANAGER_FROM`, `GLITCHTIP_HOST`, `GLITCHTIP_EMAIL_URL`.
+2. `docker compose -f docker-compose.observability.yml up -d` (pulls
+   `louislam/uptime-kuma:1` and `prom/alertmanager:v0.27.0`).
+3. Check that `http://localhost:9090/targets` shows kiraroom-backend UP (the
+   token is read from a file now) and `/alerts` lists the 4 rules.
+4. Send a test alert and confirm it reaches the inbox:
+   `docker exec kira-alertmanager amtool alert add test severity=warning --alertmanager.url=http://localhost:9093`.
+
 ## Operational runbooks
 
 ### Failure: API down (no response on /api/v1/ping)

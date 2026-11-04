@@ -24,6 +24,7 @@ import { phoneKey } from "../common/phone";
 import { optOutIntent } from "./opt-out-words";
 import { WhatsAppReceptionistService } from "./whatsapp-receptionist.service";
 import { WhatsAppTemplateService } from "./whatsapp-template.service";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /** A campaign message's progress, in order. */
 const DELIVERY_STEPS: WhatsAppRecipientStatus[] = [
@@ -788,6 +789,7 @@ export class WhatsAppService implements OnModuleInit {
 
   /** Opt-outs written but not applied (the database failed half-way): tried again. */
   @Cron(CronExpression.EVERY_10_MINUTES)
+  @MonitoredJob("WhatsAppService.retryPendingOptOuts")
   async retryPendingOptOuts(): Promise<number> {
     let applied = 0;
     try {

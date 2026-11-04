@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WaitListService } from './wait-list.service';
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 /**
  * Closes stale wait-list entries as "expired" (WaitListService.expireStale).
@@ -15,6 +16,7 @@ export class WaitListExpiryScheduler {
   constructor(private readonly waitList: WaitListService) {}
 
   @Cron('20 * * * *')
+  @MonitoredJob("WaitListExpiryScheduler.run")
   async run(): Promise<number> {
     try {
       const closed = await this.waitList.expireStale();

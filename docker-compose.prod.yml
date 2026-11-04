@@ -251,6 +251,13 @@ services:
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
       SENTRY_RELEASE: ${IMAGE_TAG:-}
       METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+      # Platform-owner alerts (audit 8 D13, D15): bug reports go to
+      # FOUNDER_EMAIL; AEAT rejections, failed jobs and bounce spikes to
+      # OPS_ALERT_EMAIL (else FOUNDER_EMAIL). Both default to admin@kiraroom.net.
+      FOUNDER_EMAIL: ${FOUNDER_EMAIL:-}
+      OPS_ALERT_EMAIL: ${OPS_ALERT_EMAIL:-}
+      OPS_ALERT_BOUNCES_PER_DAY: ${OPS_ALERT_BOUNCES_PER_DAY:-}
+      OPS_ALERT_COMPLAINTS_PER_DAY: ${OPS_ALERT_COMPLAINTS_PER_DAY:-}
 
       # Salons' own domains (docs/custom-domains.md)
       CUSTOM_DOMAIN_TARGET: ${CUSTOM_DOMAIN_TARGET:-}

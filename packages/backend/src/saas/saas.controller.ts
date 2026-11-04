@@ -6,6 +6,8 @@ import {
   ApiBearerAuth,
 } from "@nestjs/swagger";
 import { SaasService, PaginatedResult } from "./saas.service";
+import { SaasAnalyticsService } from "./saas-analytics.service";
+import { parseMonthsParam } from "./platform-metrics";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
@@ -20,7 +22,10 @@ import { UserRole } from "@prisma/client";
 @SaasOwner()
 @Controller("saas")
 export class SaasController {
-  constructor(private readonly saasService: SaasService) {}
+  constructor(
+    private readonly saasService: SaasService,
+    private readonly analytics: SaasAnalyticsService,
+  ) {}
 
   @Get("tenants")
   @ApiOperation({ summary: "Get all tenants (SaaS Owner only)" })
@@ -70,7 +75,7 @@ export class SaasController {
   @ApiOperation({ summary: "Get tenant statistics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant statistics" })
   async getTenantStats(@Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.getTenantStats(id);
+    return this.analytics.getTenantStats(id);
   }
 
   @Get("tenants/:id/progress")
@@ -102,7 +107,7 @@ export class SaasController {
   @ApiOperation({ summary: "Get platform-wide analytics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Platform analytics" })
   async getPlatformAnalytics() {
-    return this.saasService.getPlatformAnalytics();
+    return this.analytics.getPlatformAnalytics();
   }
 
   @Get("tenants/:id/growth")
@@ -112,16 +117,14 @@ export class SaasController {
     @Param("id", ParseUUIDPipe) id: string,
     @Query("months") months?: string,
   ) {
-    const monthsNum = months ? parseInt(months, 10) : 6;
-    return this.saasService.getSalonGrowthMetrics(id, monthsNum);
+    return this.analytics.getSalonGrowthMetrics(id, parseMonthsParam(months));
   }
 
   @Get("analytics/growth")
   @ApiOperation({ summary: "Get platform growth metrics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Platform growth metrics with evolution" })
   async getPlatformGrowthMetrics(@Query("months") months?: string) {
-    const monthsNum = months ? parseInt(months, 10) : 6;
-    return this.saasService.getPlatformGrowthMetrics(monthsNum);
+    return this.analytics.getPlatformGrowthMetrics(parseMonthsParam(months));
   }
 
   @Get("users")

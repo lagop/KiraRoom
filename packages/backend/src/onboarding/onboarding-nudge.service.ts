@@ -8,6 +8,7 @@ import { runUnscoped } from "../common/tenancy/tenant.context";
 import { EmailService } from "../notifications/services/email.service";
 import { OnboardingService } from "./onboarding.service";
 import { appBaseUrl } from "../common/app-base-url";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const HOUR_MS = 3_600_000;
 /** Day 2 after signup: from 48 hours, for one day (the job runs hourly). */
@@ -58,6 +59,7 @@ export class OnboardingNudgeService {
   ) {}
 
   @Cron("25 * * * *")
+  @MonitoredJob("OnboardingNudgeService.hourly")
   async hourly(): Promise<number> {
     try {
       return await this.run(new Date());

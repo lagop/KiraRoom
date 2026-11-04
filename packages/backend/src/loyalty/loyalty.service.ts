@@ -19,6 +19,7 @@ import {
   discountValueProblem,
 } from "./loyalty.dto";
 import { expiryRun, graceAfterChange } from "./loyalty-expiry";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 type TxType = "earn" | "redeem" | "reversal" | "redeem_reversal" | "welcome" | "adjust" | "expire";
 
@@ -1070,6 +1071,7 @@ export class LoyaltyService {
    * picked up here. Idempotent, so re-running it is harmless.
    */
   @Cron(CronExpression.EVERY_HOUR)
+  @MonitoredJob("LoyaltyService.sweepRecentAppointments")
   async sweepRecentAppointments(): Promise<{ settled: number; reversed: number }> {
     const since = new Date(Date.now() - SWEEP_LOOKBACK_MS);
     let settled = 0;
@@ -1130,6 +1132,7 @@ export class LoyaltyService {
    * after the salon switched expiry on or shortened it).
    */
   @Cron("0 20 * * * *")
+  @MonitoredJob("LoyaltyService.expireInactivePoints")
   async expireInactivePoints(now: Date = new Date()): Promise<{ members: number; points: number }> {
     let members = 0;
     let points = 0;

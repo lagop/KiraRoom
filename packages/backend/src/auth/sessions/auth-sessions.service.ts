@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { MonitoredJob } from "../../common/ops-alerts/ops-alert-sink";
 
 /**
  * How long the refresh token a rotation replaced keeps working, and only to
@@ -86,6 +87,7 @@ export class AuthSessionsService {
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @MonitoredJob("AuthSessionsService.purgeEnded")
   async purgeEnded(now = new Date()): Promise<void> {
     const before = new Date(now.getTime() - PURGE_AFTER_MS);
     const { count } = await this.prisma.authSession.deleteMany({

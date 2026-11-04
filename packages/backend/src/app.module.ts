@@ -1,6 +1,7 @@
 ﻿import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { SentryExceptionFilter } from "./common/observability/sentry-exception.filter";
 import { JwtModule } from "@nestjs/jwt";
 import {
   parseJwtDuration,
@@ -91,6 +92,10 @@ import { ReadOnlyTenantGuard } from "./common/guards/read-only-tenant.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
 import { InvitesModule } from "./saas/invites/invites.module";
 import { PublicModule } from "./public-site/public.module";
+// Last: it imports NotificationsModule, and loading that file first changes
+// the order Node resolves the module graph in (a cycle then leaves
+// OnboardingModule undefined at boot).
+import { OpsAlertsModule } from "./common/ops-alerts/ops-alerts.module";
 
 @Module({
   imports: [
@@ -162,6 +167,8 @@ import { PublicModule } from "./public-site/public.module";
 
     // Notifications module
     NotificationsModule,
+    // Emails the platform owner: AEAT rejections, failed jobs, bounce spikes (audit 8 D15).
+    OpsAlertsModule,
 
     // Virtual Receptionist module
     VirtualReceptionistModule,
@@ -268,6 +275,11 @@ import { PublicModule } from "./public-site/public.module";
     CspReportController,
   ],
   providers: [
+    // 5xx and unexpected errors reach GlitchTip (audit 8 D6).
+    {
+      provide: APP_FILTER,
+      useClass: SentryExceptionFilter,
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerBehindProxyGuard,

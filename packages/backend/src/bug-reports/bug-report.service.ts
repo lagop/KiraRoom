@@ -123,12 +123,18 @@ export class BugReportService {
     }
 
     try {
-      await this.email.sendEmail({
+      // sendEmail reports a failure in its result instead of throwing, so
+      // the log used to say "accepted" for a notice that never left (D13).
+      const sent = await this.email.sendEmail({
         to: recipient,
         subject: `[KiraRoom bug] ${input.subject} (${id.slice(0, 8)})`,
         html: `<pre style="font-family: ui-monospace, monospace; white-space: pre-wrap;">${escapeHtml(body)}</pre>`,
       });
-      this.logger.log(`Bug report accepted: id=${id}`);
+      if (sent && sent.success === false) {
+        this.logger.warn(`Bug report ${id} saved, but its notice to ${recipient} was not sent: ${sent.error ?? "unknown error"}`);
+      } else {
+        this.logger.log(`Bug report accepted: id=${id}`);
+      }
     } catch (err) {
       // The transport may not be wired in dev. Fall back to stdout
       // so the report isn't lost — the founder can grep logs.
@@ -148,6 +154,8 @@ export class BugReportService {
         });
         if (ack.skipped) {
           this.logger.log(`Bug report ack skipped for report ${id} (address bounced)`);
+        } else if (ack.success === false) {
+          this.logger.warn(`Bug report ack not sent for report ${id}: ${ack.error ?? "unknown error"}`);
         }
       } catch (err) {
         this.logger.warn(`Bug report ack failed for report ${id}: ${(err as Error).message}`);

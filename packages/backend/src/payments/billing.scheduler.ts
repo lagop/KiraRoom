@@ -4,6 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { runUnscoped } from '../common/tenancy/tenant.context';
 import { ProductEventsService, PRODUCT_EVENTS } from '../common/telemetry/product-events.service';
 import { ReadOnlyNoticeService } from './read-only-notice.service';
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const READ_ONLY_DAYS = 30;
@@ -64,6 +65,7 @@ export class BillingScheduler {
    * one place leaves at most an hour of slack.
    */
   @Cron(CronExpression.EVERY_HOUR)
+  @MonitoredJob("BillingScheduler.expireTrials")
   async expireTrials(): Promise<void> {
     const now = new Date();
     const readOnlyUntil = new Date(now.getTime() + READ_ONLY_DAYS * MS_PER_DAY);
@@ -159,6 +161,7 @@ export class BillingScheduler {
    * retention job (saas/retention/salon-retention.scheduler.ts).
    */
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @MonitoredJob("BillingScheduler.archiveStaleReadOnly")
   async archiveStaleReadOnly(): Promise<void> {
     const now = new Date();
 
