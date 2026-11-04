@@ -189,4 +189,41 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsString()
   state?: string | null;
+
+  /**
+   * The salon's own website, if it has one: linked from its page, and the
+   * first allowed origin offered when it creates a booking widget.
+   */
+  @ApiPropertyOptional({ description: "The salon's own website (https); blank or null clears it", nullable: true })
+  @BlankToNull()
+  @IsOptional()
+  @IsUrl(
+    { protocols: ["https", "http"], require_protocol: true },
+    { message: "Escribe la dirección completa de tu web, como https://misalon.com" },
+  )
+  @MaxLength(500)
+  website?: string | null;
+
+  /** "Escríbenos por WhatsApp" on the salon's page (a wa.me link). */
+  @ApiPropertyOptional({ description: "WhatsApp number for the public page's button; blank or null clears it", nullable: true })
+  @BlankToNull()
+  @IsOptional()
+  @IsString()
+  @Matches(PHONE_PATTERN, { message: TENANT_PHONE_INVALID })
+  whatsapp?: string | null;
+
+  /**
+   * "URL de mi propia política de privacidad": when set, the salon's page,
+   * widget and chat link there instead of the page KiraRoom generates
+   * (/sites/<slug>/privacidad).
+   */
+  @ApiPropertyOptional({ description: "The salon's own privacy policy (https); blank or null: the generated one", nullable: true })
+  @BlankToNull()
+  @IsOptional()
+  @IsUrl(
+    { protocols: ["https"], require_protocol: true },
+    { message: "La política de privacidad tiene que ser una dirección https, como https://misalon.com/privacidad" },
+  )
+  @MaxLength(500)
+  privacyPolicyUrl?: string | null;
 }

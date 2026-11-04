@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Optional } from "@nestjs/common";
+import { GoneException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
@@ -9,8 +9,29 @@ import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consen
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { clientLocations, formatLocationAddress, professionalLocationsOf } from "../multi-location/client-locations";
-import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
-import { imageVersion, parseImageDataUrl, publicImageUrl, type PublicImageKind } from "./public-images";
+import { isReadOnlyStatus, publicPageGone } from "../common/guards/read-only-tenant.guard";
+import { imageVersion, parseImageDataUrl, portfolioIndex, publicImageUrl, type PublicImageKind } from "./public-images";
+import { publicProfessionals, showsPhoto } from "./public-professional";
+
+/** "+34 600 11 22 33" -> "34600112233" for a wa.me link; null when it is not a phone. */
+export function whatsappDigits(raw: string | null | undefined): string | null {
+  const digits = (raw ?? "").replace(/[^0-9]/g, "");
+  if (digits.length < 9 || digits.length > 15) return null;
+  // A Spanish number written without its prefix.
+  return digits.length === 9 ? `34${digits}` : digits;
+}
+
+/** The salon's own privacy policy, only as an https URL. */
+export function ownPrivacyPolicyUrl(raw: string | null | undefined): string | null {
+  const v = raw?.trim();
+  if (!v) return null;
+  try {
+    const url = new URL(v);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Salons whose page is worth listing in the sitemap. A cancelled or
@@ -74,11 +95,18 @@ export class PublicSiteService {
         fiscalSettings: true,
         // Read for acceptsBookings below, never sent.
         subscriptionStatus: true,
+        readOnlyUntil: true,
+        // "Escríbenos por WhatsApp", as a wa.me link.
+        whatsapp: true,
+        privacyPolicyUrl: true,
         updatedAt: true,
         customDomain: { select: { domain: true, verifiedAt: true } },
       },
     });
     if (!tenant) throw new NotFoundException("Salon not found");
+    // Past its read-only period (or cancelled with none): the page is gone,
+    // 410 rather than 404, so search engines drop it for good.
+    if (publicPageGone(tenant)) throw new GoneException("Salon page no longer available");
 
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: tenant.timezone || "Europe/Madrid" }).format(
       new Date(),
@@ -115,6 +143,9 @@ export class PublicSiteService {
           languages: true,
           certifications: true,
           workingHours: true,
+          // "Mostrar en la web" and "Mostrar foto" (public-professional.ts).
+          webNameDisplay: true,
+          webShowPhoto: true,
           services: { select: { serviceId: true } },
         },
         orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
@@ -173,6 +204,11 @@ export class PublicSiteService {
       facebook: tenant.facebook,
       email: tenant.email,
       phone: tenant.phone,
+      // Digits for https://wa.me/<digits>; null when unset.
+      whatsapp: whatsappDigits(tenant.whatsapp),
+      // The salon's own privacy policy, when it set one: the page, widget
+      // and chat link to it instead of /sites/<slug>/privacidad.
+      privacyPolicyUrl: ownPrivacyPolicyUrl(tenant.privacyPolicyUrl),
       address: {
         street: tenant.street,
         city: tenant.city,
@@ -206,7 +242,11 @@ export class PublicSiteService {
       // With locations to pick from, each professional also says where they
       // work (locationIds) and their main one, so the page offers only who
       // works at the chosen location, or takes the location from them.
-      professionals: professionals.map(({ workingHours: _wh, ...p }) =>
+      //
+      // Named, pictured or left out as each one's "Mostrar en la web" says
+      // (public-professional.ts); `listed: false` ones are bookable but not
+      // in the team list.
+      professionals: publicProfessionals(professionals.map(({ workingHours: _wh, ...p }) => p)).map((p) =>
         where.locations.length > 0 ? { ...p, ...professionalLocationsOf(p.id, where.locations, where.links) } : p,
       ),
       // Empty unless the salon has two or more locations to book at. Only
@@ -253,6 +293,77 @@ export class PublicSiteService {
     const image = parseImageDataUrl(stored);
     if (!stored || !image) return null;
     return { ...image, version: imageVersion(stored) };
+  }
+
+  /**
+   * A professional's photo or portfolio picture, for
+   * GET /public-site/professional-image/:professionalId/:slot. Only while
+   * she is active, in a salon that exists, and shown with her photo.
+   */
+  async professionalImage(professionalId: string, slot: string) {
+    const index = slot === "photo" ? null : portfolioIndex(slot);
+    if (slot !== "photo" && index === null) return null;
+    const pro = await this.prisma.professional.findFirst({
+      where: { id: professionalId, isActive: true, tenant: { deletedAt: null } },
+      select: {
+        profileImage: slot === "photo",
+        portfolioImages: slot !== "photo",
+        webNameDisplay: true,
+        webShowPhoto: true,
+      },
+    });
+    if (!pro || !showsPhoto(pro)) return null;
+    const list = Array.isArray(pro.portfolioImages) ? pro.portfolioImages : [];
+    const raw = slot === "photo" ? pro.profileImage : list[index as number];
+    const stored = typeof raw === "string" ? raw.trim() : "";
+    const image = parseImageDataUrl(stored);
+    if (!stored || !image) return null;
+    return { ...image, version: imageVersion(stored) };
+  }
+
+  /**
+   * Who runs the salon, for its generated privacy page and aviso legal
+   * (LSSI art. 10: the business name, NIF, address and a contact must be
+   * public on its website). Only those fields.
+   */
+  async legal(slugOrId: string) {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { OR: [{ slug: slugOrId }, { id: slugOrId }], deletedAt: null },
+      select: {
+        name: true,
+        slug: true,
+        legalName: true,
+        taxId: true,
+        email: true,
+        phone: true,
+        street: true,
+        city: true,
+        state: true,
+        postalCode: true,
+        country: true,
+        privacyPolicyUrl: true,
+        subscriptionStatus: true,
+        readOnlyUntil: true,
+      },
+    });
+    if (!tenant) throw new NotFoundException("Salon not found");
+    if (publicPageGone(tenant)) throw new GoneException("Salon page no longer available");
+    return {
+      name: tenant.name,
+      slug: tenant.slug,
+      legalName: tenant.legalName?.trim() || null,
+      taxId: tenant.taxId?.trim() || null,
+      email: tenant.email,
+      phone: tenant.phone,
+      address: {
+        street: tenant.street,
+        city: tenant.city,
+        state: tenant.state,
+        postalCode: tenant.postalCode,
+        country: tenant.country,
+      },
+      privacyPolicyUrl: ownPrivacyPolicyUrl(tenant.privacyPolicyUrl),
+    };
   }
 
   /** Salons for the sitemap: slug, last change and live domain only. */

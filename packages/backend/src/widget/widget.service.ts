@@ -1,12 +1,14 @@
-import { Injectable, NotFoundException, Logger, Optional } from "@nestjs/common";
+import { GoneException, Injectable, NotFoundException, Logger, Optional } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { salonOffersWhatsAppPromotions, salonWhatsAppConnected } from "../consent/client-notices";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
 import { publicPrice, publicPriceSettings } from "../common/public-price";
 import { frameAncestorOrigins } from "./frame-origins";
-import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
+import { isReadOnlyStatus, publicPageGone } from "../common/guards/read-only-tenant.guard";
 import { publicImageUrl } from "../public-site/public-images";
+import { publicProfessionals } from "../public-site/public-professional";
+import { ownPrivacyPolicyUrl } from "../public-site/public-site.service";
 import {
   clientLocations,
   formatLocationAddress,
@@ -30,6 +32,19 @@ export function widgetLocations(
   if (locations.length < 2) return { locations: [], links: [] };
   const ids = new Set(locations.map((l) => l.id));
   return { locations, links: where.links.filter((l) => ids.has(l.locationId) && offered.has(l.professionalId)) };
+}
+
+/** "#1a2B3c": the only colour form the widget takes (CSS custom property). */
+export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * What the widget's look may carry to the embed page: its main colour
+ * (buttons, selected options), lower-cased, when it is a valid hex. Anything
+ * else stored in the theme JSON is not served.
+ */
+export function widgetTheme(theme: unknown): { primaryColor: string | null } {
+  const raw = theme && typeof theme === "object" ? (theme as Record<string, unknown>).primaryColor : undefined;
+  return { primaryColor: typeof raw === "string" && HEX_COLOR.test(raw.trim()) ? raw.trim().toLowerCase() : null };
 }
 
 /** A widget token: not a secret (it sits in the salon's iframe), just unguessable. */
@@ -186,12 +201,17 @@ export class WidgetService {
             language: true,
             fiscalSettings: true,
             subscriptionStatus: true,
+            readOnlyUntil: true,
+            privacyPolicyUrl: true,
             deletedAt: true,
           },
         },
       },
     });
     if (!widget || !widget.tenant || widget.tenant.deletedAt) throw new NotFoundException("Widget not found");
+    // Past its read-only period the salon's page answers 410, and so does
+    // its widget: there is nothing to book and nobody to phone through it.
+    if (publicPageGone(widget.tenant)) throw new GoneException("Este salón ya no reserva en KiraRoom");
     const allProfessionals = await this.prisma.professional.findMany({
       where: {
         tenantId: widget.tenantId,
@@ -207,6 +227,10 @@ export class WidgetService {
         bio: true,
         profileImage: true,
         specialties: true,
+        // "Mostrar en la web" (public-professional.ts): her name as shown,
+        // her photo only if shown, as on the salon's page.
+        webNameDisplay: true,
+        webShowPhoto: true,
         // Which services each one does, so the location step offers only
         // the services someone at the chosen location does.
         services: { select: { serviceId: true } },
@@ -268,14 +292,18 @@ export class WidgetService {
         id: widget.id,
         name: widget.name,
         allowedOrigins: frameAncestorOrigins(widget.allowedOrigins),
-        theme: widget.theme,
+        theme: widgetTheme(widget.theme),
       },
+      // The salon's own privacy policy, when it set one (https); otherwise
+      // the widget links to /sites/<slug>/privacidad.
+      privacyPolicyUrl: ownPrivacyPolicyUrl(widget.tenant.privacyPolicyUrl),
       // The final price, tax included (common/public-price.ts), never the
       // net catalogue figure of a salon that writes its prices without it.
       services: allServices.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
       // With locations to pick from, each one also says where they work and
       // their main location (the location follows from who she picks).
-      professionals: allProfessionals.map((p) =>
+      // Hidden ones stay bookable as "Profesional" (public-professional.ts).
+      professionals: publicProfessionals(allProfessionals).map((p) =>
         where.locations.length > 0 ? { ...p, ...professionalLocationsOf(p.id, where.locations, where.links) } : p,
       ),
       // Empty unless there is a location to choose. Only what the client

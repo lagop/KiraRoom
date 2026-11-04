@@ -29,6 +29,10 @@ model Tenant {
   email                  String?
   phone                  String?
   whatsapp               String?
+  /// The salon's own privacy policy (https URL), when it has one: the
+  /// booking page, widget and chat link to it instead of the generated
+  /// /sites/<slug>/privacidad.
+  privacyPolicyUrl       String?
   street                 String?
   city                   String?
   state                  String?
@@ -671,6 +675,14 @@ model Professional {
   isActive            Boolean                @default(true)
   isOwner             Boolean                @default(false)
   position            String?
+  /// How the salon's public page, widget and schema.org data name this
+  /// professional: full name, first name and initial, or not at all (still
+  /// bookable, as "Profesional"). New professionals: initial, no photo, until
+  /// the salon has their consent; rows from before the setting keep what
+  /// they showed (full name and photo).
+  webNameDisplay      ProfessionalWebName    @default(initial)
+  /// Whether their photo and portfolio are shown on the public page.
+  webShowPhoto        Boolean                @default(false)
   commissionRate      Decimal?
   /// "Comisión de productos": percent of the products this professional sells
   /// at the till. None: the salon's productCommissionDefaultRate.
@@ -910,6 +922,13 @@ model AppointmentService {
   @@index([professionalId])
   @@index([scheduledStart])
   @@map("appointment_services")
+}
+
+/// How a professional is named on the salon's public page (Professional.webNameDisplay).
+enum ProfessionalWebName {
+  full
+  initial
+  hidden
 }
 
 enum SubscriptionPlan {

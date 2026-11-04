@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
+import { publicProfessionals } from "../public-site/public-professional";
 
 /**
  * The services a professional offers that anyone may know about: active and
@@ -22,6 +23,10 @@ export const PUBLIC_PROFESSIONAL_SERVICES = {
  * without a session, and "when is each one at work" (when is someone alone
  * in the salon) is not for anyone who knows the salon's id. The public page
  * sums the schedules up into the salon's hours (public-site.service.ts).
+ *
+ * Read with her "Mostrar en la web" choice (webNameDisplay, webShowPhoto)
+ * and always answered through publicProfessionals (public-professional.ts):
+ * the name as she agreed to show it, her pictures as URLs and only if shown.
  */
 export const PUBLIC_PROFESSIONAL = {
   id: true,
@@ -37,6 +42,8 @@ export const PUBLIC_PROFESSIONAL = {
   certifications: true,
   position: true,
   isActive: true,
+  webNameDisplay: true,
+  webShowPhoto: true,
   services: PUBLIC_PROFESSIONAL_SERVICES,
 } as const;
 
@@ -91,10 +98,11 @@ export class ProfessionalsService {
    */
   async findAll(tenantId: string, viewer: ProfessionalsViewer) {
     if (!viewer.staff) {
-      return this.prisma.professional.findMany({
+      const rows = await this.prisma.professional.findMany({
         where: { tenantId, isActive: true },
         select: PUBLIC_PROFESSIONAL,
       });
+      return publicProfessionals(rows);
     }
     if (seesFullRows(viewer)) {
       return this.prisma.professional.findMany({
@@ -132,7 +140,7 @@ export class ProfessionalsService {
         .filter((ps: any) => !ps?.service || (ps.service.isActive !== false && ps.service.isOnlineBookable !== false))
         .map((ps: any) => ({ serviceId: ps.serviceId ?? ps.service?.id }));
     }
-    return out;
+    return publicProfessionals([out as any])[0];
   }
 
   /** A full row reduced to what a colleague (staff) sees: COLLEAGUE_PROFESSIONAL. */

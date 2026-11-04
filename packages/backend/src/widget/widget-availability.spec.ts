@@ -1,5 +1,5 @@
-import { NotFoundException } from "@nestjs/common";
-import { WidgetService, invalidateTenantWidgets } from "./widget.service";
+import { GoneException, NotFoundException } from "@nestjs/common";
+import { WidgetService, invalidateTenantWidgets, widgetTheme } from "./widget.service";
 
 /**
  * A widget only works for a salon that exists, and only offers to book while
@@ -55,8 +55,9 @@ describe("widget availability", () => {
 
   it("takes bookings while the salon is active, not when it is read-only", async () => {
     expect((await build({}).service.getPublicConfig("w1")).acceptsBookings).toBe(true);
+    const readOnlyUntil = new Date(Date.now() + 10 * 86_400_000);
     for (const subscriptionStatus of ["cancelled", "suspended"]) {
-      const config = await build({ subscriptionStatus }).service.getPublicConfig("w1");
+      const config = await build({ subscriptionStatus, readOnlyUntil }).service.getPublicConfig("w1");
       expect(config.acceptsBookings).toBe(false);
       // What the widget shows instead of the steps.
       expect(config.tenant.phone).toBe("+34 600 000 000");
@@ -79,5 +80,40 @@ describe("widget availability", () => {
     const tokens = update.mock.calls.map((c: any[]) => c[0].data.token);
     expect(new Set(tokens).size).toBe(2);
     for (const t of tokens) expect(t).toMatch(/^[A-Za-z0-9_-]{32}$/);
+  });
+
+  it("answers 410 once the salon's page is gone", async () => {
+    for (const readOnlyUntil of [null, new Date(Date.now() - 86_400_000)]) {
+      await expect(
+        build({ subscriptionStatus: "cancelled", readOnlyUntil }).service.getPublicConfig("w1"),
+      ).rejects.toBeInstanceOf(GoneException);
+    }
+  });
+
+  it("serves only a valid hex main colour from the theme", async () => {
+    expect(widgetTheme({ primaryColor: "#1A2b3C", other: "x" })).toEqual({ primaryColor: "#1a2b3c" });
+    for (const primaryColor of ["red", "#fff", "#12345g", "url(x)", 3, null]) {
+      expect(widgetTheme({ primaryColor })).toEqual({ primaryColor: null });
+    }
+    expect(widgetTheme(null)).toEqual({ primaryColor: null });
+    const config = await build({}).service.getPublicConfig("w1");
+    expect(config.widget.theme).toEqual({ primaryColor: null });
+  });
+
+  it("names the team as the salon shows it on the web, and links its own privacy policy", async () => {
+    const { service, prisma } = build({ privacyPolicyUrl: "https://salonluna.example/privacidad" });
+    prisma.professional.findMany = jest.fn(async () => [
+      { id: "p1", firstName: "Ana", lastName: "García", bio: "x", profileImage: null, specialties: [], webNameDisplay: "initial", webShowPhoto: false, services: [] },
+      { id: "p2", firstName: "Bea", lastName: "López", bio: "y", profileImage: null, specialties: [], webNameDisplay: "hidden", webShowPhoto: true, services: [] },
+    ]);
+    const config: any = await service.getPublicConfig("w1");
+    expect(config.professionals.map((p: any) => [p.id, p.firstName, p.lastName, p.listed])).toEqual([
+      ["p1", "Ana", "G.", true],
+      ["p2", "Profesional", "", false],
+    ]);
+    expect(JSON.stringify(config)).not.toContain("Bea");
+    expect(config.privacyPolicyUrl).toBe("https://salonluna.example/privacidad");
+    const select = (prisma.professional.findMany.mock.calls[0] as any[])[0].select;
+    expect(select).toMatchObject({ webNameDisplay: true, webShowPhoto: true });
   });
 });
