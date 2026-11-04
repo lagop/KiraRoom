@@ -21,6 +21,7 @@ import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "../guards/saas-owner.guard";
 import { SaasOwner } from "../decorators/saas-owner.decorator";
 import { GdprService } from "./gdpr.service";
+import { clientIp } from "../../common/client-ip";
 
 /**
  * GDPR data subject access endpoints.
@@ -60,7 +61,7 @@ export class GdprController {
   ): Promise<{ format: string; tenantId: string; sizeBytes: number; sha256: string; data: string }> {
     const actorId = (req as any).user?.id ?? "unknown";
     const ipAddress =
-      (req.headers["x-forwarded-for"] as string) ?? req.ip;
+      clientIp(req);
     const rec = await this.gdpr.recordRequest(
       id,
       "export",
@@ -95,7 +96,7 @@ export class GdprController {
   ): Promise<{ ok: true; requestId: string }> {
     const actorId = (req as any).user?.id ?? "unknown";
     const ipAddress =
-      (req.headers["x-forwarded-for"] as string) ?? req.ip;
+      clientIp(req);
     const rec = await this.gdpr.recordRequest(
       id,
       "anonymize",

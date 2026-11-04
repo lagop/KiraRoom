@@ -5,6 +5,8 @@ import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesController } from "./appointment-services.controller";
 import { AppointmentServicesService } from "./appointment-services.service";
 import { HomeSummaryService } from "./home-summary.service";
+import { PublicAppointmentController } from "./public-appointment.controller";
+import { PendingBookingExpiryScheduler } from "./pending-booking-expiry.scheduler";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { TranslationsModule } from "../translations/translations.module";
@@ -32,8 +34,8 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     // Inicio (HomeSummaryService): the location filter and today's occupancy, as in Analítica.
     AnalyticsModule,
   ],
-  controllers: [AppointmentsController, AppointmentServicesController],
-  providers: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
+  controllers: [AppointmentsController, AppointmentServicesController, PublicAppointmentController],
+  providers: [AppointmentsService, AppointmentServicesService, HomeSummaryService, PendingBookingExpiryScheduler],
   exports: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
 })
 export class AppointmentsModule {}

@@ -189,6 +189,23 @@ export class OnlineBookingDto extends BookingSlotDto {
   @IsBoolean({ message: "La opción de promociones por WhatsApp no es válida" })
   @IsOptional()
   wantsWhatsAppPromotions?: boolean;
+
+  /**
+   * A trap for bots: a field the salon page and the widget hide from people
+   * (off screen, not focusable, autocomplete off). Filled in, the booking is
+   * dropped quietly (the caller gets an answer like a real one) and logged
+   * (AppointmentsController.create, isHoneypotHit).
+   */
+  @ApiPropertyOptional({ description: "Leave empty" })
+  @IsString()
+  @MaxLength(500)
+  @IsOptional()
+  website?: string;
+}
+
+/** Whether a booking filled in the hidden field no person sees. */
+export function isHoneypotHit(dto: { website?: unknown }): boolean {
+  return typeof dto?.website === "string" && dto.website.trim() !== "";
 }
 
 /** POST /appointments/staff: the dashboard. */

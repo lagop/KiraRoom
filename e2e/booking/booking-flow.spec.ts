@@ -115,7 +115,15 @@ test("a client books online and the salon completes and invoices the visit", asy
     // without its full-screen overlay.
     const tenantPatch = await api.patch(`${API_URL}/auth/tenant`, {
       headers: auth,
-      data: { street: "Calle Falsa 123", city: "Madrid", postalCode: "28001", phone: "+34600000000" },
+      // New salons confirm online bookings automatically; this flow is the
+      // salon confirming one by hand, so it starts pending.
+      data: {
+        street: "Calle Falsa 123",
+        city: "Madrid",
+        postalCode: "28001",
+        phone: "+34600000000",
+        autoConfirmOnlineBookings: false,
+      },
     });
     expect(tenantPatch.ok(), await tenantPatch.text()).toBeTruthy();
     const tenant = await (await api.get(`${API_URL}/auth/tenant`, { headers: auth })).json();

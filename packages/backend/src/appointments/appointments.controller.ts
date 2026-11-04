@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, UseInterceptors, Req } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, UseInterceptors, Req, Logger } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -18,7 +18,8 @@ import { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dt
 import { CancelAppointmentDto, CompleteAppointmentDto } from "./dto/appointment-status.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
 import { HomeSummaryService } from "./home-summary.service";
-import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { OnlineBookingDto, StaffBookingDto, isHoneypotHit } from "./dto/book-appointment.dto";
+import { randomUUID } from "crypto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ScrubSecretsInterceptor, publicBooking } from "./appointment-response";
 import { Public } from "../auth/decorators/public.decorator";
@@ -45,6 +46,8 @@ interface AuthenticatedRequest extends Request {
 @UseInterceptors(ScrubSecretsInterceptor)
 @ApiBearerAuth()
 export class AppointmentsController {
+  private readonly logger = new Logger(AppointmentsController.name);
+
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly publicViewer: PublicViewerService,
@@ -61,6 +64,23 @@ export class AppointmentsController {
     // WhatsApp notices), as the consent routes do.
     // From the trusted proxy, as the rate limiter counts it (clientIp).
     const ip = clientIp(req);
+    // The hidden field a person never sees was filled in: a bot. Nothing is
+    // booked or sent; it gets an answer shaped like a pending booking, so it
+    // learns nothing. Logged without its data.
+    if (isHoneypotHit(dto)) {
+      this.logger.warn(
+        `Public booking dropped: hidden field filled (service ${dto.serviceId}, professional ${dto.professionalId || "any"})`,
+      );
+      return {
+        id: randomUUID(),
+        status: "pending",
+        scheduledDate: dto.scheduledDate,
+        scheduledTime: dto.scheduledTime,
+        service: null,
+        professional: null,
+        location: null,
+      };
+    }
     // Public: whoever booked gets the booking back, not the client record it
     // attached to nor the salon's row.
     return publicBooking(await this.appointmentsService.createOnline(dto, { ip }));
