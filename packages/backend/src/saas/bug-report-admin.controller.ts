@@ -156,7 +156,7 @@ export class BugReportAdminController {
   ) {
     const existing = await this.prisma.bugReport.findUnique({
       where: { id },
-      select: { id: true, status: true, tenantId: true },
+      select: { id: true, status: true, tenantId: true, resolvedAt: true },
     });
     if (!existing) throw new NotFoundException("Bug report not found");
 
@@ -171,7 +171,9 @@ export class BugReportAdminController {
         status: dto.status,
         resolution: dto.resolution ?? null,
         resolvedById: isResolvedLike ? req.user.id : null,
-        resolvedAt: isResolvedLike ? new Date() : null,
+        // Closing date: retention counts 12 months from it (D14), so editing
+        // the resolution of an already-closed report keeps it.
+        resolvedAt: isResolvedLike ? (existing.resolvedAt ?? new Date()) : null,
       },
     });
 

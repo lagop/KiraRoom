@@ -6,6 +6,7 @@ import { GdprRequest, GdprRequestStatus, Prisma, UserRole } from "@prisma/client
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { CLIENT_SECRET_COLUMNS } from "../../clients/client-select";
 import { anonymizeClients } from "../../clients/client-anonymize";
+import { strippedBugReportData } from "../../bug-reports/bug-report-retention";
 import { scrubTenantAuditLogs } from "./audit-log-scrub";
 
 /**
@@ -128,7 +129,7 @@ export const TENANT_MODEL_ON_ERASURE: Readonly<Record<string, "deleted" | "clean
   LegalAcceptance: "cleaned", // IP; the record that the terms were accepted stays
   TimeOff: "cleaned", // free-text notes (may say why: health)
   CashSession: "cleaned", // opening / closing notes
-  BugReport: "cleaned", // reporter email
+  BugReport: "cleaned", // subject, description, email, URL, context (audit 8 D14)
   Location: "cleaned", // its phone and email; the address may be the invoices' issuer address
   // Conversations: every one, also with visitors who never booked.
   ChatConversation: "deleted", // messages and intents cascade
@@ -369,6 +370,16 @@ export class GdprService {
       // wait-list, notifications... Appointments and FKs stay.
       const clients = await tx.client.findMany({ where: { tenantId }, select: { id: true } });
       await anonymizeClients(tx, tenantId, clients.map((c) => c.id));
+
+      // Bug reports from the salon or its users: their text, email, URL and
+      // context go too (audit 8 D14). The rows stay for the triage history.
+      await tx.bugReport.updateMany({
+        where: {
+          anonymizedAt: null,
+          OR: [{ tenantId }, { authorId: { in: users.map((u) => u.id) } }],
+        },
+        data: strippedBugReportData(new Date()),
+      });
 
       await this.eraseTenantTables(tx, tenantId);
 
