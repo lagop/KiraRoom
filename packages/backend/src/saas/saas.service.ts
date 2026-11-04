@@ -187,6 +187,8 @@ export class SaasService {
           blockedAt: true,
           courtesyUntil: true,
           courtesyPlan: true,
+          // Only whether there is one: which status buttons apply (D6).
+          stripeSubscriptionId: true,
           anonymizedAt: true,
           deletionRequestedAt: true,
           users: {
@@ -210,8 +212,9 @@ export class SaasService {
 
     const shared = await this.sharedIdentity(tenants.map((t) => t.id));
     return {
-      data: tenants.map(({ users, ...tenant }) => ({
+      data: tenants.map(({ users, stripeSubscriptionId, ...tenant }) => ({
         ...tenant,
+        hasStripeSubscription: !!stripeSubscriptionId,
         owner: users?.[0] ?? null,
         // Another salon has the same phone or NIF (D9): shown, never blocked.
         sharedIdentity: shared.get(tenant.id) ?? [],
