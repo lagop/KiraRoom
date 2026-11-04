@@ -1028,6 +1028,8 @@ export class EmailService {
     }
 
     const shortId = data.reportId.slice(0, 8);
+    // The reporter's own words, cut short: this goes out from the KiraRoom domain.
+    const excerpt = bugReportExcerpt(data.subject);
     const subject = `Hemos recibido tu reporte (${shortId})`;
     const html = `
 <!DOCTYPE html>
@@ -1042,7 +1044,7 @@ export class EmailService {
           <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en menos de 24h</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Hemos recibido tu reporte: <em>${this.escapeHtml(data.subject)}</em>.
+            Hemos recibido tu reporte: <em>${this.escapeHtml(excerpt)}</em>.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             El equipo técnico lo revisará durante el siguiente día laborable.
@@ -1060,7 +1062,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      `Hemos recibido tu reporte: "${data.subject}".`,
+      `Hemos recibido tu reporte: "${excerpt}".`,
       `El equipo técnico lo revisará durante el siguiente día laborable.`,
       ``,
       `Identificador de seguimiento: ${shortId}`,
@@ -2145,4 +2147,14 @@ export class EmailService {
       attachments: [{ filename: data.filename, content: data.pdf, contentType: "application/pdf" }],
     });
   }
+}
+
+/** Longest piece of the reporter's subject the acknowledgement repeats. */
+export const BUG_REPORT_ACK_EXCERPT_CHARS = 60;
+
+/** The subject on one line, control characters removed, cut to the excerpt length. */
+export function bugReportExcerpt(subject: string): string {
+  // eslint-disable-next-line no-control-regex
+  const flat = subject.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > BUG_REPORT_ACK_EXCERPT_CHARS ? `${flat.slice(0, BUG_REPORT_ACK_EXCERPT_CHARS - 1)}…` : flat;
 }

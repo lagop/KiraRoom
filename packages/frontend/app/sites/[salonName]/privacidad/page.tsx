@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { fetchSalonLegal } from "@/lib/public-site-server";
+import { safeHttpUrl } from "@/lib/safe-url";
 import {
   CONVERSATION_RETENTION_MONTHS,
   KIRAROOM_DOMAIN,
@@ -37,10 +38,10 @@ export default async function SalonPrivacyPage({ params }: Props) {
 
   return (
     <SalonLegalLayout slug={legal.slug} salonName={legal.name} title="Política de privacidad">
-      {legal.privacyPolicyUrl && (
+      {safeHttpUrl(legal.privacyPolicyUrl) && (
         <p className="rounded-lg bg-purple-50 p-3 text-sm">
           {legal.name} tiene su propia política de privacidad:{" "}
-          <a href={legal.privacyPolicyUrl} className="underline" rel="noopener noreferrer">
+          <a href={safeHttpUrl(legal.privacyPolicyUrl)!} className="underline" rel="noopener noreferrer">
             {legal.privacyPolicyUrl}
           </a>
           . Esta página resume cómo se tratan tus datos en su web de reservas.

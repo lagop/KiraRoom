@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { Star, ExternalLink, Check, AlertCircle } from "lucide-react";
 import { privacyPolicyUrl } from "@/lib/public-booking";
 import { PUBLISH_CONSENT_TEXT } from "@/lib/reviews";
+import { safeHttpUrl } from "@/lib/safe-url";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -186,11 +187,11 @@ export default function PublicReviewPage() {
             ? `${salon} la revisará y la mostrará en su página de reservas con tu nombre y la inicial de tu apellido.`
             : `${salon} la leerá. No se mostrará en su web: tu valoración solo cuenta en la media, sin tu nombre.`}
         </p>
-        {data.googleReviewLink && (
+        {safeHttpUrl(data.googleReviewLink) && (
           <div className="space-y-2">
             <p className="text-sm text-gray-700">Si quieres, también puedes dejar tu reseña en Google.</p>
             <a
-              href={data.googleReviewLink}
+              href={safeHttpUrl(data.googleReviewLink)!}
               target="_blank"
               rel="noreferrer"
               onClick={openGoogle}
