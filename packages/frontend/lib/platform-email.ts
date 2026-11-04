@@ -68,7 +68,7 @@ export function packUpdate(
   const priceText = form.price.trim().replace(/\s|€/g, "").replace(",", ".");
   const price = Number(priceText);
   if (!priceText || !Number.isFinite(price) || price < 0.5 || price > 10000) {
-    return { ok: false, error: "Pon un precio entre 0,50 € y 10.000 €, sin IVA." };
+    return { ok: false, error: "Pon un precio entre 0,50 € y 10.000 €: es el precio final, sin impuestos añadidos." };
   }
   return { ok: true, value: { marketingPackEmails: emails, marketingPackPriceCents: Math.round(price * 100) } };
 }

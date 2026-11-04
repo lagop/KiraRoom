@@ -4,7 +4,7 @@
  *   their backend routes;
  * - a cancellation at the end of the period, a subscription taken during
  *   the trial and Empresa's paid locations read right from the subscription;
- * - the plan prices say "+ IVA";
+ * - the plan prices are final: KiraRoom adds no VAT or IGIC (D6), so no "+ IVA";
  * - the SMS "Bonos de mensajes" card and its request are gone.
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/billing-subscription-api.spec.ts
@@ -85,7 +85,7 @@ async function run() {
   const messages = ["es", "en"].map((lang) => JSON.parse(fs.readFileSync(path.join(__dirname, "../messages", `${lang}.json`), "utf8")));
   const [es, en] = messages;
   const keys = [
-    "plusVat",
+    "finalPrice",
     "cancel.description",
     "cancel.scheduled",
     "cancel.undo",
@@ -107,9 +107,13 @@ async function run() {
   for (const k of keys) {
     check(`billing.${k} in es and en`, typeof get(es, k) === "string" && typeof get(en, k) === "string", k);
   }
-  check("the plan price says + IVA", get(es, "plusVat") === "+ IVA", get(es, "plusVat"));
-  check("the checkout copy says + IVA", /\+ IVA/.test(get(es, "checkoutDescription")), get(es, "checkoutDescription"));
-  check("the plan change copy says + IVA", /\+ IVA/.test(get(es, "switchDescription")), get(es, "switchDescription"));
+  check("no + IVA in any billing text", !/IVA/.test(JSON.stringify(es.billing)) && !/VAT/.test(JSON.stringify(en.billing)));
+  check("the checkout copy says it is the final price", /precio final, sin impuestos añadidos/.test(get(es, "checkoutDescription")), get(es, "checkoutDescription"));
+  check("the plan change copy says it is the final price", /precio final, sin impuestos añadidos/.test(get(es, "switchDescription")), get(es, "switchDescription"));
+  check("the upgrade card says 79 €/mes, not €79/mes", (() => {
+    const cta = fs.readFileSync(path.join(__dirname, "../src/components/billing/UpgradeCTA.tsx"), "utf8");
+    return cta.includes("{price} €/mes") && !cta.includes("€{price}");
+  })());
   check("the cancel dialog says it ends with the paid period", /hasta el final del período/.test(get(es, "cancel.description")), get(es, "cancel.description"));
   check("the SMS bundles texts are gone", get(es, "bundles") === undefined && get(en, "bundles") === undefined);
 

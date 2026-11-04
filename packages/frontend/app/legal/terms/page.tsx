@@ -40,7 +40,8 @@ export default function TermsPage() {
       <Section title="3. Planes y precios">
         <p>
           El servicio se ofrece bajo suscripción mensual. Los precios
-          vigentes están publicados en <code>/dashboard/billing</code>.
+          vigentes están publicados en <code>/dashboard/billing</code> y son
+          el precio final, sin impuestos añadidos.
           Las suscripciones se renuevan automáticamente al final de cada
           período salvo que el cliente cancele.
         </p>

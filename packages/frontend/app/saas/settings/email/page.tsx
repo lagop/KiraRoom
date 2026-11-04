@@ -243,7 +243,7 @@ export default function PlatformEmailPage() {
             </p>
             <p className="mt-1 text-sm text-gray-700">
               {cfg.marketingPack.offered
-                ? `A la venta: ${cfg.marketingPack.emails} emails por ${((cfg.marketingPack.priceCents ?? 0) / 100).toFixed(2).replace(".", ",")} € + IVA.`
+                ? `A la venta: ${cfg.marketingPack.emails} emails por ${((cfg.marketingPack.priceCents ?? 0) / 100).toFixed(2).replace(".", ",")} € (precio final).`
                 : "No está a la venta."}
             </p>
           </div>
@@ -261,7 +261,7 @@ export default function PlatformEmailPage() {
             />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-gray-700">Precio sin IVA (€)</span>
+            <span className="mb-1 block font-medium text-gray-700">Precio final (€)</span>
             <input
               type="text"
               inputMode="decimal"

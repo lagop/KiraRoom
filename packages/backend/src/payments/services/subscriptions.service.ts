@@ -607,13 +607,12 @@ export class SubscriptionsService {
         'Ya tienes una suscripción activa: cambia de plan en lugar de contratar otra.',
       );
     }
-    // A salon that can still edit its team (in trial, say) contracts a plan
-    // it fits in (B9). A cancelled or suspended one is read-only and could
-    // not deactivate anything: it is not blocked (the professionals limit
-    // still stops it adding more).
-    if (tenant.subscriptionStatus !== 'cancelled' && tenant.subscriptionStatus !== 'suspended') {
-      await this.assertWithinPlanLimits(tenantId, planId);
-    }
+    // Every salon contracts a plan it fits in (B9), and so does one coming
+    // back from cancelled or suspended (D8): the 409 lists how many to
+    // deactivate, and deactivating professionals is allowed while
+    // read-only (POST /admin/professionals/:id/deactivate). Reactivation
+    // goes through here too (reactivateSubscription).
+    await this.assertWithinPlanLimits(tenantId, planId);
     const trialEnd = checkoutTrialEnd(tenant, new Date());
 
     // Empresa bills per location from 1 upwards, and never fewer than the
@@ -704,13 +703,12 @@ export class SubscriptionsService {
       // on return (getCheckoutSessionStatus) instead of guessing (B15).
       success_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${this.configService.get('FRONTEND_URL', 'http://localhost:3000')}/dashboard/billing?subscription=cancelled`,
-      // VAT (H5). Nothing added the 21% or collected a NIF, so a product
-      // whose whole pitch is Spanish tax compliance was not charging tax on
-      // its own B2B invoices. The pricing page says "precios sin IVA", which
-      // makes the omission worse, not better: the customer was never shown a
-      // total they could reclaim.
+      // VAT: KiraRoom's tax regime charges no VAT or IGIC on its plans
+      // (owner's decision D6, 2026-11-04), so the price shown is the final
+      // price and Stripe Tax stays off (no tax_behavior either). The NIF is
+      // still collected and the customer carries the razón social (B1).
       //
-      // Behind a flag because `automatic_tax` requires Stripe Tax to be
+      // Should that change, the switch is here, behind a flag because `automatic_tax` requires Stripe Tax to be
       // switched on and an origin address set in the Stripe dashboard --
       // enabling it in code first makes every checkout fail. Turn it on in
       // Stripe, then turn it on in the platform console (or STRIPE_TAX_ENABLED).
