@@ -87,6 +87,13 @@ describe('ChannelReceptionistService', () => {
     }));
   });
 
+  it('sends nothing, not even the apology, in a conversation the salon paused (D15)', async () => {
+    const { svc, registry, receptionist } = setup({ response: { id: 'c', content: '', paused: true } });
+    await svc.enqueue('t1', msg());
+    expect(receptionist.sendMessage).toHaveBeenCalled();
+    expect(registry.send).not.toHaveBeenCalled();
+  });
+
   it('delivers the answer itself when sendMessage did not (e.g. AI allowance used up)', async () => {
     const { svc, registry } = setup({ response: { id: 'c', content: 'Hemos alcanzado el límite', channelDispatched: false } });
     await svc.enqueue('t1', msg({ channel: 'instagram' }));

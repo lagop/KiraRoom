@@ -150,6 +150,8 @@ export interface PublicSalonPage {
    * widget and the chat link there instead of /sites/<slug>/privacidad.
    */
   privacyPolicyUrl?: string | null;
+  /** Ajustes > Recepcionista "Chat en mi web"; absent (older servers): on. */
+  webChatEnabled?: boolean;
   /**
    * The tax the service prices include: IVA, IGIC (Canarias) or IPSI (Ceuta
    * y Melilla). The page says "Precios con IVA incluido" once. Absent from

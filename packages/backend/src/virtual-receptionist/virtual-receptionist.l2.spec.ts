@@ -169,13 +169,12 @@ function buildService({
   };
 
   const aiCounter = { evaluate: jest.fn().mockResolvedValue(fairUse), increment: jest.fn().mockResolvedValue(undefined) };
+  const inbox = { flagAttention: jest.fn().mockResolvedValue(true) };
 
   const svc = new VirtualReceptionistService(
     prismaStub as any,
     llmService as any,
     conversationService as any,
-    { findFAQMatch: jest.fn().mockResolvedValue(null) } as any,
-    { getCachedAnswer: jest.fn().mockResolvedValue(null), cacheAnswer: jest.fn() } as any,
     { suggest: jest.fn().mockResolvedValue(null) } as any,
     {} as any, // bookingService
     analysisService as any,
@@ -187,9 +186,10 @@ function buildService({
     { resolveEffectiveAiCap: jest.fn().mockReturnValue(500) } as any,
     salonTools,
     appointmentsStub as any,
+    inbox as any,
   );
 
-  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub, aiCounter, appointmentsStub };
+  return { svc, salonTools, llmService, conversationService, channelRegistry, prismaStub, aiCounter, appointmentsStub, inbox };
 }
 
 describe('VirtualReceptionistService orchestrator (L-2)', () => {
@@ -199,8 +199,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'Hola, ¿en qué puedo ayudarte?',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
           timestamp: new Date(),
           latency: 10,
@@ -222,7 +222,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(salonIdArg).toBe(TENANT_ID);
       expect(options).toBeDefined();
       expect(Array.isArray(options.tools)).toBe(true);
-      expect(options.tools.length).toBe(7);
+      expect(options.tools.length).toBe(8);
       expect(options.tools.map((t: any) => t.name).sort()).toEqual([
         'check_availability',
         'create_appointment',
@@ -231,6 +231,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         'list_professionals',
         'list_services',
         'propose_appointment',
+        'request_salon_attention',
       ]);
       expect(typeof options.executeTool).toBe('function');
       expect(options.maxToolIterations).toBe(5);
@@ -249,8 +250,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
             return {
               id: 'r-1',
               text: 'Aquí tienes el catálogo.',
-              provider: LLMProvider.MiniMax,
-              model: 'MiniMax-M3',
+              provider: LLMProvider.ANTHROPIC,
+              model: 'claude-haiku-5-5',
               usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
               timestamp: new Date(),
               latency: 10,
@@ -269,7 +270,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       });
 
       expect(reply.content).toBe('Aquí tienes el catálogo.');
-      expect(reply.provider).toBe(LLMProvider.MiniMax);
+      expect(reply.provider).toBe(LLMProvider.ANTHROPIC);
     });
 
     it('executor returns a structured error envelope when an unknown tool is called', async () => {
@@ -281,8 +282,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
             return {
               id: 'r-1',
               text: 'ok',
-              provider: LLMProvider.MiniMax,
-              model: 'MiniMax-M3',
+              provider: LLMProvider.ANTHROPIC,
+              model: 'claude-haiku-5-5',
               usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
               timestamp: new Date(),
               latency: 0,
@@ -308,8 +309,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'El Corte de Cabello Hombre cuesta 18.00 EUR.',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 5, completionTokens: 8, totalTokens: 13 },
           timestamp: new Date(),
           latency: 10,
@@ -330,7 +331,7 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
       expect(conversationService.addMessage.mock.calls[1][1]).toMatchObject({
         role: 'assistant',
         content: 'El Corte de Cabello Hombre cuesta 18.00 EUR.',
-        provider: LLMProvider.MiniMax,
+        provider: LLMProvider.ANTHROPIC,
       });
       expect(reply.content).toBe('El Corte de Cabello Hombre cuesta 18.00 EUR.');
     });
@@ -340,8 +341,8 @@ describe('VirtualReceptionistService orchestrator (L-2)', () => {
         generateResponse: jest.fn().mockResolvedValue({
           id: 'r-1',
           text: 'Hola, ¿en qué puedo ayudarte?',
-          provider: LLMProvider.MiniMax,
-          model: 'MiniMax-M3',
+          provider: LLMProvider.ANTHROPIC,
+          model: 'claude-haiku-5-5',
           usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
           timestamp: new Date(),
           latency: 0,
@@ -402,7 +403,7 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
   const reply = (text: string) => ({
     id: 'r',
     text,
-    provider: LLMProvider.MiniMax,
+    provider: LLMProvider.ANTHROPIC,
     model: 'm',
     usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     timestamp: new Date(),
@@ -594,7 +595,7 @@ describe('VirtualReceptionistService orchestrator (L-2) -- no false confirmation
 
 /** Receptionist core audit (V5, V8, V11, V17, V18). */
 describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only salons, notes, the cap', () => {
-  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.MiniMax, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
+  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.ANTHROPIC, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
   const send = (svc: any, message: string, extra: Record<string, unknown> = {}) =>
     svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web', ...extra });
 
@@ -627,8 +628,11 @@ describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only s
 
     const out: any = await send(svc, 'sí');
 
-    expect(out.content).toBe('He registrado tu cita: Corte con Ana García, el martes 10 de noviembre a las 10:00.');
-    expect(out.content).not.toMatch(/problemas técnicos/);
+    // Booked as pending: the salon confirms online bookings itself (D1).
+    expect(out.content).toBe(
+      'Tu cita queda reservada, pendiente de que Kira Room Test la confirme: Corte con Ana García, el martes 10 de noviembre a las 10:00.',
+    );
+    expect(out.content).not.toMatch(/problemas técnicos|confirmada/);
     // The reply is stored like any other.
     expect(conversationService.addMessage.mock.calls[1][1]).toMatchObject({ role: 'assistant', content: out.content });
     // The conversation is now hers, and the proposal keeps no contact details.
@@ -702,5 +706,68 @@ describe('VirtualReceptionistService orchestrator (L-2) -- failures, read-only s
     const out: any = await send(svc, 'hola');
 
     expect(out.content).toBe('Ahora mismo no puedo atenderte por aquí. Puedes llamar al salón al +34123456789.');
+  });
+});
+
+describe('VirtualReceptionistService orchestrator (L-2) -- the salon in the loop (D15)', () => {
+  const ok = (text: string) => ({ id: 'r', text, provider: LLMProvider.ANTHROPIC, model: 'm', usage: {}, timestamp: new Date(), latency: 1 });
+  const send = (svc: any, message: string, extra: Record<string, unknown> = {}) =>
+    svc.sendMessage({ clientId: 'visitor-1', salonId: TENANT_ID, message, channel: 'web', ...extra });
+
+  it('a paused conversation keeps her message and does not answer, nor call the model', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(ok('hola'));
+    const { svc, prismaStub, conversationService, channelRegistry, aiCounter } = buildService({ generateResponse }) as any;
+    prismaStub.chatConversation.findUnique.mockResolvedValue({ context: {}, assistantPausedAt: new Date() });
+
+    const out: any = await send(svc, '¿Me llamáis?');
+
+    expect(out).toMatchObject({ id: 'c-1', content: '', paused: true });
+    expect(generateResponse).not.toHaveBeenCalled();
+    expect(aiCounter.evaluate).not.toHaveBeenCalled();
+    expect(channelRegistry.send).not.toHaveBeenCalled();
+    expect(conversationService.addMessage).toHaveBeenCalledWith('c-1', expect.objectContaining({ role: 'user', content: '¿Me llamáis?' }));
+  });
+
+  it('tells the salon when she asks for a person, and gives the model a note without promises', async () => {
+    const generateResponse = jest.fn().mockResolvedValue(ok('Puedes llamar al salón al +34123456789.'));
+    const { svc, inbox } = buildService({ generateResponse }) as any;
+
+    await send(svc, 'Quiero hablar con una persona, por favor');
+
+    expect(inbox.flagAttention).toHaveBeenCalledWith(TENANT_ID, 'c-1', 'client_asked_person');
+    const notes: string = generateResponse.mock.calls[0][4].systemNotes;
+    expect(notes).toContain('Ya se ha avisado al salón');
+    expect(notes).toContain('no prometas');
+    expect(notes).toContain('+34123456789');
+  });
+
+  it('the model can tell the salon with request_salon_attention', async () => {
+    let toolResult: any;
+    const generateResponse = jest.fn().mockImplementation(async (_p: string, _h: any, _s: any, _f: any, opts: any) => {
+      toolResult = await opts.executeTool('request_salon_attention', { reason: 'cannot_answer' });
+      return ok('Eso no lo sé. Puedes llamar al salón al +34123456789.');
+    });
+    const { svc, inbox } = buildService({ generateResponse }) as any;
+
+    await send(svc, '¿Hacéis micropigmentación de cejas con anestesia?');
+
+    expect(inbox.flagAttention).toHaveBeenCalledWith(TENANT_ID, 'c-1', 'assistant_could_not_answer');
+    expect(toolResult).toMatchObject({ notified: true });
+    expect(toolResult.next).toMatch(/never promise/);
+  });
+
+  it('tells the salon when the assistant fails to answer', async () => {
+    const generateResponse = jest.fn().mockRejectedValue(new Error('overloaded'));
+    const { svc, inbox } = buildService({ generateResponse }) as any;
+
+    await send(svc, 'hola');
+
+    expect(inbox.flagAttention).toHaveBeenCalledWith(TENANT_ID, 'c-1', 'assistant_could_not_answer');
+  });
+
+  it('an ordinary question tells nobody', async () => {
+    const { svc, inbox } = buildService({ generateResponse: jest.fn().mockResolvedValue(ok('Abrimos a las 9.')) }) as any;
+    await send(svc, '¿A qué hora abrís?');
+    expect(inbox.flagAttention).not.toHaveBeenCalled();
   });
 });

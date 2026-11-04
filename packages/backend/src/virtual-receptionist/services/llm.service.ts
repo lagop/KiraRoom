@@ -8,7 +8,6 @@ import { PlatformLlmConfigService } from '../../platform/platform-llm-config.ser
 import { LLMProvider, LLMGenerationConfig, LLMCompletion } from '@kira/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FAQService } from './faq.service';
 import { FeatureFlagService } from '../../common/feature-flags/feature-flag.service';
 import { LlmUsageService } from '../../common/telemetry/llm-usage.service';
 import {
@@ -22,8 +21,8 @@ import { salonPublicUrlFromEnv } from '../../web-domain/public-url';
 import { publicPrice, publicPriceSettings } from '../../common/public-price';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from '../providers/anthropic-models';
 
-/** Providers whose implementation runs the tool loop. The others ignore `tools`. */
-const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC, LLMProvider.MiniMax]);
+/** Providers whose implementation runs the tool loop: Anthropic only. The others ignore `tools`. */
+const TOOL_CAPABLE_PROVIDERS = new Set<LLMProvider>([LLMProvider.ANTHROPIC]);
 
 /** Monday first: how a salon reads its own week. Data is keyed in English. */
 const WEEK_ORDER = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
@@ -142,8 +141,6 @@ function defaultModelFor(provider: LLMProvider, configured?: string): string {
   switch (provider) {
     case LLMProvider.ANTHROPIC:
       return DEFAULT_CLAUDE_MODEL;
-    case LLMProvider.MiniMax:
-      return 'MiniMax-M3';
     default:
       return 'gpt-4o-mini';
   }
@@ -167,9 +164,6 @@ interface SalonContext {
   language?: string;
   cancellationPolicy?: string;
   minCancelHours?: number;
-  // Populated by FAQService (in-memory default set today). Capped
-  // in buildSystemPrompt() to keep the prompt under ~2k tokens.
-  faqs?: Array<{ question: string; answer: string }>;
   /** `price` is what the client pays, tax included (common/public-price.ts). */
   services: Array<{ name: string; duration: number; price: number; category: string }>;
   professionals: Array<{ firstName: string; lastName: string; position?: string; specialties: string[] }>;
@@ -199,7 +193,6 @@ export class LLMService {
     private readonly providerFactory: LLMProviderFactory,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly faqService: FAQService,
     private readonly flags: FeatureFlagService,
     private readonly platformLlmConfig: PlatformLlmConfigService,
     private readonly llmUsage: LlmUsageService,
@@ -215,7 +208,7 @@ export class LLMService {
   /**
    * Convert a ConfigService value (string from env, number from override,
    * or undefined) to a finite number, falling back to `fallback` when the
-   * value is missing or NaN. The Anthropic / MiniMax SDK rejects numeric
+   * value is missing or NaN. The Anthropic SDK rejects numeric
    * params sent as strings, so every env-driven numeric field must pass
    * through here.
    */
@@ -289,9 +282,9 @@ export class LLMService {
     const config: LLMGenerationConfig = {
       model: route.model,
       // ConfigService.get() returns env vars as strings. The Anthropic
-      // / MiniMax SDK requires numeric fields to be actual numbers,
+      // SDK requires numeric fields to be actual numbers,
       // so coerce here. Sending "1" / "1500" / "0.95" as strings
-      // makes MiniMax reject the request with "invalid params".
+      // makes the API reject the request with "invalid params".
       temperature: this.coerceNumber(this.configService.get('LLM_TEMPERATURE'), 0.7),
       // 500 was too low -- with the system prompt + service catalog
       // the model would hit the cap mid-word ("Corte de Cab...").
@@ -607,11 +600,6 @@ export class LLMService {
           position: p.position || undefined,
           specialties: p.specialties as string[],
         })),
-        // FAQs are currently in-memory (FAQService seeds a default set).
-        // Once they move to Prisma, query them in the same transaction.
-        faqs: (await this.faqService
-          .getFAQs(tenant.id)
-          .catch(() => [])) as Array<{ question: string; answer: string }>,
         // The salon's real week: its own opening hours when the owner set
         // them (settings), else derived from its professionals' schedules.
         // This used to be hardcoded to
@@ -714,8 +702,8 @@ export class LLMService {
 
   /**
    * The fallback provider's route: its own key from the environment and its
-   * own model (LLM_FALLBACK_MODEL, else the provider's default). It used to
-   * get the platform model -- a Claude model id sent to MiniMax.
+   * own model (LLM_FALLBACK_MODEL, else the provider's default), never the
+   * platform's Claude model id.
    */
   private fallbackRoute(provider: LLMProvider): LlmRoute {
     return { provider, model: defaultModelFor(provider, this.configService.get('LLM_FALLBACK_MODEL')) };
@@ -773,10 +761,6 @@ export class LLMService {
    * live data (getDynamicContext). One source of truth shared by
    * every provider, so an OpenAI reply reads identically to an
    * Anthropic or Google one for the same salon + message.
-   *
-   * FAQs are capped at 20 entries with truncated Q/A so a salon
-   * with hundreds of them cannot blow the prompt beyond ~2k tokens
-   * with gpt-4o-mini.
    */
   private buildSystemPrompt(context: SalonContext | null): string {
     if (!context) {
@@ -790,13 +774,6 @@ export class LLMService {
     const baseSystem = getSystemPrompt(language, salonName, assistantName);
 
     const workingHours: Record<string, DayHours | DayHours[]> = context.workingHours ?? {};
-
-    const faqs = (context.faqs ?? [])
-      .slice(0, 20)
-      .map((f) => ({
-        question: f.question.slice(0, 200),
-        answer: f.answer.slice(0, 200),
-      }));
 
 const dynamicContext = getDynamicContext(language, {
       salonName,
@@ -824,15 +801,6 @@ const dynamicContext = getDynamicContext(language, {
       // (which the L-1 e2e suite catches as "tool not called").
       services: [],
       professionals: [],
-      // FAQs are different, and used to be dropped here by mistake: they
-      // were loaded, capped at 20 and truncated just above, and then
-      // thrown away. No tool retrieves them either — SALON_TOOLS covers
-      // services, professionals, availability and salon info, and nothing
-      // else — so the receptionist could not answer a single FAQ a salon
-      // had entered. The prompt is also the right home for them: FAQs are
-      // static reference text, so putting them behind a tool would spend a
-      // whole extra round-trip on every question.
-      faqs,
     });
 
     // The booking flow and the escalation rules were written for this

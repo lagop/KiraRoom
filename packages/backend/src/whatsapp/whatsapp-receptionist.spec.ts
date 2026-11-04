@@ -59,6 +59,13 @@ describe("WhatsAppReceptionistService", () => {
     expect(meta.markRead).toHaveBeenCalledWith("token", "pn1", "wamid.1");
   });
 
+  it("sends nothing in a conversation the salon paused (D15)", async () => {
+    const { service, meta, receptionist } = setup({ reply: { id: "c1", content: "", paused: true } });
+    await service.enqueue("t1", msg());
+    expect(receptionist.sendMessage).toHaveBeenCalled();
+    expect(meta.sendText).not.toHaveBeenCalled();
+  });
+
   it("handles a message Meta delivers twice only once", async () => {
     const { service, receptionist } = setup();
     await service.enqueue("t1", msg());

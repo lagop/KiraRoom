@@ -1637,7 +1637,8 @@
     "load_failed": "No se pudo cargar la configuración",
     "save_failed": "No se pudo guardar la configuración",
     "hours_need_both": "Indica tanto la hora de apertura como la de cierre",
-    "hours_open_before_close": "La hora de apertura debe ser anterior a la de cierre"
+    "hours_open_before_close": "La hora de apertura debe ser anterior a la de cierre",
+    "receptionist": "Recepcionista"
   },
   "clients": {
     "title": "Clientas",
@@ -2058,7 +2059,8 @@
     "pos_products": "Productos",
     "multi_location": "Multi-local",
     "calendar_feeds": "Calendarios",
-    "my_commissions": "Mis comisiones"
+    "my_commissions": "Mis comisiones",
+    "conversations": "Conversaciones"
   },
   "Failed to add points": "Failed to add points",
   "Failed to create professional": {
@@ -3429,6 +3431,64 @@
     "hello": "¡Hola!",
     "howCanIHelp": "¿En qué puedo ayudarte hoy?",
     "callSalonPrompt": "¿Prefieres hablar con el salón?",
-    "callSalon": "Llamar al salón ({phone})"
+    "callSalon": "Llamar al salón ({phone})",
+    "noHealthData": "No compartas datos de salud",
+    "privacy": "Privacidad",
+    "newConversation": "Nueva conversación"
+  },
+  "receptionistInbox": {
+    "title": "Conversaciones",
+    "subtitle": "Lo que tus clientas han hablado con la recepcionista virtual, en la web y en cada canal.",
+    "readOnly": "Desde aquí no se responde. Si una clienta necesita al salón, llámala o escríbele desde el teléfono del salón.",
+    "views": {
+      "all": "Todas",
+      "attention": "Esperan al salón",
+      "paused": "Asistente en pausa"
+    },
+    "channelAll": "Todos los canales",
+    "channels": {
+      "web": "Web",
+      "whatsapp": "WhatsApp",
+      "facebook": "Facebook",
+      "instagram": "Instagram",
+      "telegram": "Telegram"
+    },
+    "search": "Buscar en los mensajes",
+    "searchPlaceholder": "Nombre, servicio, palabra…",
+    "empty": "Todavía no hay conversaciones con la recepcionista.",
+    "emptyFiltered": "Ninguna conversación con estos filtros.",
+    "loadError": "No se han podido cargar las conversaciones.",
+    "retry": "Reintentar",
+    "messageCount": "{count} mensajes",
+    "attention": {
+      "client_asked_person": "Pidió hablar con el salón",
+      "assistant_could_not_answer": "El asistente no supo responder"
+    },
+    "pausedBadge": "En pausa",
+    "pause": "Pausar el asistente en esta conversación",
+    "resume": "Reanudar el asistente",
+    "markAttended": "Marcar como atendida",
+    "pauseTitle": "¿Pausar el asistente en esta conversación?",
+    "pauseBody": "El asistente deja de contestar a esta clienta en este canal. Sus mensajes se siguen guardando aquí. Reanúdalo cuando quieras.",
+    "pauseConfirm": "Pausar",
+    "resumeTitle": "¿Reanudar el asistente?",
+    "resumeBody": "El asistente vuelve a contestar a los próximos mensajes de esta clienta.",
+    "resumeConfirm": "Reanudar",
+    "cancel": "Cancelar",
+    "pausedToast": "Asistente en pausa en esta conversación",
+    "pausedToastBody": "Los mensajes nuevos llegan aquí sin respuesta automática.",
+    "resumedToast": "Asistente reanudado",
+    "attendedToast": "Conversación marcada como atendida",
+    "actionError": "No se ha podido guardar",
+    "pausedNote": "El asistente está en pausa: los mensajes nuevos de esta clienta no reciben respuesta automática.",
+    "back": "Volver a la lista",
+    "select": "Elige una conversación para leerla.",
+    "previous": "Anterior",
+    "next": "Siguiente",
+    "pageOf": "Página {page} de {pages}",
+    "clientFile": "Ver ficha de la clienta",
+    "you": "Clienta",
+    "assistant": "Asistente",
+    "notFound": "Esta conversación ya no existe."
   }
 }

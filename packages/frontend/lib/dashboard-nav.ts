@@ -31,7 +31,7 @@ export interface NavLink {
 }
 
 /** The counts the sidebar can show next to a link. */
-export type NavBadge = "time-off-requests";
+export type NavBadge = "time-off-requests" | "receptionist-attention";
 
 export interface NavGroup {
   kind: "group";
@@ -58,6 +58,12 @@ export const DASHBOARD_NAV: NavEntry[] = [
   link("appointments", "/dashboard/appointments", "nav.appointments", "calendar"),
   link("clients", "/dashboard/clients", "nav.clients", "users"),
   link("wait-list", "/dashboard/wait-list", "nav.wait_list", "hourglass"),
+  // The receptionist's conversations, every channel; the badge counts those
+  // where a client asked for the salon or the assistant could not answer.
+  link("conversations", "/dashboard/conversaciones", "nav.conversations", "message", {
+    managers: true,
+    badge: "receptionist-attention",
+  }),
   // A professional asks for their own time off; the salon answers in Solicitudes de ausencia.
   link("my-time-off", "/dashboard/mis-ausencias", "nav.my_time_off", "calendar-off", { staffOnly: true }),
   // Their own commissions, read-only (GET /commissions/me); the salon pays them in Comisiones.

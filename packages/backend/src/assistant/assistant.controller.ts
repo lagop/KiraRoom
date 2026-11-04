@@ -10,6 +10,7 @@ import { AssistantService } from './assistant.service';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
 import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
+import { aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 import {
   SendAssistantMessageSchema,
   CreateAssistantConversationSchema,
@@ -333,6 +334,7 @@ export class AssistantController {
           plan: true,
           subscriptionStatus: true,
           aiConversationsUsed: true,
+          aiConversationsPeriod: true,
         },
       }),
       this.assistantService['prisma'].assistantMessage.groupBy({
@@ -390,9 +392,9 @@ export class AssistantController {
         actions,
         approxCostEur: Number(approxCostEur.toFixed(2)),
         costCapTriggered: approxCostEur > PREMIUM_FEE_EUR * 3,
-        // The counter is cumulative (resets on the cron), so it's a
-        // separate signal from the per-month aggregates above.
-        cumulativeCounter: t.aiConversationsUsed,
+        // This month's AI message count (receptionist and copilot), the
+        // number the fair-use cap is checked against.
+        cumulativeCounter: aiUsageThisMonth(t),
       };
     });
     tenantRows.sort((a, b) => b.messages - a.messages);

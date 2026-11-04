@@ -1,6 +1,5 @@
 import { ConfigService } from "@nestjs/config";
 import { AnthropicProvider } from "./anthropic.provider";
-import { MiniMaxProvider } from "./MiniMax.provider";
 
 /**
  * The receptionist forces create_appointment when the client says yes to a
@@ -10,8 +9,6 @@ import { MiniMaxProvider } from "./MiniMax.provider";
  * - Anthropic always sent `tool_choice: auto`, so nothing was ever forced: a
  *   replayed chat showed the summary, got "si", and the model answered
  *   without calling create_appointment.
- * - MiniMax sent the forced choice on every round, so the model could never
- *   answer in text and the client got the generic fallback after booking.
  */
 const PROVIDERS = [
   {
@@ -19,15 +16,6 @@ const PROVIDERS = [
     build: (create: jest.Mock) => {
       const p = new AnthropicProvider({ get: () => undefined } as unknown as ConfigService);
       (p as any).anthropic = { messages: { create } };
-      (p as any).initializeClient = (): void => undefined;
-      return p;
-    },
-  },
-  {
-    name: "MiniMax",
-    build: (create: jest.Mock) => {
-      const p = new MiniMaxProvider({ get: () => undefined } as unknown as ConfigService);
-      (p as any).client = { messages: { create } };
       (p as any).initializeClient = (): void => undefined;
       return p;
     },

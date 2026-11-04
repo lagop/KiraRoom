@@ -15,11 +15,11 @@ import { cancellationPolicyLines, lateCancellationLine } from "../prompts/templa
 function promptFor(context: Record<string, unknown>): string {
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
   const stub = {} as any;
-  const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+  const service = new LLMService(stub, configService, stub, stub, stub, stub);
   return (service as any).buildSystemPrompt(context);
 }
 
-const BASE = { id: "tenant-1", name: "Salón Prueba", assistantName: "Kira", timezone: "Europe/Madrid", faqs: [] };
+const BASE = { id: "tenant-1", name: "Salón Prueba", assistantName: "Kira", timezone: "Europe/Madrid" };
 
 describe("the receptionist's cancellation policy", () => {
   it("0 hours is 'sin política', never 24", () => {

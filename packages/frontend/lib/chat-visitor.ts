@@ -42,7 +42,20 @@ const GENERIC = "Ahora mismo no puedo responder. Inténtalo de nuevo en un momen
 export function chatErrorText(error: unknown): string {
   const status = (error as { status?: number } | null)?.status;
   const message = (error as { message?: string } | null)?.message;
+  // Ajustes > Recepcionista "Chat en mi web" turned off after the page loaded.
+  if (status === 403 && message && /chat de este salón/i.test(message)) return message;
   if (status === 429 && message && /máximo de mensajes/i.test(message)) return message;
   if (status === 429) return "Estás escribiendo muy rápido. Espera un momento y vuelve a intentarlo.";
   return GENERIC;
+}
+
+/**
+ * The web chat forgets after this long without a message (the server's
+ * WEB_CHAT_SESSION_MINUTES): the next one starts a new conversation.
+ */
+export const WEB_CHAT_IDLE_MINUTES = 30;
+
+/** Whether the conversation on screen is over: nothing said for 30 minutes. */
+export function chatSessionExpired(lastActivityAt: number | null, now: number = Date.now()): boolean {
+  return lastActivityAt !== null && now - lastActivityAt > WEB_CHAT_IDLE_MINUTES * 60_000;
 }

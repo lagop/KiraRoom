@@ -96,6 +96,11 @@ export class UpdateTenantDto {
   @IsBoolean()
   timeOffEmailNotices?: boolean;
 
+  @ApiPropertyOptional({ description: "Ajustes > Recepcionista: the receptionist chat on the salon's public page" })
+  @IsOptional()
+  @IsBoolean()
+  webChatEnabled?: boolean;
+
   // Linked from the salon's public page. A handle ("@salonana") or a profile
   // link is stored as the canonical URL; blank or null clears it.
   @ApiPropertyOptional({ description: "Instagram: @handle or profile URL; blank clears it", nullable: true })

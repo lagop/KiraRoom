@@ -3,7 +3,7 @@ import { LLMProvider } from "@kira/shared";
 import { LLMService, NoToolProviderError } from "./services/llm.service";
 import { DEFAULT_CLAUDE_MODEL } from "./providers/anthropic-models";
 import { isReplyToProposal, PROPOSAL_MAX_AGE_MINUTES } from "./tools/receptionist-booking";
-import { asksForSuggestions } from "./virtual-receptionist.service";
+import { asksForSuggestions, VirtualReceptionistService } from "./virtual-receptionist.service";
 import { logId } from "./log-id";
 import {
   CONVERSATION_RETENTION_MONTHS,
@@ -28,7 +28,7 @@ const TOOLS = [{ name: "list_services", input_schema: { type: "object" } }];
 function promptFor(context: Record<string, unknown>): string {
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
   const stub = {} as any;
-  const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+  const service = new LLMService(stub, configService, stub, stub, stub, stub);
   return (service as any).buildSystemPrompt(context);
 }
 
@@ -86,7 +86,7 @@ function llm(opts: {
   const platform: any = { resolveEffective: async () => opts.platform ?? null };
   const usage = { record: jest.fn() };
   const prisma: any = { tenant: { findFirst: async () => null } };
-  const service = new LLMService(factory, config, prisma, {} as any, {} as any, platform, usage as any);
+  const service = new LLMService(factory, config, prisma, {} as any, platform, usage as any);
   return { service, usage };
 }
 
@@ -94,8 +94,8 @@ const done = { id: "r", text: "ok", usage: { promptTokens: 1, completionTokens: 
 
 describe("LLM provider, key and retries (V16, V17)", () => {
   it("passes the platform key to the provider and leaves the other providers' keys alone", async () => {
-    const before = process.env.MINIMAX_API_KEY;
-    process.env.MINIMAX_API_KEY = "fallback-provider-key";
+    const before = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "fallback-provider-key";
     try {
       const anthropic = { generateCompletion: jest.fn(async () => done) };
       const { service } = llm({
@@ -108,9 +108,10 @@ describe("LLM provider, key and retries (V16, V17)", () => {
       const [, , config, , options] = anthropic.generateCompletion.mock.calls[0] as any[];
       expect(config.model).toBe("claude-haiku-5-5");
       expect(options.credentials).toMatchObject({ apiKey: KEY });
-      expect(process.env.MINIMAX_API_KEY).toBe("fallback-provider-key");
+      expect(process.env.OPENAI_API_KEY).toBe("fallback-provider-key");
     } finally {
-      process.env.MINIMAX_API_KEY = before;
+      if (before === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = before;
     }
   });
 
@@ -319,5 +320,23 @@ describe("the public chat (V2, V7)", () => {
       "token",
     );
     expect(out).toEqual({ id: "c-1", content: "¡Hola!", requiresHandoff: false, visitorToken: "token" });
+  });
+});
+
+describe("a pending booking is not called confirmed (D1, V13)", () => {
+  const svc = Object.create(VirtualReceptionistService.prototype) as VirtualReceptionistService;
+  const salon = { name: "Salón Luna", phone: "", language: "es" as const, subscriptionStatus: "active" };
+  const booked = { service: "Corte", professional: "Ana García", date: "2026-11-10", time: "10:00" };
+
+  it("says reserved, pending the salon, when the salon confirms bookings itself", () => {
+    expect(svc.bookedConfirmationText({ ...booked, confirmed: false }, salon)).toBe(
+      "Tu cita queda reservada, pendiente de que Salón Luna la confirme: Corte con Ana García, el martes 10 de noviembre a las 10:00.",
+    );
+  });
+
+  it("says confirmed only when it is", () => {
+    expect(svc.bookedConfirmationText({ ...booked, confirmed: true, confirmationEmailSent: true }, salon)).toBe(
+      "Tu cita está confirmada: Corte con Ana García, el martes 10 de noviembre a las 10:00. Te hemos enviado la confirmación por email.",
+    );
   });
 });

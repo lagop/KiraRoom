@@ -5,7 +5,6 @@ import { OpenAIProvider } from '../providers/openai.provider';
 import { AnthropicProvider } from '../providers/anthropic.provider';
 import { GoogleProvider } from '../providers/google.provider';
 import { LlamaProvider } from '../providers/llama.provider';
-import { MiniMaxProvider } from '../providers/MiniMax.provider';
 
 @Injectable()
 export class LLMProviderFactory {
@@ -17,7 +16,6 @@ export class LLMProviderFactory {
     private readonly anthropicProvider: AnthropicProvider,
     private readonly googleProvider: GoogleProvider,
     private readonly llamaProvider: LlamaProvider,
-    private readonly MiniMaxProvider: MiniMaxProvider,
   ) {}
 
   /**
@@ -35,8 +33,6 @@ export class LLMProviderFactory {
         return this.googleProvider;
       case LLMProvider.LLAMA:
         return this.llamaProvider;
-      case LLMProvider.MiniMax:
-        return this.MiniMaxProvider;
       default:
         this.logger.warn(`Unknown provider type: ${providerType}, defaulting to OpenAI`);
         return this.openAIProvider;
@@ -52,7 +48,6 @@ export class LLMProviderFactory {
       LLMProvider.ANTHROPIC,
       LLMProvider.GOOGLE,
       LLMProvider.LLAMA,
-      LLMProvider.MiniMax,
     ];
   }
 
@@ -65,7 +60,7 @@ export class LLMProviderFactory {
       (p) => String(p).toLowerCase() === defaultProvider?.toLowerCase(),
     );
 
-    return provider || LLMProvider.OPENAI;
+    return provider || LLMProvider.ANTHROPIC;
   }
 
   /**
@@ -81,8 +76,6 @@ export class LLMProviderFactory {
         return !!this.configService.get('GOOGLE_API_KEY');
       case LLMProvider.LLAMA:
         return !!this.configService.get('LLAMA_API_KEY');
-      case LLMProvider.MiniMax:
-        return !!this.configService.get('MINIMAX_API_KEY');
       default:
         return false;
     }

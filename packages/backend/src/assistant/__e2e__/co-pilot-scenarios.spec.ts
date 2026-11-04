@@ -14,7 +14,7 @@ import {
  * scenario is a `describe` block so failures show up individually in
  * the Jest report.
  *
- *   RUN_LLM_E2E_TESTS=1 MINIMAX_API_KEY=... npm test -- \
+ *   RUN_LLM_E2E_TESTS=1 ANTHROPIC_API_KEY=... npm test -- \
  *     src/assistant/__e2e__/co-pilot-scenarios.spec.ts
  *
  *   E2E_ONLY=cp-draft-follow-up   # run a single scenario by id
@@ -22,7 +22,7 @@ import {
  */
 describe('P2A-staff-copilot L-1 scenarios (real LLM)', () => {
   if (SKIP_E2E) {
-    it.skip('L-1 scenarios skipped — set RUN_LLM_E2E_TESTS=1 with a valid MINIMAX_API_KEY to run', () => {});
+    it.skip('L-1 scenarios skipped — set RUN_LLM_E2E_TESTS=1 with a valid ANTHROPIC_API_KEY to run', () => {});
     return;
   }
 

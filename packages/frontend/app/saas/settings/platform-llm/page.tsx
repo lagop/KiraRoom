@@ -29,7 +29,6 @@ const PROVIDER_OPTIONS = [
   { value: "anthropic", label: "Anthropic (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5)" },
   { value: "openai", label: "OpenAI (GPT-4o, GPT-4o-mini)" },
   { value: "google", label: "Google Gemini" },
-  { value: "MiniMax", label: "MiniMax" },
 ];
 
 const MODEL_PRESETS: Record<string, string[]> = {
@@ -42,7 +41,6 @@ const MODEL_PRESETS: Record<string, string[]> = {
   ],
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
-  MiniMax: ["MiniMax-M3"],
 };
   const { toast } = useToast();
   const [cfg, setCfg] = useState<PlatformLlmConfig | null>(null);

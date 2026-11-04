@@ -9,7 +9,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 /**
  * L-1 (end-to-end) harness for the Virtual Receptionist.
  *
- * Boots the real Nest application (with real Prisma, real MiniMax
+ * Boots the real Nest application (with real Prisma, real Anthropic
  * provider, real orchestrator) and runs scripted scenarios against
  * it. Every assertion is on something the LLM has *no* flexibility
  * about — which tools were called, which substrings appear, that
@@ -19,14 +19,13 @@ import { PrismaService } from '../../common/prisma/prisma.service';
  * Scenarios run sequentially to keep the conversation history of the
  * test tenant consistent and to avoid hammering the LLM API. The
  * harness is gated by `RUN_LLM_E2E_TESTS=1` (plus a fresh
- * `MINIMAX_API_KEY`) so it never runs in CI without explicit opt-in.
+ * `ANTHROPIC_API_KEY`) so it never runs in CI without explicit opt-in.
  */
 
 export const TEST_TENANT_ID = process.env.E2E_TENANT_ID || 'e2e-tenant';
 export const SKIP_E2E =
   process.env.RUN_LLM_E2E_TESTS !== '1' ||
-  !process.env.MINIMAX_API_KEY ||
-  process.env.MINIMAX_API_KEY === 'your_MiniMax_api_key_here';
+  !process.env.ANTHROPIC_API_KEY;
 
 /* -------------------------------------------------------------------------- */
 /*  Assertions                                                               */

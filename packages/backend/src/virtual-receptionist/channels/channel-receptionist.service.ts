@@ -139,6 +139,8 @@ export class ChannelReceptionistService {
       },
     } as any);
 
+    // Paused from the panel: the message is kept, nothing is sent.
+    if ((response as { paused?: boolean } | null)?.paused) return;
     if (response?.id === 'error-response' || !response?.content?.trim()) {
       await reply(await this.apology(tenantId));
       return;

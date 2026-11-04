@@ -19,7 +19,7 @@ import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
  *
  * Imports the existing LLM infrastructure (VirtualReceptionistModule →
  * LLMService) and the PlatformModule (for the platform-wide provider
- * config) so we re-use the same Anthropic / OpenAI / Google / MiniMax
+ * config) so we re-use the same Anthropic / OpenAI / Google
  * route the customer chatbot uses. The copilot has its own tool set
  * and its own conversation tables.
  */

@@ -42,7 +42,7 @@ describe('Claude models and prices', () => {
 
   it('has no price, and no crash, for a model it does not know', () => {
     expect(priceFor('claude-3-haiku-20240307')).toBeNull();
-    expect(priceFor('MiniMax-M3')).toBeNull();
+    expect(priceFor('gpt-4o-mini')).toBeNull();
     expect(priceFor(undefined)).toBeNull();
     expect(estimateCostUsd('some-new-model', { promptTokens: 1000 })).toBeNull();
   });

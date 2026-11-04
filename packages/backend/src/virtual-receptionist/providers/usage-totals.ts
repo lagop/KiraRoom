@@ -22,7 +22,7 @@
  * and `totalTokens` stays "fresh input + output".
  */
 
-/** The `usage` shape both Anthropic and MiniMax return. */
+/** The `usage` shape the Anthropic API returns. */
 export interface AnthropicUsageLike {
   input_tokens?: number;
   output_tokens?: number;

@@ -31,7 +31,6 @@ const salonContext = {
   professionals: [
     { full_name: "Ana A", position: "estilista", specialties: "color" },
   ],
-  faqs: [{ question: "¿Aparcáis?", answer: "Hay parking en la plaza." }],
 };
 
 describe("system prompt cache prefix", () => {
@@ -81,9 +80,7 @@ describe("system prompt cache prefix", () => {
  * flow was appended to the real prompt that copy did not follow: it kept
  * reporting ~1970 tokens while the real prefix was nearer 3600.
  *
- * The size is not the same for every salon either: the FAQs are in the
- * prompt, up to 20 entries of 200 + 200 characters. Both ends are pinned
- * below. They are tripwires, not goals: when one fails, the prompt has moved
+ * It is a tripwire, not a goal: when it fails, the prompt has moved
  * relative to the line — re-read per-tenant cache_read_input_tokens in
  * production and correct the cost model, which currently has to assume no
  * caching at all.
@@ -100,10 +97,10 @@ describe("cache prefix length against the model minimum", () => {
   const JSON_CHARS_PER_TOKEN = 4.2;
   const UNDECIDABLE_BAND = 0.15;
 
-  function realSystemPrompt(faqs: Array<{ question: string; answer: string }>): string {
+  function realSystemPrompt(): string {
     const configService = { get: (): undefined => undefined } as unknown as ConfigService;
     const stub = {} as any;
-    const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+    const service = new LLMService(stub, configService, stub, stub, stub, stub);
     return (service as any).buildSystemPrompt({
       id: "tenant-1",
       name: "Salón Prueba",
@@ -112,7 +109,6 @@ describe("cache prefix length against the model minimum", () => {
       language: "es",
       minCancelHours: 24,
       workingHours: { monday: { start: "09:00", end: "19:00" } },
-      faqs,
     });
   }
 
@@ -125,24 +121,15 @@ describe("cache prefix length against the model minimum", () => {
 
   it("measures the prompt that is really sent, booking flow included", () => {
     // Guards against the measurement drifting from production again.
-    expect(realSystemPrompt([])).toContain("ETAPA: CONFIRMATION");
+    expect(realSystemPrompt()).toContain("ETAPA: CONFIRMATION");
   });
 
-  it("puts a salon without FAQs clearly over the minimum", () => {
+  it("puts every salon's prefix clearly over the minimum", () => {
     // It was ~3600 estimated, 88% of the minimum, when this was first pinned.
     // The booking rules and tool descriptions added since took it past the
-    // undecidable band, so every salon's prefix should now cache. Salons have
-    // no FAQs by default since the invented ones were removed, so this is
-    // the common case. If it drops back into the band, re-check production.
-    expect(ratioToMinimum(realSystemPrompt([]))).toBeGreaterThan(1 + UNDECIDABLE_BAND);
-  });
-
-  it("puts a salon with a full set of FAQs clearly over the minimum", () => {
-    // 20 entries at the 200-character caps buildSystemPrompt applies.
-    const full = Array.from({ length: 20 }, (_, i) => ({
-      question: `${i} ${"q".repeat(198)}`,
-      answer: `${i} ${"a".repeat(198)}`,
-    }));
-    expect(ratioToMinimum(realSystemPrompt(full))).toBeGreaterThan(1 + UNDECIDABLE_BAND);
+    // undecidable band, so every salon's prefix should cache (the prompt no
+    // longer varies by salon size: FAQs were removed). If it drops back into
+    // the band, re-check production.
+    expect(ratioToMinimum(realSystemPrompt())).toBeGreaterThan(1 + UNDECIDABLE_BAND);
   });
 });

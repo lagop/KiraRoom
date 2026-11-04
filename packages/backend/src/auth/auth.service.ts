@@ -106,6 +106,8 @@ export const TENANT_SETTINGS_SELECT = {
   bookingSlotMinutes: true,
   autoConfirmOnlineBookings: true,
   timeOffEmailNotices: true,
+  // Ajustes > Recepcionista "Chat en mi web".
+  webChatEnabled: true,
   // Tax identifiers (consumed by /dashboard/settings/fiscal).
   taxId: true,
   taxIdType: true,
