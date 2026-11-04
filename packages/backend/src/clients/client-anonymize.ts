@@ -119,6 +119,39 @@ export function whatsappVisitorKeys(phone: string | null | undefined): string[] 
   return keys;
 }
 
+/** The ways a phone may have been typed: as stored, digits only, with and without +34. */
+function phoneVariants(phone: string | null | undefined): string[] {
+  const raw = (phone ?? "").trim();
+  let digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length < 6) return [];
+  const out = new Set([raw, digits]);
+  if (digits.length > 9) out.add(`+${digits}`);
+  if (digits.length === 9) {
+    out.add(`34${digits}`);
+    out.add(`+34${digits}`);
+  }
+  if (digits.length === 11 && digits.startsWith("34")) out.add(digits.slice(2));
+  return [...out].filter(Boolean);
+}
+
+/**
+ * Receptionist conversations, on any channel, where someone proposed a
+ * booking with her email or phone and never booked it (a booked one is
+ * linked to her by clientId). Matched for erasure only: the text around a
+ * proposal may have been written by whoever typed her details.
+ */
+export function proposalContactFilters(
+  email: string | null | undefined,
+  phone: string | null | undefined,
+): Prisma.ChatConversationWhereInput[] {
+  const emails = email ? [...new Set([email, email.trim().toLowerCase()])] : [];
+  return [
+    ...emails.map((e) => ({ context: { path: ["pendingBooking", "email"], equals: e } })),
+    ...phoneVariants(phone).map((p) => ({ context: { path: ["pendingBooking", "phone"], equals: p } })),
+  ];
+}
+
 /**
  * Models that point at a client and that anonymisation leaves as they are:
  * money and points, with no personal data of their own (a till sale, PosSale,
@@ -192,14 +225,21 @@ export async function anonymizeClients(
       data: { responses: {}, signatureName: ANONYMIZED_NAME, signatureIpHash: "" },
     });
 
-    // Conversations with the receptionist (messages and intents cascade).
+    // Conversations with the receptionist (messages and intents cascade):
+    // hers by client (on every channel, the web chat included once she
+    // booked there), her WhatsApp number's, and any unbooked proposal that
+    // carries her email or phone.
     await tx.chatConversation.deleteMany({ where: { tenantId, clientId: inIds } });
-    for (const keys of chunks(visitorKeys, 100)) {
+    const unlinked: Prisma.ChatConversationWhereInput[] = [
+      ...visitorKeys.map((key) => ({ context: { path: ["visitorKey"], equals: key } })),
+      ...clients.flatMap((c) => proposalContactFilters(c.email, c.phone)),
+    ];
+    for (const filters of chunks(unlinked, 100)) {
       await tx.chatConversation.deleteMany({
         where: {
           tenantId,
           clientId: null,
-          OR: keys.map((key) => ({ context: { path: ["visitorKey"], equals: key } })),
+          OR: filters,
         },
       });
     }

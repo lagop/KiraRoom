@@ -23,6 +23,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ConversationMemoryRepository } from './repositories/conversation-memory.repository';
 import { ProfessionalsModule } from '../professionals/professionals.module';
 import { AiFairUseResetScheduler } from './schedulers/ai-fair-use-reset.scheduler';
+import { ConversationRetentionScheduler } from './schedulers/conversation-retention.scheduler';
 import { UpsellModule } from '../upsell/upsell.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { SalonToolsService } from './tools/salon-tools';
@@ -87,6 +88,7 @@ import { ChannelHealthModule } from '../channel-health/channel-health.module';
     MetaGraphClient,
     TelegramBotClient,
     SalonToolsService,
+    ConversationRetentionScheduler,
   ],
   exports: [
     ChannelReceptionistService,

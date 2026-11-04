@@ -29,6 +29,13 @@ import { locationLabel } from './receptionist-locations';
 export const MAX_BOOKINGS_PER_CONVERSATION = 2;
 export const MAX_CHAT_BOOKINGS_PER_EMAIL_PER_DAY = 3;
 
+/**
+ * How long a summary can wait for its "sí". Older than this, a yes no longer
+ * books it: the slot may have gone and the client may be answering something
+ * else entirely.
+ */
+export const PROPOSAL_MAX_AGE_MINUTES = 30;
+
 export interface PendingBooking {
   serviceId: string;
   professionalId?: string;
@@ -44,7 +51,55 @@ export interface PendingBooking {
   locationId?: string;
   /** Client messages in the conversation when this was proposed. */
   proposedAtUserTurn: number;
+  /** When it was proposed (ISO). Older proposals have none. */
+  proposedAt?: string;
   bookedAppointmentId?: string;
+}
+
+/**
+ * Is the client's current message the reply to this proposal? Only the very
+ * next message after the summary is, and only while the proposal is fresh.
+ *
+ * "There is a proposal and the client said yes" was the old test: a summary
+ * for a cut on Tuesday, then "¿hacéis uñas?", "¿te miro hueco?", "sí" -- and
+ * the server booked the cut, which the client had not confirmed. A proposal
+ * the model shows again is proposed again, which moves proposedAtUserTurn.
+ *
+ * `currentUserTurn` counts the client's messages including the current one.
+ */
+export function isReplyToProposal(
+  pending: Pick<PendingBooking, 'proposedAtUserTurn' | 'proposedAt' | 'bookedAppointmentId'> | undefined | null,
+  currentUserTurn: number,
+  now: Date = new Date(),
+): boolean {
+  if (!pending || pending.bookedAppointmentId) return false;
+  if (currentUserTurn !== pending.proposedAtUserTurn + 1) return false;
+  if (pending.proposedAt) {
+    const age = now.getTime() - new Date(pending.proposedAt).getTime();
+    if (!(age >= 0 && age <= PROPOSAL_MAX_AGE_MINUTES * 60_000)) return false;
+  }
+  return true;
+}
+
+/**
+ * What stays of a proposal once it is booked: enough to recognise the booked
+ * time and never book it twice. The client's name, phone and email are on
+ * the appointment and her client record; the conversation does not need a
+ * second copy.
+ */
+function bookedOnly(p: PendingBooking, appointmentId: string): PendingBooking {
+  return {
+    serviceId: p.serviceId,
+    professionalId: p.professionalId,
+    date: p.date,
+    time: p.time,
+    locationId: p.locationId,
+    firstName: '',
+    lastName: '',
+    proposedAtUserTurn: p.proposedAtUserTurn,
+    proposedAt: p.proposedAt,
+    bookedAppointmentId: appointmentId,
+  };
 }
 
 interface ConversationState {
@@ -117,18 +172,30 @@ function toDto(p: Omit<PendingBooking, 'proposedAtUserTurn' | 'bookedAppointment
 }
 
 async function readState(ctx: SalonToolContext): Promise<ConversationState> {
-  const row = await ctx.prisma.chatConversation.findUnique({
-    where: { id: ctx.conversation!.id },
-    select: { context: true },
-  });
-  const context = row?.context;
-  return context && typeof context === 'object' ? { ...(context as ConversationState) } : {};
+  return (await readRow(ctx)).state;
 }
 
-async function writeState(ctx: SalonToolContext, state: ConversationState): Promise<void> {
+async function readRow(ctx: SalonToolContext): Promise<{ state: ConversationState; clientId: string | null }> {
+  const row = await ctx.prisma.chatConversation.findUnique({
+    where: { id: ctx.conversation!.id },
+    select: { context: true, clientId: true },
+  });
+  const context = row?.context;
+  return {
+    state: context && typeof context === 'object' ? { ...(context as ConversationState) } : {},
+    clientId: (row as { clientId?: string | null } | null)?.clientId ?? null,
+  };
+}
+
+/**
+ * `clientId` links the conversation to the client the booking was made for,
+ * so her data export and erasure find it: a visitor's conversation had no
+ * client, and stayed behind when she asked to be erased.
+ */
+async function writeState(ctx: SalonToolContext, state: ConversationState, clientId?: string): Promise<void> {
   await ctx.prisma.chatConversation.update({
     where: { id: ctx.conversation!.id },
-    data: { context: state as any },
+    data: { context: state as any, ...(clientId ? { clientId } : {}) },
   });
 }
 
@@ -287,7 +354,11 @@ export async function proposeAppointment(
   // Where, for a salon with several locations: its name and address.
   const location = await locationLabel(ctx, details.locationId);
   const state = await readState(ctx);
-  state.pendingBooking = { ...details, proposedAtUserTurn: await userTurns(ctx) };
+  state.pendingBooking = {
+    ...details,
+    proposedAtUserTurn: await userTurns(ctx),
+    proposedAt: new Date().toISOString(),
+  };
   await writeState(ctx, state);
 
   return {
@@ -315,7 +386,8 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
   const refused = refuseUnlessPrivateConversation(ctx);
   if (refused) return refused;
 
-  const state = await readState(ctx);
+  const row = await readRow(ctx);
+  const state = row.state;
   const pending = state.pendingBooking;
   if (!pending) {
     return { created: false, error: 'nothing_proposed', message: 'Propose the booking with propose_appointment first.' };
@@ -331,9 +403,20 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     };
   }
 
-  // The client must have answered the summary, and answered yes.
-  if ((await userTurns(ctx)) <= pending.proposedAtUserTurn) {
+  // The client must have answered the summary, and answered yes: with the
+  // very next message after it (see isReplyToProposal).
+  const turns = await userTurns(ctx);
+  if (turns <= pending.proposedAtUserTurn) {
     return { created: false, error: 'not_confirmed', message: 'Wait for the client to reply to the summary.' };
+  }
+  if (!isReplyToProposal(pending, turns)) {
+    return {
+      created: false,
+      error: 'not_confirmed',
+      message:
+        'The client is no longer answering that summary. If they still want that booking, call ' +
+        'propose_appointment again and show the new summary.',
+    };
   }
   if (!isAffirmative(ctx.conversation!.lastUserMessage)) {
     return {
@@ -369,9 +452,11 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
 
   try {
     const appointment: any = await ctx.appointmentsService!.bookOnline(ctx.tenantId, toDto(pending));
-    state.pendingBooking = { ...pending, bookedAppointmentId: appointment.id };
+    state.pendingBooking = bookedOnly(pending, appointment.id);
     state.chatBookings = (state.chatBookings ?? 0) + 1;
-    await writeState(ctx, state);
+    // A conversation already linked to someone (a WhatsApp client) stays so.
+    const linkTo = !row.clientId && typeof appointment.clientId === 'string' ? appointment.clientId : undefined;
+    await writeState(ctx, state, linkTo);
     // No appointmentId: the model showed the UUID to clients as a
     // "referencia". The id stays in the conversation state.
     return {
@@ -391,10 +476,13 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     };
   } catch (err) {
     const status = err instanceof HttpException ? err.getStatus() : undefined;
+    // The booking service's own refusals are written for the client ("Este
+    // salón no acepta reservas en este momento"). Anything else is an
+    // internal error whose text -- a database message -- is not passed on.
     return {
       created: false,
       error: status === 409 ? 'slot_unavailable' : 'booking_failed',
-      message: (err as Error).message,
+      message: err instanceof HttpException ? err.message : 'The booking could not be made.',
     };
   }
 }

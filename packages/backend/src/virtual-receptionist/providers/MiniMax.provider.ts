@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion, ChatMessage } from '@kira/shared';
 import Anthropic from '@anthropic-ai/sdk';
 import { createUsageAccumulator } from './usage-totals';
+import { describeApiError, providerError, ProviderCredentials } from './anthropic.provider';
 
 /**
  * MiniMax (minimax.io) provider.
@@ -48,7 +49,7 @@ export class MiniMaxProvider {
       this.configService.get('MINIMAX_BASE_URL') || MiniMaxProvider.BASE_URL;
 
     if (apiKey && (apiKey !== this.lastInitKey || baseURL !== this.lastInitBaseUrl)) {
-      this.client = new Anthropic({ apiKey, baseURL });
+      this.client = new Anthropic({ apiKey, baseURL, maxRetries: 0 });
       this.lastInitKey = apiKey;
       this.lastInitBaseUrl = baseURL;
       this.logger.log(`MiniMax client initialized (baseURL=${baseURL})`);
@@ -76,23 +77,37 @@ export class MiniMaxProvider {
        * intents that must be grounded in DB data, e.g. CHECK_AVAILABILITY).
        */
       toolChoice?: 'auto' | 'any' | { type: 'tool'; name: string };
+      /** The platform's key, passed in rather than written to process.env. */
+      credentials?: ProviderCredentials;
+      /** The server's notes for this turn: added to the system prompt, never to the client's message. */
+      systemNotes?: string;
+      /** Retries one request (not the whole tool loop); see LLMService. */
+      callWithRetry?: <T>(fn: () => Promise<T>) => Promise<T>;
     },
   ): Promise<LLMCompletion> {
-    if (!this.client) {
-      throw new Error('MiniMax client not initialized');
-    }
-
     const startTime = Date.now();
-    // P2A-platform-llm: pick up any new env-injected key/baseUrl set by
-    // PlatformLlmConfigService.onApplicationBootstrap (or by a
-    // subsequent admin save via process.env).
-    this.initializeClient();
-    if (!this.client) throw new Error('MiniMax client not initialized');
+    let client: Anthropic | null;
+    if (options?.credentials?.apiKey) {
+      client = this.clientFor(options.credentials);
+    } else {
+      // P2A-platform-llm: pick up any new env-injected key/baseUrl set by
+      // PlatformLlmConfigService.onApplicationBootstrap.
+      this.initializeClient();
+      client = this.client;
+    }
+    if (!client) throw new Error('MiniMax client not initialized');
+    const call = options?.callWithRetry ?? (<T>(fn: () => Promise<T>) => fn());
+    const system = options?.systemNotes ? `${systemPrompt}\n\n${options.systemNotes}` : systemPrompt;
 
     const tools = options?.tools;
     const executeTool = options?.executeTool;
     const maxIter = options?.maxToolIterations ?? 5;
     const toolChoice = options?.toolChoice ?? 'auto';
+    // See usage-totals.ts: the loop below reassigns `response`, so the
+    // usage has to be accumulated as it arrives. Out here so a request that
+    // fails half-way still reports what it spent.
+    const usage = createUsageAccumulator();
+    const model = config.model || MiniMaxProvider.DEFAULT_MODEL;
 
     try {
       const messages = this.buildConversationHistory(
@@ -100,7 +115,6 @@ export class MiniMaxProvider {
         currentUserMessage,
       );
 
-      const model = config.model || MiniMaxProvider.DEFAULT_MODEL;
       const temperature = this.clampTemperature(config.temperature);
 
       // P2A-anthropic-params: newer Anthropic models (Haiku 4.5,
@@ -112,23 +126,21 @@ export class MiniMaxProvider {
         config.temperature === undefined &&
         config.topP !== undefined;
 
-      // See usage-totals.ts: the loop below reassigns `response`, so the
-      // usage has to be accumulated as it arrives.
-      const usage = createUsageAccumulator();
-
-      let response = await this.client.messages.create({
-        model,
-        system: systemPrompt,
-        messages,
-        temperature,
-        max_tokens: config.maxTokens,
-        ...(useTopP
-          ? { top_p: config.topP }
-          : {}),
-        ...(tools && tools.length > 0
-          ? { tools: tools as any, tool_choice: this.buildToolChoice(toolChoice) }
-          : {}),
-      });
+      let response = await call(() =>
+        client.messages.create({
+          model,
+          system,
+          messages,
+          temperature,
+          max_tokens: config.maxTokens,
+          ...(useTopP
+            ? { top_p: config.topP }
+            : {}),
+          ...(tools && tools.length > 0
+            ? { tools: tools as any, tool_choice: this.buildToolChoice(toolChoice) }
+            : {}),
+        }),
+      );
       usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
@@ -188,15 +200,17 @@ export class MiniMaxProvider {
             this.logger.warn(
               `Tool execution failed name=${tu.name} err=${message} rawType=${typeof err} rawConstructor=${(err as any)?.constructor?.name} stack=${e?.stack?.split('\n').slice(0, 3).join(' | ')}`,
             );
+            // The reason stays in the log, not in front of the model.
+            const failure = { error: 'tool_failed' };
             executedTools.push({
               name: tu.name,
               input: tu.input,
-              result: { error: message },
+              result: failure,
             });
             toolResultBlocks.push({
               type: 'tool_result',
               tool_use_id: tu.id,
-              content: JSON.stringify({ error: message }),
+              content: JSON.stringify(failure),
               is_error: true,
             });
           }
@@ -207,24 +221,26 @@ export class MiniMaxProvider {
           content: toolResultBlocks as any,
         });
 
-        response = await this.client.messages.create({
-          model,
-          system: systemPrompt,
-          messages,
-          temperature,
-          max_tokens: config.maxTokens,
-          ...(useTopP
-            ? { top_p: config.topP }
-            : {}),
-          // The caller's choice applies to the first request only. Forced
-          // here as well, the model could never answer in text: a forced
-          // create_appointment was called again every round until maxIter,
-          // and the client got the generic fallback instead of the
-          // confirmation.
-          ...(tools && tools.length > 0
-            ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
-            : {}),
-        });
+        response = await call(() =>
+          client.messages.create({
+            model,
+            system,
+            messages,
+            temperature,
+            max_tokens: config.maxTokens,
+            ...(useTopP
+              ? { top_p: config.topP }
+              : {}),
+            // The caller's choice applies to the first request only. Forced
+            // here as well, the model could never answer in text: a forced
+            // create_appointment was called again every round until maxIter,
+            // and the client got the generic fallback instead of the
+            // confirmation.
+            ...(tools && tools.length > 0
+              ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
+              : {}),
+          }),
+        );
         usage.add(response.usage);
       }
 
@@ -266,9 +282,20 @@ export class MiniMaxProvider {
         ...({ toolsExecuted: executedTools } as any),
       };
     } catch (error) {
-      this.logger.error('Error generating MiniMax completion:', error);
-      throw new Error(`MiniMax API error: ${error.message}`);
+      this.logger.error(`Error generating MiniMax completion: ${describeApiError(error)}`);
+      throw providerError(`MiniMax API error: ${(error as Error).message}`, error, usage.totals(), model);
     }
+  }
+
+  /** A client for the key the caller passed, reused while it is the same. */
+  private explicit: { key: string; baseURL: string; client: Anthropic } | null = null;
+
+  private clientFor(c: ProviderCredentials): Anthropic {
+    const baseURL = c.baseUrl || this.configService.get('MINIMAX_BASE_URL') || MiniMaxProvider.BASE_URL;
+    if (!this.explicit || this.explicit.key !== c.apiKey || this.explicit.baseURL !== baseURL) {
+      this.explicit = { key: c.apiKey, baseURL, client: new Anthropic({ apiKey: c.apiKey, baseURL, maxRetries: 0 }) };
+    }
+    return this.explicit.client;
   }
 
   async getAvailableModels(): Promise<any[]> {

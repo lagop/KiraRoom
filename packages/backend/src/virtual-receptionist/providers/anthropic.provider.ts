@@ -36,12 +36,7 @@ export class AnthropicProvider {
       apiKey &&
       (apiKey !== this.lastInitKey || workspaceId !== this.lastInitWorkspaceId)
     ) {
-      this.anthropic = new Anthropic({
-        apiKey,
-        ...(workspaceId
-          ? { defaultHeaders: { 'anthropic-workspace-id': String(workspaceId) } }
-          : {}),
-      });
+      this.anthropic = buildClient(apiKey, workspaceId);
       this.lastInitKey = apiKey;
       this.lastInitWorkspaceId = workspaceId ?? null;
       this.logger.log(
@@ -66,13 +61,33 @@ export class AnthropicProvider {
        */
       maxToolIterations?: number;
       toolChoice?: 'auto' | 'any' | { type: 'tool'; name: string };
+      /**
+       * The platform's key, passed in rather than written to process.env
+       * (which wiped every other provider's key on each message, so the
+       * fallback provider never had one).
+       */
+      credentials?: ProviderCredentials;
+      /**
+       * The server's notes for this turn, in a system block of their own
+       * after the cached prompt, never inside the client's message.
+       */
+      systemNotes?: string;
+      /** Retries one request (not the whole tool loop); see LLMService. */
+      callWithRetry?: <T>(fn: () => Promise<T>) => Promise<T>;
     },
   ): Promise<LLMCompletion> {
     // P2A-platform-llm: pick up env-injected key changes (admin UI).
-    this.initializeClient();
-    if (!this.anthropic) {
+    let client: Anthropic | null;
+    if (options?.credentials?.apiKey) {
+      client = this.clientFor(options.credentials);
+    } else {
+      this.initializeClient();
+      client = this.anthropic;
+    }
+    if (!client) {
       throw new Error('Anthropic client not initialized');
     }
+    const call = options?.callWithRetry ?? (<T>(fn: () => Promise<T>) => fn());
 
     const startTime = Date.now();
     const tools = options?.tools;
@@ -84,6 +99,11 @@ export class AnthropicProvider {
     // left to the model, which often answered without calling it. Forcing the
     // follow-up requests too would keep calling the tool until maxIter.
     const firstToolChoice = this.toToolChoice(options?.toolChoice ?? 'auto');
+    // Usage is summed across every round-trip, not read off the last
+    // response: the loop below reassigns `response`, so reading its usage
+    // after the loop silently dropped every intermediate request. Declared
+    // here so a request that fails half-way still reports what it spent.
+    const usage = createUsageAccumulator();
 
     try {
       const messages: any[] = this.buildConversationHistory(
@@ -144,27 +164,29 @@ export class AnthropicProvider {
       // from 512 tokens, and the messages now carry breakpoints too (end of
       // the stored history, and the last message for the tool loop), so a
       // longer conversation clears the minimum even on Haiku 4.5.
+      //
+      // The turn's server notes go in a second block, after the breakpoint:
+      // the cached prefix stays the same for every conversation of the salon.
       const cacheableSystem = [
         {
           type: "text" as const,
           text: systemPrompt,
           cache_control: { type: "ephemeral" as const },
         },
+        ...(options?.systemNotes ? [{ type: "text" as const, text: options.systemNotes }] : []),
       ];
-      // Usage is summed across every round-trip, not read off the last
-      // response: the loop below reassigns `response`, so reading its usage
-      // after the loop silently dropped every intermediate request.
-      const usage = createUsageAccumulator();
 
-      let response: any = await this.anthropic.messages.create({
-        model: config.model,
-        system: cacheableSystem,
-        messages: withCacheBreakpoints(messages, historyCount) as any,
-        ...modelParams,
-        ...(tools && tools.length > 0
-          ? { tools: tools as any, tool_choice: firstToolChoice }
-          : {}),
-      } as any);
+      let response: any = await call(() =>
+        client.messages.create({
+          model: config.model,
+          system: cacheableSystem,
+          messages: withCacheBreakpoints(messages, historyCount) as any,
+          ...modelParams,
+          ...(tools && tools.length > 0
+            ? { tools: tools as any, tool_choice: firstToolChoice }
+            : {}),
+        } as any),
+      );
       usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
@@ -217,15 +239,19 @@ export class AnthropicProvider {
             this.logger.warn(
               `Tool execution failed name=${tu.name} err=${message}`,
             );
+            // The reason stays in the log: the raw exception text (a
+            // database message) is not something to put in front of the
+            // model, which may repeat it to the client.
+            const failure = { error: 'tool_failed' };
             executedTools.push({
               name: tu.name,
               input: tu.input,
-              result: { error: message },
+              result: failure,
             });
             toolResultBlocks.push({
               type: 'tool_result',
               tool_use_id: tu.id,
-              content: JSON.stringify({ error: message }),
+              content: JSON.stringify(failure),
               is_error: true,
             });
           }
@@ -236,15 +262,17 @@ export class AnthropicProvider {
           content: toolResultBlocks as any,
         });
 
-        response = await this.anthropic.messages.create({
-          model: config.model,
-          system: cacheableSystem,
-          messages: withCacheBreakpoints(messages, historyCount) as any,
-          ...modelParams,
-          ...(tools && tools.length > 0
-            ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
-            : {}),
-        } as any);
+        response = await call(() =>
+          client.messages.create({
+            model: config.model,
+            system: cacheableSystem,
+            messages: withCacheBreakpoints(messages, historyCount) as any,
+            ...modelParams,
+            ...(tools && tools.length > 0
+              ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
+              : {}),
+          } as any),
+        );
         usage.add(response.usage);
       }
 
@@ -256,7 +284,9 @@ export class AnthropicProvider {
         this.logger.warn(`Anthropic declined the request (stop_reason=refusal, model=${config.model})`);
         return {
           id: response.id,
-          text: 'Ahora mismo no puedo responder a eso por aquí. Le paso tu mensaje al equipo del salón para que te conteste.',
+          // No "le paso tu mensaje al equipo": nothing passes it on. The
+          // receptionist adds the salon's phone (VirtualReceptionistService).
+          text: 'Ahora mismo no puedo responder a eso por aquí.',
           usage: usage.totals(),
           model: config.model,
           provider: LLMProvider.ANTHROPIC,
@@ -298,8 +328,22 @@ export class AnthropicProvider {
       // showed "Error generating Anthropic completion:" with no cause. The
       // SDK's message is the API's error body (type and text), never the key.
       this.logger.error(`Error generating Anthropic completion: ${describeApiError(error)}`);
-      throw new Error(`Anthropic API error: ${(error as Error).message}`);
+      // The HTTP status and what the request had already spent travel with
+      // the error: LLMService records the usage (it was lost before), and
+      // decides on retries from the status, not from digits in the text.
+      throw providerError(`Anthropic API error: ${(error as Error).message}`, error, usage.totals(), config.model);
     }
+  }
+
+  /** A client for the key the caller passed, reused while the key is the same. */
+  private explicit: { key: string; workspaceId: string | null; client: Anthropic } | null = null;
+
+  private clientFor(c: ProviderCredentials): Anthropic {
+    const workspaceId = c.workspaceId ?? null;
+    if (!this.explicit || this.explicit.key !== c.apiKey || this.explicit.workspaceId !== workspaceId) {
+      this.explicit = { key: c.apiKey, workspaceId, client: buildClient(c.apiKey, workspaceId) };
+    }
+    return this.explicit.client;
   }
 
   /** The current Claude models (anthropic-models.ts); costPerToken is USD per 1K input tokens. */
@@ -368,6 +412,41 @@ export class AnthropicProvider {
     if (choice === 'auto') return { type: 'auto' };
     return { type: 'tool', name: choice.name };
   }
+}
+
+/** A provider key handed to the provider for one request. */
+export interface ProviderCredentials {
+  apiKey: string;
+  baseUrl?: string | null;
+  workspaceId?: string | null;
+}
+
+/**
+ * The SDK's own retries are off (it retried every request twice more, under
+ * our retries of the whole tool loop): LLMService retries each request.
+ */
+function buildClient(apiKey: string, workspaceId: string | null | undefined): Anthropic {
+  return new Anthropic({
+    apiKey,
+    maxRetries: 0,
+    ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': String(workspaceId) } } : {}),
+  });
+}
+
+/** An error that keeps the HTTP status of its cause and the usage spent so far. */
+export function providerError(
+  message: string,
+  cause: unknown,
+  usage?: unknown,
+  model?: string,
+): Error & { status?: number; code?: string; usage?: unknown; model?: string } {
+  const c = cause as { status?: unknown; code?: unknown } | null;
+  return Object.assign(new Error(message), {
+    ...(typeof c?.status === 'number' ? { status: c.status } : {}),
+    ...(typeof c?.code === 'string' ? { code: c.code } : {}),
+    ...(usage ? { usage } : {}),
+    ...(model ? { model } : {}),
+  });
 }
 
 /**
