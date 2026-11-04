@@ -42,6 +42,13 @@ export interface PublicSalonProfessional {
   certifications: string[];
   services: Array<{ serviceId: string }>;
   /**
+   * False for a professional the salon does not show on the web ("Mostrar
+   * en la web: no mostrar"): still bookable, named "Profesional", but left
+   * out of the team list and the schema.org data. Absent from older servers
+   * (= true). Her name already comes as the salon chose to show it.
+   */
+  listed?: boolean;
+  /**
    * Where they work, when the salon has locations to pick from (`locations`
    * on the page), with their main one. Absent otherwise.
    */
@@ -134,6 +141,13 @@ export interface PublicSalonPage {
    * from older servers.
    */
   whatsappPromotions?: boolean;
+  /** The salon's WhatsApp as wa.me digits ("34600112233"): "Escríbenos por WhatsApp". */
+  whatsapp?: string | null;
+  /**
+   * The salon's own privacy policy (https), when it set one: the page, the
+   * widget and the chat link there instead of /sites/<slug>/privacidad.
+   */
+  privacyPolicyUrl?: string | null;
   /**
    * The tax the service prices include: IVA, IGIC (Canarias) or IPSI (Ceuta
    * y Melilla). The page says "Precios con IVA incluido" once. Absent from
@@ -159,7 +173,7 @@ export function publicApiBaseUrl(): string {
  */
 export function publicImageSrc(url: string | null | undefined, apiBase = publicApiBaseUrl()): string | null {
   if (!url) return null;
-  if (url.startsWith("/public-site/image/")) return `${apiBase}${url}`;
+  if (url.startsWith("/public-site/image/") || url.startsWith("/public-site/professional-image/")) return `${apiBase}${url}`;
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
@@ -415,8 +429,10 @@ export function salonJsonLd(page: PublicSalonPage, url: string, apiBase = public
       })),
     };
   }
-  if (page.professionals.length > 0) {
-    data.employee = page.professionals.map((p) => ({
+  // Only those the salon shows on the web, named as it shows them.
+  const listed = page.professionals.filter((p) => p.listed !== false);
+  if (listed.length > 0) {
+    data.employee = listed.map((p) => ({
       "@type": "Person",
       name: `${p.firstName} ${p.lastName}`.trim(),
       ...(p.position ? { jobTitle: p.position } : {}),

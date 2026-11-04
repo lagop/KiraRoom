@@ -12,13 +12,14 @@ import {
   MapPin,
   Phone,
 } from "lucide-react";
-import { formatPrice, priceOnRequest, publicImageSrc, type PublicSalonLocation } from "@/lib/salon-seo";
+import { appBaseUrl, formatPrice, priceOnRequest, publicImageSrc, type PublicSalonLocation } from "@/lib/salon-seo";
+import { EMBED_THEME_ATTR, embedTheme } from "@/lib/embed-theme";
+import { salonPrivacyHref } from "@/lib/salon-legal";
 import { postEmbedHeight } from "@/lib/embed-snippet";
 import {
   BOOKING_CHOICE_TEXT,
   bookingErrorMessage,
   localDateString,
-  privacyPolicyUrl,
   whatsappPromotionsLabel,
 } from "@/lib/public-booking";
 import {
@@ -58,8 +59,14 @@ interface WidgetConfig {
     id: string;
     name: string;
     allowedOrigins: string[];
-    theme: Record<string, any>;
+    /** The salon's main colour for the widget (a hex code), when it set one. */
+    theme?: { primaryColor?: string | null };
   };
+  /**
+   * The salon's own privacy policy (https), when it set one; otherwise the
+   * widget links to its generated one (/sites/<slug>/privacidad).
+   */
+  privacyPolicyUrl?: string | null;
   services: Array<{
     id: string;
     name: string;
@@ -82,6 +89,8 @@ interface WidgetConfig {
     /** Where they work, when the salon has locations to pick from. */
     locationIds?: string[];
     primaryLocationId?: string | null;
+    /** False: named "Profesional" as the salon chose (Mostrar en la web). */
+    listed?: boolean;
   }>;
   /**
    * Two or more locations to book at (multi-local), as on the public booking
@@ -120,6 +129,8 @@ export default function EmbedWidgetPage() {
   const token = params?.token as string;
   const [config, setConfig] = useState<WidgetConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 410: the salon's page is gone (past its read-only period).
+  const [gone, setGone] = useState(false);
   const [step, setStep] = useState<"select" | "details" | "done">("select");
   const [serviceId, setServiceId] = useState("");
   const [professionalId, setProfessionalId] = useState("");
@@ -173,6 +184,7 @@ export default function EmbedWidgetPage() {
     if (!token) return;
     fetch(`${API}/embed/${token}`)
       .then(async (r) => {
+        if (r.status === 410) setGone(true);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
@@ -293,9 +305,13 @@ export default function EmbedWidgetPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
         <div className="bg-white rounded-xl p-6 shadow max-w-md w-full text-center">
           <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-          <h1 className="font-semibold text-gray-900">Widget no disponible</h1>
+          <h1 className="font-semibold text-gray-900">
+            {gone ? "Este salón ya no reserva online" : "Widget no disponible"}
+          </h1>
           <p className="text-sm text-gray-500 mt-2">
-            El enlace puede haber sido revocado o nunca existió.
+            {gone
+              ? "Contacta con el salón directamente para pedir cita."
+              : "El enlace puede haber sido revocado o nunca existió."}
           </p>
         </div>
       </div>
@@ -328,9 +344,21 @@ export default function EmbedWidgetPage() {
   const salonPhone = config.tenant.phone?.trim() || null;
   const priceLabel = (s: { price: number; currency: string }) =>
     priceOnRequest(s.price) ? "Consultar" : formatPrice(Number(s.price), s.currency || config.tenant.currency);
+  // The salon's main colour, when it set one (lib/embed-theme.ts).
+  const theme = embedTheme(config.widget.theme?.primaryColor);
+  // Absolute: the widget is framed on the salon's own site.
+  const privacyHref = salonPrivacyHref(
+    { slug: config.tenant.slug, privacyPolicyUrl: config.privacyPolicyUrl },
+    appBaseUrl(),
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-white">
+    <div
+      className="min-h-screen bg-gradient-to-br from-purple-50 to-white"
+      {...(theme ? { [EMBED_THEME_ATTR]: "", style: theme.vars as React.CSSProperties } : {})}
+    >
+      {/* Only class selectors and var() of a validated hex: nothing the salon typed. */}
+      {theme && <style dangerouslySetInnerHTML={{ __html: theme.css }} />}
       <div ref={contentRef}>
       {/* The salon's cover photo (Ajustes > Salón) above its name. */}
       {cover && (
@@ -672,7 +700,7 @@ export default function EmbedWidgetPage() {
               recordatorios y cambios) y, si no marcas la casilla de arriba,
               promociones por email.{" "}
               <a
-                href={privacyPolicyUrl()}
+                href={privacyHref}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-purple-700"

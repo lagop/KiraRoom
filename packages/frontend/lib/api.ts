@@ -3173,23 +3173,6 @@ class ApiClient implements ApiClientInterface {
     return this.request<Professional[]>(`/professionals${params}`);
   }
 
-  // Public tenant resolution (no auth required)
-  async getPublicTenant(slug: string): Promise<{
-    id: string;
-    name: string;
-    slug: string;
-    logo: string | null;
-    address: string | null;
-    city: string | null;
-    state: string | null;
-    country: string | null;
-    phone: string | null;
-    email: string | null;
-    description: string | null;
-  }> {
-    return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
-  }
-
   // Everything the salon's public page shows, opening hours included (no auth).
   async getPublicSalonPage(slug: string): Promise<PublicSalonPage> {
     return this.request<PublicSalonPage>(`/public-site/page/${encodeURIComponent(slug)}`);
@@ -4951,6 +4934,11 @@ class ApiClient implements ApiClientInterface {
     /** Online bookings start confirmed instead of pending. */
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** The public page's links (Ajustes > Salón). */
+    website?: string | null;
+    whatsapp?: string | null;
+    /** The salon's own privacy policy; null: the one generated for it. */
+    privacyPolicyUrl?: string | null;
   }> {
     return this.request("/auth/tenant");
   }
@@ -4981,6 +4969,10 @@ class ApiClient implements ApiClientInterface {
     bookingSlotMinutes?: number;
     autoConfirmOnlineBookings?: boolean;
     timeOffEmailNotices?: boolean;
+    /** null clears them. */
+    website?: string | null;
+    whatsapp?: string | null;
+    privacyPolicyUrl?: string | null;
   }): Promise<{
     id: string;
     name: string;

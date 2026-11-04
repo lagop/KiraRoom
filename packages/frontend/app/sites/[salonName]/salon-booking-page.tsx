@@ -12,10 +12,20 @@ import {
   Mail,
   Instagram,
   Facebook,
+  MessageCircle,
+  Navigation,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
-import { useTenantTranslations } from "@/lib/use-translation";
+import { salonLanguage, translatorFor } from "@/lib/use-translation";
+import {
+  closedDayRanges,
+  closedRangeText,
+  directionsUrl,
+  salonLegalNoticePath,
+  salonPrivacyHref,
+  whatsappHref,
+} from "@/lib/salon-legal";
 import {
   acceptsBookings,
   formatAddress,
@@ -36,7 +46,6 @@ import {
   isOfferedTime,
   localDateString,
   localTomorrow,
-  privacyPolicyUrl,
   slotsState,
   BOOKING_CHOICE_TEXT,
   whatsappPromotionsLabel,
@@ -107,6 +116,8 @@ interface Professional {
   /** Where they work, when the salon has locations to pick from. */
   locationIds?: string[];
   primaryLocationId?: string | null;
+  /** False: bookable as "Profesional", but not on the team list (Mostrar en la web). */
+  listed: boolean;
 }
 
 interface Service {
@@ -159,15 +170,18 @@ function fromPublicPage(page: PublicSalonPage) {
     lastName: p.lastName,
     specialties: p.specialties ?? [],
     services: p.services,
-    profileImage: p.profileImage ?? undefined,
+    // URLs the API serves (public-site/professional-image), only when the
+    // salon shows her photo.
+    profileImage: publicImageSrc(p.profileImage) ?? undefined,
     bio: p.bio ?? undefined,
     position: p.position ?? undefined,
-    portfolioImages: p.portfolioImages ?? [],
+    portfolioImages: (p.portfolioImages ?? []).map((img) => publicImageSrc(img)).filter((u): u is string => !!u),
     yearsExperience: p.yearsExperience ?? undefined,
     languages: p.languages ?? [],
     certifications: p.certifications ?? [],
     locationIds: p.locationIds,
     primaryLocationId: p.primaryLocationId ?? null,
+    listed: p.listed !== false,
   }));
   return { salon, services, professionals };
 }
@@ -183,11 +197,20 @@ export default function SalonBookingPage({
   initialReviews?: PublicReviews;
 }) {
   const { toast } = useToast();
-  const { t, language, setLanguage } = useTenantTranslations();
+  // The salon's language, whoever visits (there was an English/Spanish
+  // switch that also changed the visitor's panel language).
+  const language = salonLanguage(initialData.language);
+  const t = translatorFor(language);
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
   const [loading, setLoading] = useState(false);
   const [initial] = useState(() => fromPublicPage(initialData));
   const salonData: SalonData = initial.salon;
   const professionals = initial.professionals;
+  // The team as the salon shows it on the web: "no mostrar" ones are still
+  // bookable (as "Profesional") but not listed.
+  const listedProfessionals = professionals.filter((p) => p.listed);
   const services = initial.services;
   // Two or more locations to book at: the client picks one (or it follows
   // from the professional). None for a salon with one location: no step.
@@ -202,6 +225,10 @@ export default function SalonBookingPage({
   // phone, no form, which would be refused at the very end.
   const takesBookings = acceptsBookings(initialData);
   const phoneHref = salonData.phone ? `tel:${salonData.phone.replace(/\s+/g, "")}` : null;
+  const mapsHref = directionsUrl(salonData.address);
+  const whatsAppHref = whatsappHref(initialData.whatsapp);
+  // The salon's own privacy policy, or the one generated for it.
+  const privacyHref = salonPrivacyHref(initialData);
   const [availableSlots, setAvailableSlots] = useState<AvailableTimeSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   // Bumped to ask the server for the slots again (after a failed booking).
@@ -210,6 +237,9 @@ export default function SalonBookingPage({
   // UTC and this page is cached for minutes, so a server-side "today" could
   // be the wrong day.
   const [today, setToday] = useState("");
+  // "Cerrado del 24 al 26 de diciembre": the closures of the next 60 days,
+  // once the visitor's day is known.
+  const closedRanges = closedDayRanges(initialData.closedDays, today);
   const [bookingData, setBookingData] = useState<BookingData>({
     clientName: "",
     clientEmail: "",
@@ -635,6 +665,18 @@ export default function SalonBookingPage({
                 <span>{salonData.address}</span>
               </span>
             )}
+            {mapsHref && (
+              <a
+                data-test="salon-directions"
+                href={mapsHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center space-x-1 text-purple-700 hover:underline"
+              >
+                <Navigation className="w-4 h-4" aria-hidden="true" />
+                <span>{t("sites.directions")}</span>
+              </a>
+            )}
             {salonData.phone && phoneHref && (
               <a href={phoneHref} className="flex items-center space-x-1 hover:text-purple-700">
                 <Phone className="w-4 h-4 text-purple-600" />
@@ -663,6 +705,18 @@ export default function SalonBookingPage({
               );
             })}
           </address>
+          {whatsAppHref && (
+            <a
+              data-test="salon-whatsapp"
+              href={whatsAppHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+            >
+              <MessageCircle className="w-4 h-4" aria-hidden="true" />
+              {t("sites.whatsappUs")}
+            </a>
+          )}
         </div>
 
         {/* Booking Form */}
@@ -1059,7 +1113,7 @@ export default function SalonBookingPage({
                 <p className="text-xs text-gray-500 text-center">
                   {t("bookingPublic.privacy_notice", { salon: salonData.name })}{" "}
                   <a
-                    href={privacyPolicyUrl()}
+                    href={privacyHref}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline hover:text-purple-700"
@@ -1141,6 +1195,13 @@ export default function SalonBookingPage({
                         ))}
                       </tbody>
                     </table>
+                    {closedRanges.length > 0 && (
+                      <ul data-test="salon-closed-days" className="mt-2 space-y-0.5 text-sm font-medium text-amber-700">
+                        {closedRanges.map((r) => (
+                          <li key={r.from}>{closedRangeText(r, language)}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
 
@@ -1154,13 +1215,13 @@ export default function SalonBookingPage({
                   </div>
                 )}
 
-                {professionals.length > 0 && (
+                {listedProfessionals.length > 0 && (
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2">
                       {t("sites.ourProfessionals")}
                     </h3>
                     <ul className="space-y-2 text-gray-600">
-                      {professionals.map((professional) => (
+                      {listedProfessionals.map((professional) => (
                         <li key={professional.id} className="flex items-center space-x-2">
                           <span className="w-2 h-2 bg-purple-500 rounded-full" />
                           <span>
@@ -1179,14 +1240,14 @@ export default function SalonBookingPage({
           </section>
 
           {/* Professional Team Section */}
-          {professionals.length > 0 && (
+          {listedProfessionals.length > 0 && (
             <div className="mt-8">
               <h3 className="text-2xl font-bold text-purple-900 mb-6 text-center">
                 {t("sites.ourTeam")}
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Everyone: there was a cut at six with no way to see the rest. */}
-                {professionals.map((professional) => (
+                {listedProfessionals.map((professional) => (
                   <div
                     key={professional.id}
                     className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow"
@@ -1298,42 +1359,21 @@ export default function SalonBookingPage({
         </div>
       </div>
 
-      {/* Language Selector Footer */}
-      <footer className="bg-white border-t border-gray-200 py-6 mt-12">
-        <div className="container mx-auto px-4">
-          <div className="flex justify-center items-center">
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-500">
-                {t("settings.language")}:
-              </span>
-              <button
-                onClick={() => {
-                  setLanguage("es");
-                  localStorage.setItem("kira_language", "es");
-                }}
-                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                  language === "es"
-                    ? "bg-purple-600 text-white"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                {t("common.spanish")}
-              </button>
-              <button
-                onClick={() => {
-                  setLanguage("en");
-                  localStorage.setItem("kira_language", "en");
-                }}
-                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                  language === "en"
-                    ? "bg-purple-600 text-white"
-                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-              >
-                {t("common.english")}
-              </button>
-            </div>
-          </div>
+      {/* The salon's aviso legal and privacy policy (generated from its
+          details, or its own policy), and who runs the page. The salon's
+          language is the page's: no switch. */}
+      <footer data-test="salon-footer" className="bg-white border-t border-gray-200 py-6 mt-12">
+        <div className="container mx-auto px-4 text-center text-sm text-gray-500">
+          <p>
+            <a href={salonLegalNoticePath(initialData.slug)} className="hover:text-purple-700 hover:underline">
+              {t("sites.legalNotice")}
+            </a>
+            {" · "}
+            <a href={privacyHref} className="hover:text-purple-700 hover:underline">
+              {t("sites.privacy")}
+            </a>
+          </p>
+          <p className="mt-2">{t("sites.poweredBy")}</p>
         </div>
       </footer>
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CONVERSATION_RETENTION_MONTHS, SUB_PROCESSORS } from "@/lib/salon-legal";
 
 // Its own title: it showed the root layout's, in English.
 export const metadata: Metadata = { title: "Términos del servicio · KiraRoom" };
@@ -10,7 +11,7 @@ export default function TermsPage() {
         Términos del Servicio
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 1 de noviembre de 2026
+        Última actualización: 4 de noviembre de 2026
       </p>
 
       <Section title="1. Aceptación">
@@ -140,6 +141,72 @@ export default function TermsPage() {
           del salón con al menos <strong>30 días</strong> de antelación y
           se publicará una nueva versión en esta URL.
         </p>
+      </Section>
+
+      <Section title="11. Encargo del tratamiento (artículo 28 RGPD)">
+        <p>
+          De los datos personales de los clientes del salón (sus datos de
+          contacto, sus citas, sus mensajes con la recepcionista virtual, sus
+          elecciones de avisos y promociones), el <strong>salón es el
+          responsable del tratamiento</strong> y KiraRoom el{" "}
+          <strong>encargado del tratamiento</strong>. Al aceptar estos
+          Términos, el salón y KiraRoom acuerdan este encargo, con el
+          contenido del artículo 28.3 del RGPD:
+        </p>
+        <ul>
+          <li>
+            <strong>Objeto y duración</strong>: prestar el servicio contratado
+            (agenda, web de reservas, widget, recepcionista virtual, avisos,
+            facturación) mientras dure la suscripción y el período de lectura
+            posterior.
+          </li>
+          <li>
+            <strong>Instrucciones</strong>: KiraRoom trata los datos solo para
+            prestar el servicio y siguiendo las instrucciones del salón, que
+            son las que da al configurarlo y usarlo. No los usa para fines
+            propios ni los vende.
+          </li>
+          <li>
+            <strong>Confidencialidad</strong>: las personas autorizadas por
+            KiraRoom para tratar los datos están obligadas a guardar secreto.
+          </li>
+          <li>
+            <strong>Seguridad</strong>: KiraRoom aplica las medidas del
+            artículo 32 RGPD descritas en la política de privacidad.
+          </li>
+          <li>
+            <strong>Subencargados</strong>: el salón autoriza a KiraRoom a
+            recurrir a estos proveedores:{" "}
+            {SUB_PROCESSORS.map((sp) => sp.name).join(", ")}. KiraRoom
+            avisará al salón con antelación de cualquier cambio en esta lista,
+            para que pueda oponerse, y les impone las mismas obligaciones de
+            protección de datos.
+          </li>
+          <li>
+            <strong>Derechos de los interesados</strong>: KiraRoom ayuda al
+            salón a atender las solicitudes de acceso, rectificación,
+            supresión, oposición, limitación y portabilidad de sus clientes
+            (el panel permite exportar y anonimizar los datos de un cliente).
+          </li>
+          <li>
+            <strong>Brechas de seguridad</strong>: KiraRoom avisará al salón
+            sin dilación indebida, y en todo caso en 72 horas, de cualquier
+            brecha que afecte a sus datos, con la información que necesite
+            para notificarla.
+          </li>
+          <li>
+            <strong>Fin del encargo</strong>: al terminar el servicio, el
+            salón puede exportar sus datos durante el período de lectura;
+            después KiraRoom los suprime, salvo los que la ley obligue a
+            conservar. Las conversaciones de la recepcionista virtual se
+            borran a los {CONVERSATION_RETENTION_MONTHS} meses.
+          </li>
+          <li>
+            <strong>Auditoría</strong>: KiraRoom pondrá a disposición del
+            salón la información necesaria para demostrar el cumplimiento de
+            estas obligaciones.
+          </li>
+        </ul>
       </Section>
     </main>
   );

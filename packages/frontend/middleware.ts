@@ -10,6 +10,7 @@ import {
 } from "./lib/custom-domain-host";
 import { retiredClientAreaRedirect } from "./lib/client-area-redirect";
 import { embedToken, frameAncestorsHeader } from "./lib/embed-frame";
+import { GONE_SALON_HTML, sitePathSlug } from "./lib/salon-legal";
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
 // `SaasOwnerGuard` on the corresponding API endpoints. This middleware is
@@ -111,6 +112,52 @@ async function embedFrameHeader(token: string): Promise<string | null> {
 }
 
 /**
+ * Whether a salon's page is gone (past its read-only period: the API
+ * answers 410), per slug, cached like the host lookup. API trouble is not
+ * an answer and is not remembered: the page then renders (or 404s) as usual.
+ */
+const GONE_TTL_MS = 5 * 60_000;
+const goneCache = new Map<string, { gone: boolean; expires: number }>();
+
+async function salonGone(slug: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = goneCache.get(slug);
+  if (cached && cached.expires > now) return cached.gone;
+  try {
+    const res = await fetch(`${API_URL}/public-site/legal/${encodeURIComponent(slug)}`, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (res.status !== 410 && !res.ok && res.status !== 404) return cached?.gone ?? false;
+    const gone = res.status === 410;
+    if (goneCache.size >= MAX_ENTRIES) goneCache.clear();
+    goneCache.set(slug, { gone, expires: now + GONE_TTL_MS });
+    return gone;
+  } catch {
+    return cached?.gone ?? false;
+  }
+}
+
+/**
+ * A salon's page (and everything under it) once the salon is gone: 410 and
+ * noindex, so search engines drop it, instead of a page with nothing to book.
+ * Null when the path is not a salon's or the salon is still there.
+ */
+async function goneSalonResponse(request: NextRequest, sitePath: string): Promise<NextResponse | null> {
+  if (request.method !== "GET" && request.method !== "HEAD") return null;
+  const slug = sitePathSlug(sitePath);
+  if (!slug || !(await salonGone(slug))) return null;
+  return new NextResponse(request.method === "HEAD" ? null : GONE_SALON_HTML, {
+    status: 410,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Robots-Tag": "noindex",
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+}
+
+/**
  * The clients' old sign-in area (lib/client-area-redirect.ts) sends them to
  * the booking page; null when the path is not part of it.
  */
@@ -144,6 +191,8 @@ export async function middleware(request: NextRequest) {
     const retired = clientAreaRedirect(request, true);
     if (retired) return retired;
     const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(subdomainSlug));
+    const gone = await goneSalonResponse(request, target ?? request.nextUrl.pathname);
+    if (gone) return gone;
     if (!target) return NextResponse.next();
     const url = request.nextUrl.clone();
     url.pathname = target;
@@ -171,6 +220,8 @@ export async function middleware(request: NextRequest) {
       const retired = clientAreaRedirect(request, true);
       if (retired) return retired;
       const target = rewritePathFor(request.nextUrl.pathname, encodeURIComponent(slug));
+      const gone = await goneSalonResponse(request, target ?? request.nextUrl.pathname);
+      if (gone) return gone;
       if (target) {
         const url = request.nextUrl.clone();
         url.pathname = target;
@@ -178,6 +229,10 @@ export async function middleware(request: NextRequest) {
       }
     }
   }
+
+  // app.kiraroom.net/sites/<slug>: the same 410 once the salon is gone.
+  const gone = await goneSalonResponse(request, request.nextUrl.pathname);
+  if (gone) return gone;
 
   return NextResponse.next();
 }
