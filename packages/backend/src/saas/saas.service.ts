@@ -319,6 +319,7 @@ export class SaasService {
     // is not a user: the foreign key refused it, and an empty catch hid it.)
     const changes = changedFields(existing as unknown as Record<string, unknown>, patch);
     const taxIdChanged = patch.taxId !== undefined && patch.taxId !== existing.taxId;
+    const taxIdBefore = existing.taxId ?? null;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const updated = await tx.tenant.update({ where: { id }, data: patch });
@@ -338,7 +339,7 @@ export class SaasService {
               actorId: actor.id,
               actorRole: UserRole.saas_owner,
               tenantId: id,
-              metadata: { before: existing.taxId ?? null, after: patch.taxId, source: "saas/console" },
+              metadata: { before: taxIdBefore, after: patch.taxId, source: "saas/console" },
             },
             tx,
           );

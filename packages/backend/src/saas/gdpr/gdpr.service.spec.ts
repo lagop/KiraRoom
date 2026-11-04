@@ -25,7 +25,14 @@ function makePrismaMock() {
   const gdprRequests: any[] = [];
   const counters = { gdprRequest: 0 };
 
+  const auditLogs: any[] = [];
   const prisma: any = {
+    // Audit 8, C15: the salon's audit rows are scrubbed on anonymisation.
+    tenantInvite: { findMany: async () => [] },
+    auditLog: {
+      findMany: async (args: any) => auditLogs.filter((r) => r.tenantId === args.where.OR[0].tenantId),
+      update: async (args: any) => Object.assign(auditLogs.find((r) => r.id === args.where.id), args.data),
+    },
     tenant: {
       findUnique: async (args: any) => tenants.get(args.where.id) ?? null,
       update: async (args: any) => {

@@ -7,6 +7,8 @@ import {
   PlatformLlmConfigService,
   PlatformLlmConfigPublic } from "./platform-llm-config.service";
 import { AnthropicWorkspacesDto, UpdatePlatformLlmConfigDto } from "./platform-llm-config.dto";
+import { UserRole } from "@prisma/client";
+import { AuditLogService } from "../saas/audit-log.service";
 
 interface AuthedRequest {
   user: { id: string; tenantId: string; role: string };
@@ -27,6 +29,7 @@ interface AuthedRequest {
 export class PlatformLlmConfigController {
   constructor(
     private readonly service: PlatformLlmConfigService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   @Get()
@@ -41,13 +44,26 @@ export class PlatformLlmConfigController {
     @Req() req: AuthedRequest,
     @Body() body: UpdatePlatformLlmConfigDto,
   ): Promise<PlatformLlmConfigPublic> {
-    return this.service.updateConfig({
+    const out = await this.service.updateConfig({
       provider: body.provider,
       apiKey: body.apiKey,
       defaultModel: body.defaultModel,
       baseUrl: body.baseUrl,
       workspaceId: body.workspaceId,
       updatedBy: req.user?.id });
+    // Audit 8, C9: as the Stripe and email settings are. Which settings
+    // were sent, and the non-secret ones' values; never the key.
+    await this.auditLog.record("platform.llm_config.updated", {
+      actorId: req.user.id,
+      actorRole: UserRole.saas_owner,
+      metadata: {
+        set: Object.entries(body ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k]) => k),
+        provider: body.provider ?? null,
+        defaultModel: body.defaultModel ?? null,
+        apiKeyChanged: typeof body.apiKey === "string" && body.apiKey.length > 0,
+      },
+    });
+    return out;
   }
 
   @Post("test")
