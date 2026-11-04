@@ -574,7 +574,7 @@ export class InvitesService {
       this.logger.error(
         "APP_BASE_URL is not set — invite magic links will point to " +
           "http://localhost:3000, which is unreachable in production. " +
-          "Set APP_BASE_URL=https://app.kiraroom.com in the environment.",
+          "Set APP_BASE_URL=https://app.kiraroom.net in the environment.",
       );
       return `http://localhost:3000/accept-invite/${token}`;
     }
