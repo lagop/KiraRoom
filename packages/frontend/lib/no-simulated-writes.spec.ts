@@ -141,9 +141,13 @@ if (booking) {
   check("it sends scheduledTime", src.includes("scheduledTime: bookingData.time"), true);
 
   // The confirmation has to come after the await, or it is a lie again.
+  // It is a summary that stays on screen now (R9), not a toast.
   const callAt = src.indexOf("apiClient.createAppointment(");
-  const confirmAt = src.indexOf('t("bookingPublic.booking_confirmed")');
+  const confirmAt = src.indexOf("setConfirmation({");
   check("the confirmation comes after the call", callAt > -1 && callAt < confirmAt, true);
+  // "Confirmada" only when the server says the appointment is.
+  check("confirmed only from the answer's status", src.includes('answer?.status === "confirmed"'), true);
+  check("the next booking does not inherit the WhatsApp promotions box (R22)", src.includes("setWantsWhatsAppPromotions(false)"), true);
 
   // And the times have to come from the server.
   check("it asks the server for slots", src.includes("apiClient.getAvailableSlots("), true);

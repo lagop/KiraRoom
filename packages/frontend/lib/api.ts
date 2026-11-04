@@ -2104,6 +2104,7 @@ export interface ApiClientInterface {
     professionalIds?: string[],
     locationId?: string,
   ): Promise<{ time: string; isAvailable: boolean }[]>;
+  getBookingWindow(tenantId: string, serviceId: string): Promise<{ maxAdvanceDays: number; lastDay: string }>;
   getNotifications(params?: {
     limit?: number;
     offset?: number;
@@ -3486,6 +3487,15 @@ class ApiClient implements ApiClientInterface {
     }
 
     return this.request<{ time: string; isAvailable: boolean }[]>(endpoint);
+  }
+
+  /**
+   * Until which day a service can be booked online (public): the booking
+   * page stops its date picker there and says so for a later day.
+   */
+  async getBookingWindow(tenantId: string, serviceId: string): Promise<{ maxAdvanceDays: number; lastDay: string }> {
+    const q = new URLSearchParams({ tenantId, serviceId });
+    return this.request<{ maxAdvanceDays: number; lastDay: string }>(`/appointments/booking-window?${q.toString()}`);
   }
 
   // Notifications

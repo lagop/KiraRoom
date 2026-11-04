@@ -2913,7 +2913,20 @@
     "step_location": "Choose a location",
     "select_location": "Select a location",
     "booked_at": "See you at {location}.",
-    "booked_at_address": "See you at {location}: {address}."
+    "booked_at_address": "See you at {location}: {address}.",
+    "beyond_window": "Online booking is only open until {date}. Choose an earlier day or call the salon.",
+    "booking_received": "We have received your booking",
+    "status_confirmed": "Your appointment is confirmed.",
+    "status_pending": "Your appointment is waiting for the salon to confirm it.",
+    "summary_service": "Service",
+    "summary_professional": "Professional",
+    "summary_date": "Date",
+    "summary_time": "Time",
+    "summary_location": "Location",
+    "done_email": "We will send the details to {email}.",
+    "done_phone": "To change or cancel it, call the salon:",
+    "done_ref": "Reference: {ref}",
+    "book_another": "Make another booking"
   },
   "sites": {
     "notFoundTitle": "Salon not found",

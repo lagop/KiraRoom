@@ -169,6 +169,14 @@ describe("appointment SMS to the client", () => {
     expect(sent[0]).toContain("el lunes, 2 de noviembre de 2026 a las 10:30");
   });
 
+  it("keep every letter s of the salon's name, and squeeze its spaces", async () => {
+    // R7: the signature used /s+/g, so "Peluquería Rosas" went out as
+    // "Peluquería Ro a".
+    const { service, sent } = sms();
+    await service.sendAppointmentConfirmation({ ...smsData, salonName: "Estética  Luisa\tRosas" });
+    expect(sent[0].startsWith("Estética Luisa Rosas: ")).toBe(true);
+  });
+
   it("fall back to a neutral signature when the salon has no name", async () => {
     const { service, sent } = sms();
     await service.sendAppointmentReminder({ ...smsData, salonName: "  " }, 24);

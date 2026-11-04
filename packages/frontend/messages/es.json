@@ -2913,7 +2913,20 @@
     "step_location": "Elige el local",
     "select_location": "Selecciona un local",
     "booked_at": "Te esperamos en {location}.",
-    "booked_at_address": "Te esperamos en {location}: {address}."
+    "booked_at_address": "Te esperamos en {location}: {address}.",
+    "beyond_window": "Solo se puede reservar online hasta el {date}. Elige un día anterior o llama al salón.",
+    "booking_received": "Hemos recibido tu reserva",
+    "status_confirmed": "Tu cita está confirmada.",
+    "status_pending": "Tu cita está pendiente de confirmar por el salón.",
+    "summary_service": "Servicio",
+    "summary_professional": "Profesional",
+    "summary_date": "Fecha",
+    "summary_time": "Hora",
+    "summary_location": "Local",
+    "done_email": "Te enviaremos los detalles a {email}.",
+    "done_phone": "Si necesitas cambiarla o cancelarla, llama al salón:",
+    "done_ref": "Referencia: {ref}",
+    "book_another": "Hacer otra reserva"
   },
   "sites": {
     "notFoundTitle": "Salón no encontrado",

@@ -123,6 +123,7 @@ export type SlotsState =
   | "select_professional_first"
   | "loading_slots"
   | "closed_day"
+  | "beyond_window"
   | "no_slots"
   | "ready";
 
@@ -133,12 +134,35 @@ export function slotsState(input: {
   loading: boolean;
   slots: ReadonlyArray<{ available: boolean }>;
   closed: boolean;
+  /**
+   * The last day the service can be booked online (its maxAdvanceBooking,
+   * GET /appointments/booking-window). A later day has no times because it
+   * is too far ahead, not because the salon is full.
+   */
+  lastDay?: string | null;
 }): SlotsState {
   if (!input.serviceId) return "select_service_first";
   if (!input.professionalId || !input.date) return "select_professional_first";
+  if (isBeyondWindow(input.date, input.lastDay)) return "beyond_window";
   if (input.loading) return "loading_slots";
   if (input.slots.some((s) => s.available)) return "ready";
   return input.closed ? "closed_day" : "no_slots";
+}
+
+/** True when `date` is after the last bookable day (both "YYYY-MM-DD"). */
+export function isBeyondWindow(date: string, lastDay: string | null | undefined): boolean {
+  return !!date && !!lastDay && DATE_ONLY.test(lastDay) && date.slice(0, 10) > lastDay;
+}
+
+/**
+ * The name typed in one box, as the booking sends it: the first word is the
+ * first name and the rest the last name, which may be empty. Spaces at the
+ * ends or doubled do not count. The widget used to store a single name as
+ * both ("Ana Ana"), and " Ana" as an empty first name.
+ */
+export function splitClientName(name: string): { firstName: string; lastName: string } {
+  const [firstName = "", ...rest] = name.trim().split(/\s+/);
+  return { firstName, lastName: rest.join(" ") };
 }
 
 /** True when `time` is one of the slots the server offered as free. */
