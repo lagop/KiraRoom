@@ -343,6 +343,49 @@ describe("PublicSiteService.getPage", () => {
     });
   });
 
+  it("takes bookings unless the salon is read-only (trial ended, cancelled, suspended)", async () => {
+    expect((await makeService({ tenant: { subscriptionStatus: "trialing" } }).svc.getPage("x")).acceptsBookings).toBe(true);
+    expect((await makeService({ tenant: { subscriptionStatus: "past_due" } }).svc.getPage("x")).acceptsBookings).toBe(true);
+    for (const status of ["cancelled", "suspended"]) {
+      const page = await makeService({ tenant: { subscriptionStatus: status } }).svc.getPage("x");
+      // Still the page, with the phone; only the form goes.
+      expect(page.acceptsBookings).toBe(false);
+      expect(page.phone).toBe("+34 600 000 000");
+    }
+  });
+
+  it("sends image URLs, never the stored data: URLs", async () => {
+    const logo = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    const page: any = await makeService({
+      tenant: { logo, coverImage: "https://cdn.example/cover.jpg" },
+    }).svc.getPage("x");
+    expect(page.logoUrl).toMatch(/^\/public-site\/image\/t1\/logo\?v=[A-Za-z0-9_-]{16}$/);
+    expect(page.coverImageUrl).toBe("https://cdn.example/cover.jpg");
+    expect(page.logo).toBeUndefined();
+    expect(page.coverImage).toBeUndefined();
+    expect(JSON.stringify(page)).not.toContain("data:");
+    const none: any = await makeService({ tenant: { logo: null, coverImage: "  " } }).svc.getPage("x");
+    expect([none.logoUrl, none.coverImageUrl]).toEqual([null, null]);
+  });
+
+  it("serves the stored image with its version, and nothing for a deleted salon", async () => {
+    const logo = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    const { svc, prisma } = makeService({ tenant: { logo } });
+    const image = await svc.image("t1", "logo");
+    expect(image?.contentType).toBe("image/png");
+    expect(image?.body.toString()).toBe("png-bytes");
+    const page: any = await svc.getPage("x");
+    expect(page.logoUrl).toContain(`v=${image?.version}`);
+    const args = (prisma.tenant.findFirst.mock.calls[0] as any[])[0];
+    expect(args.where).toEqual({ id: "t1", deletedAt: null });
+    expect(args.select).toEqual({ logo: true, coverImage: false });
+
+    const gone = makeService({ tenant: null });
+    expect(await gone.svc.image("t1", "cover")).toBeNull();
+    // A web URL is linked to directly; nothing to serve.
+    expect(await makeService({ tenant: { coverImage: "https://cdn.example/c.jpg" } }).svc.image("t1", "cover")).toBeNull();
+  });
+
   it("404s for an unknown or deleted salon", async () => {
     const { svc } = makeService({ tenant: null });
     await expect(svc.getPage("nope")).rejects.toBeInstanceOf(NotFoundException);

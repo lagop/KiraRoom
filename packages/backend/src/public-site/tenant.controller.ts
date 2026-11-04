@@ -1,8 +1,15 @@
-import { Controller, Get, Param, NotFoundException, Query } from "@nestjs/common";
+import { Controller, Get, Param, NotFoundException, ParseUUIDPipe, Query, Req, Res } from "@nestjs/common";
+import type { Request, Response } from "express";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { Public } from "../auth/decorators/public.decorator";
 import { PublicSiteService } from "./public-site.service";
+import { IMAGE_RESPONSE_CSP, PUBLIC_IMAGE_KINDS, type PublicImageKind } from "./public-images";
+
+/** A year: the URL carries the image's version, so a new upload is a new URL. */
+const VERSIONED_MAX_AGE = 31_536_000;
+/** Without (or with an old) version: short, so a new upload shows soon. */
+const UNVERSIONED_MAX_AGE = 300;
 
 @ApiTags("public")
 // Public: the salon's own site resolves it before anyone signs in. It used
@@ -63,6 +70,38 @@ export class PublicTenantController {
   @ApiResponse({ status: 404, description: "Salon not found" })
   page(@Param("slug") slug: string) {
     return this.site.getPage(slug);
+  }
+
+  /**
+   * The salon's logo or cover photo as an image, for its page, its widget
+   * and link previews (public-images.ts). Same answer for everyone, so it is
+   * cached publicly; with the current `?v=` for a year.
+   */
+  @Get("image/:tenantId/:kind")
+  @ApiOperation({ summary: "The salon's logo or cover photo (public, cacheable)" })
+  @ApiResponse({ status: 404, description: "No such salon or no such image" })
+  async image(
+    @Param("tenantId", ParseUUIDPipe) tenantId: string,
+    @Param("kind") kind: string,
+    @Query("v") v: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    if (!PUBLIC_IMAGE_KINDS.includes(kind as PublicImageKind)) throw new NotFoundException("Image not found");
+    const image = await this.site.image(tenantId, kind as PublicImageKind);
+    if (!image) throw new NotFoundException("Image not found");
+    const etag = `"${image.version}"`;
+    const maxAge = v === image.version ? VERSIONED_MAX_AGE : UNVERSIONED_MAX_AGE;
+    res.setHeader("Cache-Control", `public, max-age=${maxAge}${maxAge === VERSIONED_MAX_AGE ? ", immutable" : ""}`);
+    res.setHeader("ETag", etag);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", IMAGE_RESPONSE_CSP);
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader("Content-Type", image.contentType);
+    res.send(image.body);
   }
 
   @Get("sitemap")
