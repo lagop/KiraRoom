@@ -6,13 +6,8 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { runUnscoped } from "../../common/tenancy/tenant.context";
 import { EmailService } from "../../notifications/services/email.service";
 import { GdprService } from "../gdpr/gdpr.service";
-import {
-  RETENTION_FLAG,
-  RetentionCandidate,
-  RetentionStep,
-  retentionEnabled,
-  retentionStep,
-} from "./salon-retention";
+import { PlatformRetentionConfigService } from "../../platform/platform-retention-config.service";
+import { RetentionCandidate, RetentionStep, retentionStep } from "./salon-retention";
 import { MonitoredJob, reportJobFailure } from "../../common/ops-alerts/ops-alert-sink";
 
 /** Who the GdprRequest of an automatic anonymisation names as its actor (not a user id). */
@@ -21,7 +16,7 @@ export const RETENTION_ACTOR = "system:retention";
 const BATCH = 200;
 
 export interface RetentionRun {
-  /** False: a dry run, nothing written and no email sent (RETENTION_ANONYMIZE_ENABLED off). */
+  /** False: a dry run, nothing written and no email sent (the console switch off). */
   enabled: boolean;
   warned: string[];
   anonymized: string[];
@@ -36,8 +31,11 @@ export interface RetentionRun {
  * warns the owner 7 days before its data is anonymised, and anonymises it
  * 60 days after its trial or subscription ended.
  *
- * Behind RETENTION_ANONYMIZE_ENABLED (off by default): off, it only logs
- * what it would do, so the first runs can be watched. On:
+ * Behind the console switch (Ajustes de la plataforma > Retención de datos,
+ * PlatformRetentionConfigService; off by default). The env var
+ * RETENTION_ANONYMIZE_ENABLED=true also turns it on, as an override, so a
+ * server that already relies on it keeps working. Off, it only logs what it
+ * would do, so the first runs can be watched. On:
  * - the warning is claimed by a conditional update (the readOnlyUntil it is
  *   for), so two instances or a second run never send it twice; a failed
  *   email gives the claim back for the next day;
@@ -59,6 +57,7 @@ export class SalonRetentionScheduler {
     private readonly gdpr: GdprService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
+    private readonly retentionConfig: PlatformRetentionConfigService,
   ) {}
 
   /** 04:40 UTC, after the 04:00 billing jobs that start the read-only periods. */
@@ -75,7 +74,7 @@ export class SalonRetentionScheduler {
   }
 
   async run(now: Date = new Date()): Promise<RetentionRun> {
-    const enabled = retentionEnabled(this.config.get<string>(RETENTION_FLAG));
+    const enabled = await this.retentionConfig.isEnabled();
     const out: RetentionRun = { enabled, warned: [], anonymized: [], wouldWarn: [], wouldAnonymize: [], failed: [] };
 
     const candidates: Array<RetentionCandidate & { name: string; deletedAt?: Date | null }> = await runUnscoped(() =>
@@ -107,7 +106,7 @@ export class SalonRetentionScheduler {
         if (step.kind === "warn") out.wouldWarn.push(t.id);
         else out.wouldAnonymize.push(t.id);
         this.logger.log(
-          `[dry run, ${RETENTION_FLAG} off] would ${step.kind === "warn" ? `warn the owner of` : "anonymise"} ${t.name} (${t.id}), read-only until ${t.readOnlyUntil!.toISOString()}, anonymisation on ${day}`,
+          `[dry run, retention switch off] would ${step.kind === "warn" ? `warn the owner of` : "anonymise"} ${t.name} (${t.id}), read-only until ${t.readOnlyUntil!.toISOString()}, anonymisation on ${day}`,
         );
         continue;
       }
@@ -129,7 +128,7 @@ export class SalonRetentionScheduler {
       );
     } else if (out.wouldWarn.length || out.wouldAnonymize.length) {
       this.logger.log(
-        `Retention dry run: would warn ${out.wouldWarn.length}, would anonymise ${out.wouldAnonymize.length}. Set ${RETENTION_FLAG}=true to act.`,
+        `Retention dry run: would warn ${out.wouldWarn.length}, would anonymise ${out.wouldAnonymize.length}. Turn retention on in the console to act.`,
       );
     }
     return out;

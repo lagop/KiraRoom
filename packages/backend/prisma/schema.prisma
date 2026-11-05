@@ -3704,6 +3704,19 @@ model PlatformEmailConfig {
   @@map("platform_email_config")
 }
 
+// The switch for the salon-data retention job (saas/retention), flipped by the
+// saas_owner in the console. Off (dry run: nothing is warned or anonymised)
+// until turned on. The env var RETENTION_ANONYMIZE_ENABLED=true also turns it
+// on, as an override that the console cannot turn off.
+model PlatformRetentionConfig {
+  id        String   @id @default("global")
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@map("platform_retention_config")
+}
+
 // ============================================================================
 // P2A-platform-llm: single platform-wide LLM provider config
 // ============================================================================

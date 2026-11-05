@@ -108,6 +108,7 @@ export const EXPORT_GLOBAL_MODELS = [
   "PlatformStripeConfig",
   "PlatformEmailConfig",
   "PlatformLlmConfig",
+  "PlatformRetentionConfig",
   "StripeWebhookEvent",
 ] as const;
 

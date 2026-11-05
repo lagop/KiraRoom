@@ -8,6 +8,7 @@ import {
   RetentionCandidate,
 } from "./salon-retention";
 import { RETENTION_ACTOR, SalonRetentionScheduler } from "./salon-retention.scheduler";
+import { PlatformRetentionConfigService } from "../../platform/platform-retention-config.service";
 
 /**
  * Audit 7 D7: a salon that left is read-only 30 days, its owner is warned 7
@@ -82,7 +83,7 @@ describe("retentionStep (what the job does for one salon)", () => {
 });
 
 /** An in-memory tenants table with the where clauses the job uses. */
-function harness(rows: any[], opts: { flag?: string; emailOk?: boolean; anonymizeFails?: boolean } = {}) {
+function harness(rows: any[], opts: { flag?: string; stored?: boolean; emailOk?: boolean; anonymizeFails?: boolean } = {}) {
   const same = (a: any, b: any) =>
     a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;
   const matches = (row: any, where: any): boolean =>
@@ -108,6 +109,8 @@ function harness(rows: any[], opts: { flag?: string; emailOk?: boolean; anonymiz
       }),
     },
     user: { findFirst: jest.fn(async () => ({ email: "duena@salon.test" })) },
+    // The console switch (opts.stored); no row until the owner saves it.
+    platformRetentionConfig: { findUnique: jest.fn(async () => (opts.stored === undefined ? null : { enabled: opts.stored })) },
     gdprRequest: {
       create: jest.fn(async ({ data }: any) => {
         const r = { id: `req-${requests.length + 1}`, ...data };
@@ -130,14 +133,15 @@ function harness(rows: any[], opts: { flag?: string; emailOk?: boolean; anonymiz
     sendAnonymizationWarning: jest.fn(async () => (opts.emailOk === false ? { success: false, error: "provider down" } : { success: true })),
   };
   const config = { get: (k: string) => (k === "RETENTION_ANONYMIZE_ENABLED" ? opts.flag : undefined) };
-  const job = new SalonRetentionScheduler(prisma, gdpr as any, email as any, config as any);
+  const retentionConfig = new PlatformRetentionConfigService(prisma, config as any, { record: jest.fn() } as any);
+  const job = new SalonRetentionScheduler(prisma, gdpr as any, email as any, config as any, retentionConfig);
   return { job, prisma, gdpr, email, requests };
 }
 
 const row = (over: any = {}) => ({ ...candidate(), deletedAt: null, anonymizedAt: null, ...over });
 
 describe("SalonRetentionScheduler", () => {
-  it("dry run (flag off): logs what it would do, writes nothing, sends nothing", async () => {
+  it("dry run (switch off): logs what it would do, writes nothing, sends nothing", async () => {
     const due = row({ id: "due", anonymizationWarnedAt: at(ANONYMIZE_ON, -7), anonymizationWarnedFor: READ_ONLY_UNTIL });
     const toWarn = row({ id: "warn" });
     const t = harness([due, toWarn]);
@@ -147,6 +151,22 @@ describe("SalonRetentionScheduler", () => {
     expect(t.email.sendAnonymizationWarning).not.toHaveBeenCalled();
     expect(t.gdpr.anonymize).not.toHaveBeenCalled();
     expect(t.prisma.gdprRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("on from the console switch alone (no env var): it acts for real", async () => {
+    const t = harness([row()], { stored: true });
+    const out = await t.job.run(at(ANONYMIZE_ON, -7));
+    expect(out).toMatchObject({ enabled: true, warned: ["t1"], wouldWarn: [] });
+  });
+
+  it("stored off and no env var: still a dry run", async () => {
+    const t = harness([row()], { stored: false });
+    expect(await t.job.run(at(ANONYMIZE_ON, -7))).toMatchObject({ enabled: false, wouldWarn: ["t1"], warned: [] });
+  });
+
+  it("the env var still turns it on when the console switch is off", async () => {
+    const t = harness([row()], { flag: "true", stored: false });
+    expect(await t.job.run(at(ANONYMIZE_ON, -7))).toMatchObject({ enabled: true, warned: ["t1"] });
   });
 
   it("on: warns the owner once, then anonymises a week later with the invoices kept, and never again", async () => {

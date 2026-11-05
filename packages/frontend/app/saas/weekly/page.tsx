@@ -79,7 +79,11 @@ export default function SaasWeeklyPage() {
 
         <Section id="retention" title={t("saas.weekly.retention")} count={digest.retention.items.length} empty={t("saas.weekly.empty")}>
           {!digest.retention.enabled && (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-2">{t("saas.weekly.retention_dry_run")}</p>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-2">{t("saas.weekly.retention_dry_run")}{" "}
+              <Link href="/saas/settings/retention" className="font-medium underline">
+                {t("saas.retention_setting.title")}
+              </Link>
+            </p>
           )}
           {digest.retention.items.map((r) => (
             <Row key={r.id} left={salon(r.id, r.name)}>

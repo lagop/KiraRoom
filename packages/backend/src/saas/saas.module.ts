@@ -15,6 +15,7 @@ import { AuditLogAdminController } from "./audit/audit-log-admin.controller";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { GdprModule } from "./gdpr/gdpr.module";
+import { PlatformModule } from "../platform/platform.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { PasswordResetService } from "../auth/password-reset.service";
 import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
@@ -24,6 +25,7 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
     PrismaModule,
     PaymentsModule,
     GdprModule,
+    PlatformModule,
     // The set-password email for an owner created without a password.
     NotificationsModule,
     JwtModule.registerAsync({

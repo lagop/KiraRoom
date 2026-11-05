@@ -181,7 +181,7 @@ export class BillingScheduler {
     this.logger.warn(
       `${stale.length} tenant(s) past their read-only window: ${stale
         .map((t) => `${t.name} (${t.id}, since ${t.readOnlyUntil?.toISOString()})`)
-        .join(', ')}. Data is anonymised 30 days later by the retention job (RETENTION_ANONYMIZE_ENABLED).`,
+        .join(', ')}. Data is anonymised 30 days later by the retention job (the console switch Retención de datos).`,
     );
   }
 }

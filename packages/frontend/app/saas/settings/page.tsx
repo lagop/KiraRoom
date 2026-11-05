@@ -1,9 +1,11 @@
 "use client";
 
-import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight, MessageCircle } from "lucide-react";
+import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight, MessageCircle, ShieldAlert } from "lucide-react";
 import Link from "next/link";
+import { useTranslations } from "@/lib/use-translation";
 
 export default function SaasSettingsPage() {
+  const t = useTranslations();
   const sections = [
     {
       href: "/saas/settings/platform-llm",
@@ -36,6 +38,13 @@ export default function SaasSettingsPage() {
       description:
         "Si KiraRoom puede recibir los mensajes de WhatsApp, Messenger e Instagram, y las URL de webhook para Meta.",
       badge: "Meta",
+    },
+    {
+      href: "/saas/settings/retention",
+      icon: ShieldAlert,
+      title: t("saas.retention_setting.title"),
+      description: t("saas.retention_setting.description"),
+      badge: "RGPD",
     },
   ];
 

@@ -5,13 +5,15 @@ import { PlatformEmailConfigController } from "./platform-email-config.controlle
 import { PlatformEmailConfigService } from "./platform-email-config.service";
 import { PlatformStripeConfigController } from "./platform-stripe-config.controller";
 import { PlatformStripeConfigService } from "./platform-stripe-config.service";
+import { PlatformRetentionConfigController } from "./platform-retention-config.controller";
+import { PlatformRetentionConfigService } from "./platform-retention-config.service";
 import { AuditLogService } from "../saas/audit-log.service";
 import { CommonModule } from "../common/common.module";
 
 @Module({
   imports: [CommonModule],
-  controllers: [PlatformLlmConfigController, PlatformEmailConfigController, PlatformStripeConfigController],
-  providers: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService, AuditLogService],
-  exports: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService],
+  controllers: [PlatformLlmConfigController, PlatformEmailConfigController, PlatformStripeConfigController, PlatformRetentionConfigController],
+  providers: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService, PlatformRetentionConfigService, AuditLogService],
+  exports: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService, PlatformRetentionConfigService],
 })
 export class PlatformModule {}

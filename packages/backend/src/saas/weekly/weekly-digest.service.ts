@@ -7,7 +7,8 @@ import { appBaseUrl } from "../../common/app-base-url";
 import { salonToday } from "../../analytics/analytics-metrics";
 import { usagePeriod } from "../../common/telemetry/llm-usage.service";
 import { estimateCostUsd } from "../../virtual-receptionist/providers/anthropic-models";
-import { DAY_MS, RETENTION_FLAG, retentionEnabled, retentionStep } from "../retention/salon-retention";
+import { PlatformRetentionConfigService } from "../../platform/platform-retention-config.service";
+import { DAY_MS, retentionStep } from "../retention/salon-retention";
 import { CONSOLE_TIME_ZONE } from "../platform-metrics";
 import { COUNTABLE_TENANT_WHERE } from "../saas.constants";
 
@@ -25,7 +26,7 @@ export interface WeeklyDigest {
   trialsEnding: { id: string; name: string; trialEnd: string; hasSubscription: boolean }[];
   deletionRequests: { id: string; name: string; deletionRequestedAt: string }[];
   retention: {
-    /** RETENTION_ANONYMIZE_ENABLED: off means a dry run, nothing is done. */
+    /** The console switch (or the RETENTION_ANONYMIZE_ENABLED override): off means a dry run, nothing is done. */
     enabled: boolean;
     items: { id: string; name: string; kind: "warn" | "anonymize"; anonymizeOn: string; dueNow: boolean }[];
   };
@@ -67,12 +68,16 @@ const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
 @Injectable()
 export class WeeklyDigestService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly retentionConfig: PlatformRetentionConfigService,
+  ) {}
 
   async build(now: Date = new Date()): Promise<WeeklyDigest> {
     const in7 = new Date(now.getTime() + 7 * DAY_MS);
     const ago7 = new Date(now.getTime() - 7 * DAY_MS);
     const period = usagePeriod(now);
+    const retentionOn = await this.retentionConfig.isEnabled();
 
     const [pastDue, trials, deletions, retentionCandidates, usage, stuck, bugCount, bugs] = await runUnscoped(() =>
       Promise.all([
@@ -200,7 +205,7 @@ export class WeeklyDigestService {
         name: t.name,
         deletionRequestedAt: t.deletionRequestedAt!.toISOString(),
       })),
-      retention: { enabled: retentionEnabled(process.env[RETENTION_FLAG]), items: retentionItems },
+      retention: { enabled: retentionOn, items: retentionItems },
       aiSpend: {
         period,
         totalUsd: Math.round(salons.reduce((s, r) => s + r.usd, 0) * 100) / 100,
