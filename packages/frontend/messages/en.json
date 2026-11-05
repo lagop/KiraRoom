@@ -1,6 +1,6 @@
 {
   "landing": {
-    "badge": "Available in Spanish and English",
+    "badge": "Dashboard in Spanish and, for the most part, in English",
     "hero": {
       "title": "Run your salon or beauty business without friction",
       "subtitle": "Online booking, automatic reminders, an AI receptionist on your website and WhatsApp, loyalty, wallet and more. 14-day free trial, no card required.",
@@ -16,7 +16,7 @@
       },
       "whatsapp": {
         "title": "Automatic reminders",
-        "desc": "Cut no-shows with email and SMS reminders before each appointment."
+        "desc": "Cut no-shows with email and WhatsApp reminders before each appointment. SMS on the Pro and Empresa plans."
       },
       "ai": {
         "title": "AI receptionist",
@@ -39,7 +39,7 @@
       "title": "How it works",
       "step1": {
         "title": "Create your account",
-        "desc": "30 seconds. Your salon, your email and you're set."
+        "desc": "Your salon, your email and you're set. No card needed."
       },
       "step2": {
         "title": "Set up your services",
@@ -53,7 +53,8 @@
     "pricing": {
       "title": "Simple pricing",
       "subtitle": "No setup fees. Cancel anytime. 14-day Pro trial included.",
-      "popular": "Popular",
+      "popular": "Recommended",
+      "finalPrice": "Final prices, no taxes added.",
       "perMonth": "/mo",
       "price": "€{amount}",
       "perLocation": "per location",
@@ -61,7 +62,12 @@
       "learnMore": "Learn more",
       "planCta": "Choose plan"
     },
-    "footer": "Built for beauty and wellness businesses."
+    "footer": "Built for beauty and wellness businesses.",
+    "footerLinks": {
+      "terms": "Terms of service",
+      "privacy": "Privacy policy",
+      "contact": "Contact"
+    }
   },
   "invoices": {
     "title": "Invoices",

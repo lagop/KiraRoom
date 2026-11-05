@@ -1,4 +1,4 @@
-# Database Schema Design - Kira Room
+# Database Schema Design - KiraRoom
 
 ## Overview
 

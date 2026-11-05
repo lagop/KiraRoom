@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   SUB_PROCESSORS,
+  subProcessorText,
   closedDayRanges,
   closedRangeText,
   controllerName,
@@ -89,6 +90,31 @@ check("/legal/privacy: no API endpoints to exercise rights", /\/api\/v1\//.test(
 check("/legal/privacy: no 'no transfers' claim", /No se realizan transferencias/i.test(platform), false);
 const terms = fs.readFileSync(path.join(ROOT, "app/legal/terms/page.tsx"), "utf8");
 check("terms: processor clause (art. 28)", /art(ículo|\.) 28/i.test(terms), true);
+
+console.log("\n=== audit 9 (L8, L16, L21): the legal texts say only what the code does ===");
+for (const n of ["telegram", "meta", "stripe", "holded", "cloudflare", "twilio", "anthropic"]) {
+  check(`sub-processor listed: ${n}`, names.includes(n), true);
+}
+check(
+  "a sub-processor without a confirmed place prints no 'undefined'",
+  subProcessorText(SUB_PROCESSORS.find((x) => x.name === "Telegram")!).includes("undefined"),
+  false,
+);
+check("the salon page leaves out the sign-up check", SUB_PROCESSORS.filter((x) => x.platformOnly).map((x) => x.name), [
+  "Cloudflare (Turnstile)",
+]);
+for (const [label, src] of [
+  ["privacy", platform],
+  ["terms", terms],
+] as const) {
+  check(`${label}: no Sage / A3 / NCS`, /\bSage\b|\bA3\b|\bNCS\b/.test(src), false);
+  check(`${label}: no WAF, WAL, HS256 nor 'inmutables'`, /\bWAF\b|WAL archiving|HS256|inmutables/.test(src), false);
+  check(`${label}: no European online-dispute platform`, /ec\.europa\.eu\/consumers\/odr|524\/2013/.test(src), false);
+  check(`${label}: says 5 de noviembre de 2026`, src.includes("Última actualización: 5 de noviembre de 2026"), true);
+}
+check("privacy: the rate limit is the real one (300)", /300 por minuto/.test(platform) && !/100 req/.test(platform), true);
+check("privacy: backups say 35 days and 400 days", /35 días/.test(platform) && /400 días/.test(platform), true);
+check("terms: the public price list is linked", terms.includes("https://kiraroom.com/#precios"), true);
 
 console.log("\n=== closed days ahead ===");
 const ranges = closedDayRanges(

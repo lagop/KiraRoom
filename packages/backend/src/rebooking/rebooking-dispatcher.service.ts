@@ -378,7 +378,7 @@ export class RebookingDispatcherService {
         // P2A-receptionist-advanced: the date the email proposed, from her
         // own cadence. Basic mode proposes a generic date and stores none.
         proposedSlot: suggestion.fromCadence
-          ? { date: localDay(suggestion.date, timeZone), time: suggestion.time }
+          ? { date: localDay(suggestion.date, timeZone) }
           : undefined,
       },
     });
@@ -493,17 +493,20 @@ export class RebookingDispatcherService {
 
   /**
    * The date the email proposes. With the advanced feature and enough
-   * history: her last visit plus her usual cycle (P2A-receptionist-advanced),
-   * at 18:30, the most common rebooking window. Otherwise three days ahead
-   * at 10:00. Never today or earlier: a reminder sent late (overdue window)
-   * or to a client already past her cycle used to propose a day gone by.
+   * history: her last visit plus her usual cycle (P2A-receptionist-advanced).
+   * Otherwise three days ahead. A date only (audit 9 V10): the email used to
+   * add an hour (18:30 or 10:00) that never looked at the agenda or the
+   * opening hours, so it could name a closed or full slot. The client picks
+   * the hour from the booking page. Never today or earlier: a reminder sent
+   * late (overdue window) or to a client already past her cycle used to
+   * propose a day gone by.
    */
   private suggestDate(
     stats: CadenceStats | undefined,
     hasAdvanced: boolean,
     timeZone: string,
     now: Date,
-  ): { date: Date; time: string; fromCadence: boolean } {
+  ): { date: Date; fromCadence: boolean } {
     const tomorrow = new Date(now.getTime() + DAY_MS);
     const lastVisit = stats?.lastVisit ? new Date(stats.lastVisit) : null;
     if (
@@ -516,9 +519,9 @@ export class RebookingDispatcherService {
     ) {
       const target = new Date(lastVisit.getTime() + stats.avgDays * DAY_MS);
       const date = localDay(target, timeZone) < localDay(tomorrow, timeZone) ? tomorrow : target;
-      return { date, time: "18:30", fromCadence: true };
+      return { date, fromCadence: true };
     }
-    return { date: new Date(now.getTime() + 3 * DAY_MS), time: "10:00", fromCadence: false };
+    return { date: new Date(now.getTime() + 3 * DAY_MS), fromCadence: false };
   }
 
   private async deliver(
@@ -527,7 +530,7 @@ export class RebookingDispatcherService {
     serviceId: string,
     channel: RebookChannel,
     stats: CadenceStats | undefined,
-    suggestion: { date: Date; time: string },
+    suggestion: { date: Date },
   ): Promise<SendResult> {
     const service = await this.prisma.service.findUnique({
       where: { id: serviceId },
@@ -569,7 +572,6 @@ export class RebookingDispatcherService {
           serviceName: service.name,
           daysSinceLastVisit: String(daysSinceLastVisit),
           suggestedDate: longDayEs(suggestion.date, timeZone),
-          suggestedTime: suggestion.time,
           bookingUrl: this.buildBookingUrl(cadence.tenant?.slug ?? undefined, serviceId),
           unsubscribeUrl: unsubscribe.pageUrl,
         }),
@@ -613,14 +615,13 @@ export class RebookingDispatcherService {
     serviceName: string;
     daysSinceLastVisit: string;
     suggestedDate: string;
-    suggestedTime: string;
     bookingUrl: string;
     unsubscribeUrl: string;
   }): string {
     const v = Object.fromEntries(Object.entries(vars).map(([k, val]) => [k, escapeHtml(val)])) as typeof vars;
     return `<p>Hola ${v.clientFirstName},</p>
 <p>Hace ${v.daysSinceLastVisit} días que no te vemos para tu <strong>${v.serviceName}</strong> en ${v.salonName}.</p>
-<p>¿Te reservamos el ${v.suggestedDate} a las ${v.suggestedTime}?</p>
+<p>¿Te viene bien volver hacia el ${v.suggestedDate}? Mira los huecos libres y elige el día y la hora que prefieras:</p>
 <p><a href="${v.bookingUrl}">Reservar ahora</a></p>
 <p style="font-size:11px;color:#999">Recibes este email porque eres cliente de ${v.salonName}. Si no quieres recibir más recordatorios ni promociones, <a href="${v.unsubscribeUrl}">date de baja aquí</a>.</p>`;
   }

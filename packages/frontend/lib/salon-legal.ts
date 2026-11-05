@@ -21,15 +21,22 @@ export interface SubProcessor {
   name: string;
   /** What it does for the salon, in Spanish. */
   purpose: string;
-  /** Where, and on what basis when outside the EEA. */
-  location: string;
+  /**
+   * Where, and on what basis when outside the EEA. Left out when nobody has
+   * confirmed it: a legal text must not state a place or a transfer
+   * mechanism that was not checked.
+   */
+  location?: string;
   /** Only when the salon uses it (SMS, WhatsApp). */
   onlyIf?: string;
+  /** Concerns the salon's own account (sign-up), not its clients: the salon's client-facing privacy page leaves it out. */
+  platformOnly?: boolean;
 }
 
 /**
- * Who KiraRoom relies on to run the salon's booking page, widget and chat.
- * The AI is Anthropic's (the receptionist runs on Claude); nothing else.
+ * Who KiraRoom relies on to run the salon's booking page, widget and chat,
+ * and to charge its own subscription. The AI is Anthropic's (the
+ * receptionist runs on Claude); nothing else.
  */
 export const SUB_PROCESSORS: SubProcessor[] = [
   {
@@ -49,9 +56,8 @@ export const SUB_PROCESSORS: SubProcessor[] = [
   },
   {
     name: "Stripe",
-    purpose: "Cobro de señales y pagos online",
+    purpose: "Cobro de la suscripción de KiraRoom y, si el salón cobra online, de las señales y pagos de sus clientes",
     location: "Irlanda (Unión Europea)",
-    onlyIf: "si el salón cobra online",
   },
   {
     name: "Twilio",
@@ -60,12 +66,34 @@ export const SUB_PROCESSORS: SubProcessor[] = [
     onlyIf: "si el salón envía avisos por SMS",
   },
   {
-    name: "Meta (WhatsApp Business)",
-    purpose: "Mensajes por WhatsApp desde el número del salón",
+    name: "Meta (WhatsApp Business, Messenger e Instagram)",
+    purpose: "Mensajes por WhatsApp, Messenger e Instagram desde las cuentas del salón",
     location: "Irlanda (Unión Europea)",
-    onlyIf: "si el salón tiene WhatsApp conectado y el cliente lo elige",
+    onlyIf: "si el salón conecta alguno de esos canales y el cliente lo elige",
+  },
+  {
+    name: "Telegram",
+    purpose: "Mensajes de los clientes con la recepcionista virtual por Telegram",
+    onlyIf: "si el salón conecta Telegram y el cliente escribe por ahí",
+  },
+  {
+    name: "Holded",
+    purpose: "Sincronización de las facturas con la contabilidad del salón",
+    onlyIf: "si el salón activa la integración con Holded",
+  },
+  {
+    name: "Cloudflare (Turnstile)",
+    purpose:
+      "Comprobación contra robots al crear la cuenta, al recuperar la contraseña y tras varios intentos fallidos de inicio de sesión",
+    onlyIf: "mientras esa comprobación esté activada",
+    platformOnly: true,
   },
 ];
+
+/** What a sub-processor does, when it applies and where, as one sentence for the privacy pages. */
+export function subProcessorText(s: SubProcessor): string {
+  return `${s.purpose}${s.onlyIf ? ` (${s.onlyIf})` : ""}.${s.location ? ` ${s.location}.` : ""}`;
+}
 
 /** The salon's own page paths, exactly as the chat and the widget link them. */
 export function salonPrivacyPath(slug: string): string {
