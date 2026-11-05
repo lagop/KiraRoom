@@ -1,6 +1,7 @@
 import React from "react";
-import { CheckCircle, AlertCircle, Clock, XCircle } from "lucide-react";
-import { getStatusBadgeStyle } from "../../appointment-drawer.utils";
+import { CheckCircle, AlertCircle, Clock, XCircle, UserX } from "lucide-react";
+import { getStatusBadgeStyle, statusLabelKey } from "../../appointment-drawer.utils";
+import { useTranslations } from "@/lib/use-translation";
 
 /**
  * Status pill rendered in the appointment header.
@@ -24,16 +25,20 @@ const ICONS: Record<string, React.ReactNode> = {
   in_progress: <Clock className="w-4 h-4 mr-2" />,
   completed: <CheckCircle className="w-4 h-4 mr-2" />,
   cancelled: <XCircle className="w-4 h-4 mr-2" />,
+  no_show: <UserX className="w-4 h-4 mr-2" />,
 };
 
 export function AppointmentStatusBadge({ status }: { status: string }) {
+  const t = useTranslations();
   const style = getStatusBadgeStyle(status);
+  // The label in the panel's language (style.label is the English fallback).
+  const key = statusLabelKey(status);
   return (
     <span
       className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${style.bg} ${style.text} ${style.border}`}
     >
       {ICONS[status] ?? null}
-      {style.label}
+      {key ? t(key) : style.label}
     </span>
   );
 }

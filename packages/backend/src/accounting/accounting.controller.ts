@@ -14,6 +14,7 @@ import {
   SyncInvoiceDto,
   UpdateAccountingSettingsDto,
 } from "./dto/accounting.dto";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 interface AuthedRequest extends Request {
   user: { tenantId?: string };
@@ -46,12 +47,14 @@ export class AccountingController {
     return this.accounting.updateSettings(this.requireTenantId(req), dto);
   }
 
+  @NotDuringSupport()
   @Post("holded/connect")
   @Roles(UserRole.owner)
   connectHolded(@Req() req: AuthedRequest, @Body() dto: ConnectHoldedDto) {
     return this.accounting.connectHolded(this.requireTenantId(req), dto.apiKey);
   }
 
+  @NotDuringSupport()
   @Post("disconnect")
   @Roles(UserRole.owner)
   async disconnect(@Req() req: AuthedRequest) {
@@ -82,6 +85,7 @@ export class AccountingController {
   }
 
   /** Libro de facturas emitidas for the gestoría (Sage, A3, NCS, any program). */
+  @NotDuringSupport()
   @Get("export/facturas-emitidas")
   @Roles(...SALON_MANAGERS)
   async exportInvoiceBook(

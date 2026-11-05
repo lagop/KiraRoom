@@ -26,9 +26,16 @@ import {
  *     unchanged — callers don't need to know whether the master key is
  *     local or KMS-backed.
  *
- * DEK rotation is the responsibility of the operator; the public
- * `rotateDek(tenantId)` method re-wraps the DEK and re-encrypts all
- * tenant rows. The function is intentionally admin-only.
+ * In practice (KIRA_KMS_PROVIDER unset, as in production) every value is
+ * encrypted with ONE key: META_TOKEN_ENCRYPTION_KEY. Despite its name it is
+ * not only Meta's: it encrypts the platform console's Stripe, Resend and AI
+ * keys, the salons' Stripe keys, the WhatsApp/Meta/Telegram tokens, fiscal
+ * certificates, accounting tokens and two-step secrets.
+ *
+ * There is no in-app rotation (no rotateDek). Changing the key without
+ * re-encrypting makes every one of those values unreadable; rotate it only
+ * with scripts/reencrypt-secrets.ts (old key -> new key, dry run first),
+ * as docs/runbook.md "Rotating META_TOKEN_ENCRYPTION_KEY" describes.
  */
 
 const ALGO = "aes-256-gcm";
@@ -186,9 +193,9 @@ export class EncryptionService {
   private readonly logger = new Logger(EncryptionService.name);
   private readonly kms: KmsProvider;
   /**
-   * Per-tenant DEK cache. Keyed by tenantId. Populated lazily on the
-   * first encrypt/decrypt call and invalidated on `rotateDek(tenantId)`.
-   * Cached for the lifetime of the service instance.
+   * Per-tenant DEK cache. Keyed by tenantId. Filled by `cacheDek` and
+   * cleared by `invalidateDek`; cached for the lifetime of the service
+   * instance. (No caller uses per-tenant DEKs today.)
    */
   private readonly dekCache = new Map<string, Buffer>();
   /**
@@ -304,8 +311,9 @@ export class EncryptionService {
   }
 
   /**
-   * Re-encrypt a value with a fresh DEK. Used by `rotateDek`. Returns
-   * the new ciphertext and the wrapped DEK for storage.
+   * Re-encrypt a value with a fresh DEK. Returns the new ciphertext and
+   * the wrapped DEK for storage. (Not used yet: rotating the master key is
+   * scripts/reencrypt-secrets.ts.)
    */
   async reencryptWithFreshDek(plain: string): Promise<{
     dek: Buffer;

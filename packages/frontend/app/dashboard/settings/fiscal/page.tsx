@@ -8,8 +8,18 @@ import {
 } from "@tanstack/react-query";
 import apiClient, { FiscalSettings, VerifactuStatus } from "@/lib/api";
 import { VerifactuCard } from "@/components/verifactu/verifactu-card";
-import { Loader2, Save, ShieldOff } from "lucide-react";
+import { Loader2, Save, Upload, ShieldOff, Lock } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { pricesTaxExampleMessage } from "@/lib/prices-tax-example";
+import {
+  changedFiscalFields,
+  fiscalChangeSummary,
+  issuerFieldsFromSettings,
+  type TaxIdType,
+} from "@/lib/fiscal-settings-form";
+import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { getCurrentUser } from "@/lib/utils";
 import {
   TAX_REGIMES,
   TAX_REGIME_LABELS,
@@ -19,9 +29,33 @@ import {
   type TaxRegime,
 } from "@kira/shared";
 
+/** The .p12 / .pfx file as base64, without the data: prefix. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("No se pudo leer el archivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function FiscalSettingsPage() {
   const t = useTranslations();
   const qc = useQueryClient();
+  const { toast } = useToast();
+  // PATCH settings/fiscal and the certificates are the owner's only
+  // (invoices.controller.ts): an admin sees the settings read-only instead
+  // of a Guardar that does nothing.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? "");
+  }, []);
+  const isOwner = role === "owner";
+  const readOnly = role !== null && !isOwner;
+
   const settings = useQuery<FiscalSettings>({
     queryKey: ["invoices", "fiscal-settings"],
     queryFn: () => apiClient.getFiscalSettings(),
@@ -33,6 +67,7 @@ export default function FiscalSettingsPage() {
   const certs = useQuery({
     queryKey: ["invoices", "certificates"],
     queryFn: () => apiClient.listFiscalCertificates(),
+    enabled: isOwner,
   });
 
   const save = useMutation({
@@ -41,40 +76,107 @@ export default function FiscalSettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["invoices", "fiscal-settings"] });
       qc.invalidateQueries({ queryKey: ["verifactu"] });
+      toast({ title: t("invoices.fiscalSettings.saved") });
     },
+    onError: (err: unknown) =>
+      toast({
+        title: t("invoices.fiscalSettings.saveError"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
   });
 
   const deactivateCert = useMutation({
     mutationFn: (id: string) => apiClient.deactivateFiscalCertificate(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices", "certificates"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["invoices", "certificates"] });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
+    },
+    onError: (err: unknown) =>
+      toast({
+        title: t("invoices.fiscalSettings.certDeactivateError"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
+  });
+  const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; alias: string } | null>(null);
+
+  // Certificate upload: the .p12 / .pfx file and its password, as
+  // UploadCertificateDto takes them (pkcs12Base64 + passphrase).
+  const [certFile, setCertFile] = useState<File | null>(null);
+  const [certAlias, setCertAlias] = useState("");
+  const [certPassword, setCertPassword] = useState("");
+  const [certSeal, setCertSeal] = useState(false);
+  const [certInputKey, setCertInputKey] = useState(0);
+  const uploadCert = useMutation({
+    mutationFn: async () => {
+      if (!certFile) throw new Error(t("invoices.fiscalSettings.certFileMissing"));
+      return apiClient.uploadFiscalCertificate({
+        alias: certAlias.trim() || certFile.name.replace(/\.(p12|pfx)$/i, ""),
+        provider: "p12",
+        pkcs12Base64: await fileToBase64(certFile),
+        passphrase: certPassword,
+        certificateType: certSeal ? "seal" : "personal",
+      });
+    },
+    onSuccess: (saved) => {
+      setCertFile(null);
+      setCertAlias("");
+      setCertPassword("");
+      setCertSeal(false);
+      setCertInputKey((k) => k + 1);
+      qc.invalidateQueries({ queryKey: ["invoices", "certificates"] });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
+      toast({
+        title: t("invoices.fiscalSettings.certUploaded"),
+        description: saved.nifMatchesSalon === false ? t("invoices.fiscalSettings.certOtherNif") : undefined,
+      });
+    },
+    onError: (err: unknown) =>
+      toast({
+        title: t("invoices.fiscalSettings.certUploadError"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
   });
 
-  const [draft, setDraft] = useState<{
+  type Draft = {
     fiscalMode: FiscalSettings["fiscalMode"];
     defaultSeries: string;
     defaultTaxRate: number;
     autoInvoiceAppointments: boolean;
     diputacion: "bizkaia" | "gipuzkoa" | "alava" | null;
     taxRegime: TaxRegime;
+    pricesIncludeTax: boolean;
     tenantNif: string;
-    taxIdType: "nif" | "cif" | "nie" | "passport" | "other";
+    taxIdType: TaxIdType;
     legalName: string;
-  }>({
+  };
+  const [draft, setDraft] = useState<Draft>({
     fiscalMode: "none",
     defaultSeries: "A",
     defaultTaxRate: 21,
     autoInvoiceAppointments: false,
     diputacion: null,
     taxRegime: "iva",
+    pricesIncludeTax: false,
     tenantNif: "",
     taxIdType: "nif",
     legalName: "",
   });
 
+  // What was loaded: a save sends only the fields that differ from it, so a
+  // field nobody touched (the razón social, the ID type...) is never sent
+  // back over what is stored.
+  const [loaded, setLoaded] = useState<Draft | null>(null);
+  // Changes to the NIF, the series, the regime or prices-include-tax are
+  // confirmed first: what they change for the invoices from now on.
+  const [confirmChanges, setConfirmChanges] = useState(false);
+
   useEffect(() => {
     if (settings.data) {
       const fs = settings.data.fiscalSettings ?? {};
-      setDraft({
+      const next: Draft = {
         fiscalMode: settings.data.fiscalMode,
         defaultSeries: (fs.defaultSeries as string) ?? "A",
         defaultTaxRate: (fs.defaultTaxRate as number) ?? 21,
@@ -83,18 +185,24 @@ export default function FiscalSettingsPage() {
         diputacion:
           (fs.diputacion as "bizkaia" | "gipuzkoa" | "alava" | null) ?? null,
         taxRegime: taxRegimeOf(fs),
-        tenantNif:
-          (fs.tenantNif as string) ??
-          (settings.data.taxId as string | undefined) ??
-          "",
-        taxIdType:
-          (settings.data.taxIdType as
-            | "nif" | "cif" | "nie" | "passport" | "other"
-            | undefined) ?? "nif",
-        legalName: (settings.data.legalName as string) ?? "",
-      });
+        // Missing (a salon from before the setting): tax on top, as always.
+        pricesIncludeTax: fs.pricesIncludeTax === true,
+        ...issuerFieldsFromSettings(settings.data),
+      };
+      setDraft(next);
+      setLoaded(next);
     }
   }, [settings.data]);
+
+  const changes = loaded ? changedFiscalFields(draft, loaded) : {};
+  const hasChanges = Object.keys(changes).length > 0;
+  const rateValid = Number.isFinite(draft.defaultTaxRate) && draft.defaultTaxRate >= 0 && draft.defaultTaxRate <= 100;
+  const riskyChanges = loaded ? fiscalChangeSummary(draft, loaded) : [];
+
+  const submit = () => {
+    if (riskyChanges.length > 0) setConfirmChanges(true);
+    else save.mutate(changes);
+  };
 
   if (settings.isLoading) {
     return (
@@ -103,6 +211,14 @@ export default function FiscalSettingsPage() {
       </div>
     );
   }
+
+  // "Un servicio de 30,00 € se factura como 24,79 € + 5,21 € de IVA", at
+  // the rate and regime selected above, before saving.
+  const priceExample = pricesTaxExampleMessage(
+    rateValid ? draft.defaultTaxRate : 0,
+    draft.pricesIncludeTax,
+    TAX_REGIME_LABELS[draft.taxRegime],
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -115,8 +231,15 @@ export default function FiscalSettingsPage() {
         </p>
       </header>
 
+      {readOnly && (
+        <p className="flex items-center gap-2 rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-700">
+          <Lock className="h-4 w-4 shrink-0" />
+          {t("invoices.fiscalSettings.ownerOnly")}
+        </p>
+      )}
+
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <div className="space-y-5">
+        <fieldset disabled={readOnly} className="space-y-5 disabled:opacity-80">
           <div>
             <label className="text-sm font-medium text-gray-900">
               {t("invoices.fiscalSettings.taxIdLabel")}
@@ -136,8 +259,8 @@ export default function FiscalSettingsPage() {
                 <option value="nif">NIF</option>
                 <option value="cif">CIF</option>
                 <option value="nie">NIE</option>
-                <option value="passport">Pasaporte</option>
-                <option value="other">Otro</option>
+                <option value="passport">{t("invoices.fiscalSettings.taxIdPassport")}</option>
+                <option value="other">{t("invoices.fiscalSettings.taxIdOther")}</option>
               </select>
               <input
                 type="text"
@@ -167,7 +290,7 @@ export default function FiscalSettingsPage() {
               onChange={(e) =>
                 setDraft((d) => ({ ...d, legalName: e.target.value }))
               }
-              placeholder="Razón social del emisor"
+              placeholder={t("invoices.fiscalSettings.legalNamePlaceholder")}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
           </div>
@@ -198,11 +321,7 @@ export default function FiscalSettingsPage() {
                 <option
                   key={m}
                   value={m}
-                  disabled={
-                    m === "verifactu"
-                      ? !verifactu.data?.available
-                      : m !== "none" && settings.data?.submissionAvailable === false
-                  }
+                  disabled={m === "verifactu" ? !verifactu.data?.available : m !== "none"}
                 >
                   {t(`invoices.fiscalMode.${m}`)}
                 </option>
@@ -215,7 +334,7 @@ export default function FiscalSettingsPage() {
             )}
             {verifactu.data?.available && (
               <p className="mt-2 text-xs text-gray-500">
-                TicketBAI (País Vasco) y SII todavía no están disponibles.
+                {t("invoices.verifactu.otherModes")}
               </p>
             )}
           </div>
@@ -227,13 +346,16 @@ export default function FiscalSettingsPage() {
               </label>
               <input
                 type="text"
-                maxLength={2}
+                maxLength={4}
                 value={draft.defaultSeries}
                 onChange={(e) =>
-                  setDraft((d) => ({ ...d, defaultSeries: e.target.value }))
+                  setDraft((d) => ({ ...d, defaultSeries: e.target.value.toUpperCase() }))
                 }
-                className="mt-1 block w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="mt-1 block w-32 rounded-md border border-gray-300 px-3 py-2 text-sm uppercase"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                {t("invoices.fiscalSettings.defaultSeriesHint")}
+              </p>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-900">
@@ -274,16 +396,42 @@ export default function FiscalSettingsPage() {
                 type="number"
                 min={0}
                 max={100}
-                value={draft.defaultTaxRate}
+                step={0.01}
+                value={Number.isFinite(draft.defaultTaxRate) ? draft.defaultTaxRate : ""}
                 onChange={(e) =>
                   setDraft((d) => ({
                     ...d,
-                    defaultTaxRate: Number(e.target.value),
+                    // Empty is not 0 %: it stays invalid until a rate is typed.
+                    defaultTaxRate: e.target.value === "" ? Number.NaN : Number(e.target.value),
                   }))
                 }
                 className="mt-1 block w-32 rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
+              {!rateValid && (
+                <p className="mt-1 text-xs text-red-600">{t("invoices.fiscalSettings.taxRateInvalid")}</p>
+              )}
             </div>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+              <input
+                type="checkbox"
+                checked={draft.pricesIncludeTax}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    pricesIncludeTax: e.target.checked,
+                  }))
+                }
+                className="h-4 w-4 rounded border-gray-300 text-violet-600"
+              />
+              <span>{t("invoices.fiscalSettings.pricesIncludeTax")}</span>
+            </label>
+            <p className="mt-1 pl-6 text-xs text-gray-500">
+              {t(priceExample.key, priceExample.params)}.{" "}
+              {t("invoices.fiscalSettings.pricesIncludeTaxHint")}
+            </p>
           </div>
 
           <label className="flex items-center gap-2 text-sm">
@@ -334,74 +482,173 @@ export default function FiscalSettingsPage() {
               </select>
             </div>
           )}
-        </div>
+        </fieldset>
 
-        <div className="mt-6 flex justify-end">
-          <button
-            type="button"
-            disabled={save.isPending}
-            onClick={() => save.mutate(draft)}
-            className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
-          >
-            {save.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
-            {t("invoices.actions.save")}
-          </button>
-        </div>
-        {save.isError && (
-          <p className="mt-2 text-right text-sm text-red-600">{(save.error as Error).message}</p>
-        )}
-        {save.isSuccess && (
-          <p className="mt-2 text-right text-xs text-green-600">
-            {t("invoices.fiscalSettings.saved")}
-          </p>
+        {!readOnly && (
+          <div className="mt-6 flex justify-end">
+            <button
+              type="button"
+              disabled={save.isPending || !hasChanges || !rateValid}
+              onClick={submit}
+              className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+            >
+              {save.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              {t("invoices.actions.save")}
+            </button>
+          </div>
         )}
       </div>
 
       <VerifactuCard />
 
-      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="text-base font-semibold text-gray-900">
-          {t("invoices.fiscalSettings.certificates")}
-        </h2>
-        {certs.data && certs.data.length > 0 ? (
-          <ul className="mt-3 space-y-2">
-            {certs.data.map((c) => (
-              <li
-                key={c.id}
-                className="flex items-center justify-between rounded-md border border-gray-200 p-3 text-sm"
-              >
-                <div>
-                  <div className="font-medium">{c.alias}</div>
-                  <div className="text-xs text-gray-500">
-                    {t("invoices.fiscalSettings.certFingerprint")}:{" "}
-                    {c.fingerprint.slice(0, 16)}...
-                  </div>
-                  {c.notAfter && (
-                    <div className="text-xs text-gray-500">
-                      {t("invoices.fiscalSettings.certNotAfter")}:{" "}
-                      {new Date(c.notAfter).toLocaleDateString("es-ES")}
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => deactivateCert.mutate(c.id)}
-                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+      {isOwner && (
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="text-base font-semibold text-gray-900">
+            {t("invoices.fiscalSettings.certificates")}
+          </h2>
+          <p className="mt-1 text-sm text-gray-600">{t("invoices.fiscalSettings.certIntro")}</p>
+          {certs.data && certs.data.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {certs.data.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-center justify-between rounded-md border border-gray-200 p-3 text-sm"
                 >
-                  <ShieldOff className="h-3 w-3" />
-                  {t("invoices.fiscalSettings.deactivate")}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-sm text-gray-500">—</p>
-        )}
-      </div>
+                  <div>
+                    <div className="font-medium">{c.alias}</div>
+                    <div className="text-xs text-gray-500">
+                      {t("invoices.fiscalSettings.certFingerprint")}:{" "}
+                      {c.fingerprint.slice(0, 16)}...
+                    </div>
+                    {c.notAfter && (
+                      <div className="text-xs text-gray-500">
+                        {t("invoices.fiscalSettings.certNotAfter")}:{" "}
+                        {new Date(c.notAfter).toLocaleDateString("es-ES")}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeactivate({ id: c.id, alias: c.alias })}
+                    className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                  >
+                    <ShieldOff className="h-3 w-3" />
+                    {t("invoices.fiscalSettings.deactivate")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm text-gray-500">{t("invoices.fiscalSettings.certNone")}</p>
+          )}
+
+          <form
+            className="mt-5 space-y-3 border-t border-gray-100 pt-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (certFile) uploadCert.mutate();
+            }}
+          >
+            <h3 className="text-sm font-medium text-gray-900">{t("invoices.fiscalSettings.uploadCert")}</h3>
+            <p className="text-xs text-gray-500">{t("invoices.fiscalSettings.uploadCertHint")}</p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label htmlFor="cert-file" className="block text-xs font-medium text-gray-700">
+                  {t("invoices.fiscalSettings.certFile")}
+                </label>
+                <input
+                  key={certInputKey}
+                  id="cert-file"
+                  type="file"
+                  accept=".p12,.pfx,application/x-pkcs12"
+                  onChange={(e) => setCertFile(e.target.files?.[0] ?? null)}
+                  className="mt-1 block w-full text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="cert-password" className="block text-xs font-medium text-gray-700">
+                  {t("invoices.fiscalSettings.certPassword")}
+                </label>
+                <input
+                  id="cert-password"
+                  type="password"
+                  autoComplete="off"
+                  value={certPassword}
+                  onChange={(e) => setCertPassword(e.target.value)}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="cert-alias" className="block text-xs font-medium text-gray-700">
+                  {t("invoices.fiscalSettings.certAlias")}
+                </label>
+                <input
+                  id="cert-alias"
+                  type="text"
+                  maxLength={100}
+                  value={certAlias}
+                  onChange={(e) => setCertAlias(e.target.value)}
+                  placeholder={t("invoices.fiscalSettings.certAliasPlaceholder")}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={certSeal} onChange={(e) => setCertSeal(e.target.checked)} className="h-4 w-4" />
+              {t("invoices.fiscalSettings.certSeal")}
+            </label>
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={!certFile || uploadCert.isPending}
+                className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {uploadCert.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {t("invoices.fiscalSettings.certUploadCta")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmChanges}
+        title={t("invoices.fiscalSettings.confirmTitle")}
+        description={
+          <div className="space-y-2">
+            <p>{t("invoices.fiscalSettings.confirmIntro")}</p>
+            <ul className="list-disc space-y-1 pl-5">
+              {riskyChanges.map((line) => (
+                <li key={line.key}>{t(line.key, line.params)}</li>
+              ))}
+            </ul>
+          </div>
+        }
+        confirmLabel={t("invoices.fiscalSettings.confirmCta")}
+        cancelLabel={t("common.cancel")}
+        loading={save.isPending}
+        onCancel={() => setConfirmChanges(false)}
+        onConfirm={() => save.mutate(changes, { onSettled: () => setConfirmChanges(false) })}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeactivate}
+        title={t("invoices.fiscalSettings.certDeactivateTitle", { alias: confirmDeactivate?.alias ?? "" })}
+        description={t("invoices.fiscalSettings.certDeactivateBody")}
+        confirmLabel={t("invoices.fiscalSettings.deactivate")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={deactivateCert.isPending}
+        onCancel={() => setConfirmDeactivate(null)}
+        onConfirm={() =>
+          confirmDeactivate &&
+          deactivateCert.mutate(confirmDeactivate.id, { onSettled: () => setConfirmDeactivate(null) })
+        }
+      />
     </div>
   );
 }

@@ -4,42 +4,92 @@ import { useEffect, useState } from "react";
 import {
   Link as LinkIcon,
   Unlink,
-  RefreshCw,
-  ExternalLink,
   AlertCircle,
   Check,
+  ChevronDown,
+  RefreshCw,
+  Radio,
 } from "lucide-react";
-import apiClient, { WhatsAppConnection } from "@/lib/api";
+import apiClient, { WhatsAppConnection, WhatsAppSetupStatus } from "@/lib/api";
+import {
+  RECEPTION_POLL_MS,
+  receptionPoll,
+  templateSubmitErrors,
+  type ReceptionTestState,
+} from "@/lib/whatsapp-reception";
 import { useToast } from "@/components/ui/use-toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useTranslations } from "@/lib/use-translation";
 
 /** KiraRoom's standard templates (backend whatsapp-templates.ts), by name. */
-const TEMPLATE_LABELS: Record<string, string> = {
-  kiraroom_recordatorio_cita: "Recordatorio de cita",
-  kiraroom_cita_confirmada: "Cita confirmada",
-  kiraroom_cita_cancelada: "Cita cancelada",
-  kiraroom_cita_cambiada: "Cambio de cita",
+const TEMPLATE_KEYS: Record<string, string> = {
+  kiraroom_recordatorio_cita: "whatsappSettings.templateNames.reminder",
+  kiraroom_cita_confirmada: "whatsappSettings.templateNames.confirmed",
+  kiraroom_cita_cancelada: "whatsappSettings.templateNames.cancelled",
+  kiraroom_cita_cambiada: "whatsappSettings.templateNames.changed",
+  kiraroom_hueco_libre: "whatsappSettings.templateNames.freeSlot",
+  kiraroom_opinion_cita: "whatsappSettings.templateNames.review",
+};
+
+const TEMPLATE_STATUS_KEYS: Record<string, string> = {
+  APPROVED: "whatsappSettings.templateStatus.approved",
+  REJECTED: "whatsappSettings.templateStatus.rejected",
+  PENDING: "whatsappSettings.templateStatus.pending",
+  NOT_SUBMITTED: "whatsappSettings.templateStatus.notSubmitted",
+  // Meta could not be asked (expired token, wrong account...): not "Sin enviar".
+  UNKNOWN: "whatsappSettings.templateStatus.unknown",
+};
+
+/** The in-panel guide to the manual connection (D20), one translation key per step. */
+const GUIDE_STEPS = ["step1", "step2", "step3", "step4", "step5", "step6"];
+
+const EMPTY_MANUAL = { accessToken: "", wabaId: "", phoneNumberId: "", displayName: "" };
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" });
+}
+
+const QUALITY_KEYS: Record<string, string> = {
+  GREEN: "whatsappSettings.quality.green",
+  YELLOW: "whatsappSettings.quality.yellow",
+  RED: "whatsappSettings.quality.red",
 };
 
 export default function WhatsAppSettingsPage() {
+  const t = useTranslations();
   const { toast } = useToast();
   const [conn, setConn] = useState<WhatsAppConnection | null>(null);
   const [loading, setLoading] = useState(true);
-  const [manual, setManual] = useState({
-    accessToken: "",
-    wabaId: "",
-    phoneNumberId: "",
-    displayPhone: "",
-    displayName: "",
-  });
+  // A failed load is said as such: it used to show the connection forms to
+  // a salon that is already connected.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // The number shown to clients comes from Meta, not from a field here.
+  const [manual, setManual] = useState(EMPTY_MANUAL);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // A new token for a connection Meta stopped accepting.
+  const [newToken, setNewToken] = useState("");
+  // Disconnecting is confirmed in the panel's dialog.
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [templates, setTemplates] = useState<Array<{ name: string; status: string }>>([]);
+  // Whether KiraRoom can receive WhatsApp at all (the platform's Meta app).
+  const [setup, setSetup] = useState<WhatsAppSetupStatus | null>(null);
+  const [receptionTest, setReceptionTest] = useState<ReceptionTestState>({ kind: "idle" });
 
   async function load() {
     setLoading(true);
+    setLoadError(null);
     try {
-      const c = await apiClient.getWhatsAppConnection();
+      const [c, s] = await Promise.all([
+        apiClient.getWhatsAppConnection(),
+        apiClient.getWhatsAppSetup().catch(() => null),
+      ]);
       setConn(c);
+      setSetup(s);
       if (c) setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
+    } catch (err: any) {
+      setLoadError(err?.message || t("whatsappSettings.loadError"));
     } finally {
       setLoading(false);
     }
@@ -48,11 +98,21 @@ export default function WhatsAppSettingsPage() {
   async function submitTemplates() {
     setBusy(true);
     try {
-      await apiClient.submitWhatsAppStandardTemplates();
+      const result = await apiClient.submitWhatsAppStandardTemplates();
       setTemplates(await apiClient.getWhatsAppStandardTemplates().catch(() => []));
-      toast({ title: "Plantillas enviadas a Meta para su revisión" });
+      // Meta's refusals come back per template as "ERROR: <reason>".
+      const errors = templateSubmitErrors(result);
+      if (errors.length > 0) {
+        toast({
+          title: t("whatsappSettings.templatesSubmitPartial"),
+          description: errors.join(" "),
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: t("whatsappSettings.templatesSubmitted") });
+      }
     } catch (err: any) {
-      toast({ title: "No se pudieron enviar las plantillas", description: err?.message, variant: "destructive" });
+      toast({ title: t("whatsappSettings.templatesSubmitError"), description: err?.message, variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -60,69 +120,144 @@ export default function WhatsAppSettingsPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function startOAuth() {
+  // While the reception test waits, the connection is read every few seconds.
+  const waiting = receptionTest.kind === "waiting";
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(async () => {
+      const c = await apiClient.getWhatsAppConnection().catch(() => null);
+      if (c) setConn(c);
+      setReceptionTest((state) => receptionPoll(state, c?.lastInboundAt, Date.now()));
+    }, RECEPTION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  async function startReceptionTest() {
     try {
-      const { url } = await apiClient.startWhatsAppConnect();
-      window.open(url, "_blank", "noopener");
+      const test = await apiClient.startWhatsAppReceptionTest();
+      if (!test.receivingAvailable) {
+        setReceptionTest({ kind: "unavailable", reason: test.receivingProblem ?? t("whatsappSettings.receptionTest.unavailable") });
+      } else if (!test.subscribed) {
+        setReceptionTest({
+          kind: "unavailable",
+          reason: test.webhookError || t("whatsappSettings.receivingNoHelp"),
+        });
+      } else {
+        setReceptionTest({ kind: "waiting", since: test.since, startedAt: Date.now() });
+      }
     } catch (err: any) {
-      toast({ title: err?.message ?? "Error", variant: "destructive" });
+      toast({ title: t("whatsappSettings.receptionTest.error"), description: err?.message, variant: "destructive" });
     }
   }
 
-  async function connectManual() {
+  // Sending works with the salon's token, but nothing is received while the
+  // platform's Meta app is not configured: not plainly "Conectado".
+  const sendOnly = !!setup && !setup.receivingAvailable;
+
+  async function connect(input: typeof EMPTY_MANUAL) {
     setBusy(true);
     try {
-      await apiClient.manualWhatsAppConnect(manual);
-      toast({ title: "Conexión registrada" });
-      setManual({
-        accessToken: "",
-        wabaId: "",
-        phoneNumberId: "",
-        displayPhone: "",
-        displayName: "",
+      const saved = await apiClient.manualWhatsAppConnect({
+        ...input,
+        displayName: input.displayName || undefined,
       });
+      if (saved?.webhookError) {
+        toast({ title: t("whatsappSettings.webhookWarning"), description: saved.webhookError, variant: "destructive" });
+      } else {
+        toast({ title: t("whatsappSettings.connected") });
+      }
+      setManual(EMPTY_MANUAL);
+      setNewToken("");
       await load();
     } catch (err: any) {
-      toast({ title: err?.message ?? "Error", variant: "destructive" });
+      toast({ title: t("whatsappSettings.connectError"), description: err?.message, variant: "destructive" });
     } finally {
       setBusy(false);
     }
   }
 
-  async function disconnect() {
-    if (!confirm("¿Desconectar WhatsApp? Las campañas pendientes no se enviarán.")) return;
+  async function checkAgain() {
+    setChecking(true);
     try {
-      await apiClient.disconnectWhatsApp();
-      toast({ title: "Desconectado" });
-      await load();
+      const c = await apiClient.checkWhatsAppConnection();
+      if (c?.webhookError) {
+        toast({ title: t("whatsappSettings.webhookWarning"), description: c.webhookError, variant: "destructive" });
+      } else {
+        toast({ title: t("whatsappSettings.checkOk") });
+      }
     } catch (err: any) {
-      toast({ title: err?.message ?? "Error", variant: "destructive" });
+      toast({ title: t("whatsappSettings.checkError"), description: err?.message, variant: "destructive" });
+    } finally {
+      setChecking(false);
+      await load();
     }
   }
 
-  if (loading) return <div className="text-gray-500">Cargando…</div>;
+  async function performDisconnect() {
+    setDisconnecting(true);
+    try {
+      await apiClient.disconnectWhatsApp();
+      toast({ title: t("whatsappSettings.disconnected") });
+      await load();
+    } catch (err: any) {
+      toast({ title: t("whatsappSettings.disconnectError"), description: err?.message, variant: "destructive" });
+    } finally {
+      setDisconnecting(false);
+      setConfirmDisconnect(false);
+    }
+  }
+
+  if (loading) return <div className="text-gray-500">{t("common.loading")}</div>;
+
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold text-gray-900">{t("whatsappSettings.title")}</h1>
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p>{t("whatsappSettings.loadError")}</p>
+            <p className="mt-1 text-xs">{loadError}</p>
+            <button
+              onClick={load}
+              className="mt-2 rounded border border-red-300 px-3 py-1 text-xs hover:bg-red-100"
+            >
+              {t("whatsappSettings.retry")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">WhatsApp Business</h1>
-        <p className="text-gray-500 mt-1">
-          Conecta tu número de WhatsApp Business: el recepcionista atenderá
-          por WhatsApp y los recordatorios de cita saldrán desde tu número.
-        </p>
+        <h1 className="text-2xl font-bold text-gray-900">{t("whatsappSettings.title")}</h1>
+        <p className="text-gray-500 mt-1">{t("whatsappSettings.subtitle")}</p>
       </div>
 
       {conn ? (
         <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-semibold flex items-center gap-2">
-                <Check className="w-4 h-4 text-green-600" /> Conectado
+                {sendOnly ? (
+                  <>
+                    <AlertCircle className="w-4 h-4 text-amber-600" /> {t("whatsappSettings.sendOnlyTitle")}
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 text-green-600" /> {t("whatsappSettings.connectedTitle")}
+                  </>
+                )}
               </div>
               <div className="text-sm text-gray-500 mt-1">
                 {conn.displayName || conn.displayPhone}
+                {conn.displayName && conn.displayPhone ? ` · ${conn.displayPhone}` : ""}
               </div>
             </div>
             <span
@@ -136,128 +271,258 @@ export default function WhatsAppSettingsPage() {
                       : "bg-gray-100 text-gray-600"
               }`}
             >
-              Quality: {conn.qualityScore || "—"}
+              {t("whatsappSettings.qualityLabel")}:{" "}
+              {conn.qualityScore && QUALITY_KEYS[conn.qualityScore]
+                ? t(QUALITY_KEYS[conn.qualityScore])
+                : t("whatsappSettings.quality.unknown")}
             </span>
           </div>
-          <dl className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <dt className="text-gray-500">WABA ID</dt>
-              <dd className="font-mono">{conn.wabaId}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Phone Number ID</dt>
-              <dd className="font-mono">{conn.phoneNumberId}</dd>
-            </div>
-            <div>
-              <dt className="text-gray-500">Display Phone</dt>
-              <dd className="font-mono">{conn.displayPhone}</dd>
-            </div>
-            {conn.tokenExpiresAt && (
+          {conn.accessProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <dt className="text-gray-500">Token expira</dt>
-                <dd>{new Date(conn.tokenExpiresAt).toLocaleString()}</dd>
+                <p className="font-medium">{t("whatsappSettings.accessLostTitle")}</p>
+                <p className="mt-1">{conn.accessProblem}</p>
               </div>
+            </div>
+          )}
+          {sendOnly && setup?.receivingProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{setup.receivingProblem}</p>
+            </div>
+          )}
+          <div className="text-sm text-gray-700">
+            <span className="font-medium">{t("whatsappSettings.receivingLabel")}:</span>{" "}
+            {!sendOnly && conn.webhookSubscribedAt && !conn.webhookError ? (
+              <span className="text-green-700">{t("whatsappSettings.receivingYes")}</span>
+            ) : (
+              <span className="text-red-700">{t("whatsappSettings.receivingNo")}</span>
             )}
-          </dl>
-          <div className="border-t border-gray-100 pt-3">
-            <div className="text-sm font-medium text-gray-900">Plantillas de mensaje</div>
-            <p className="text-xs text-gray-500 mt-1">
-              A quien no te ha escrito en las últimas 24 horas, WhatsApp solo le entrega
-              mensajes con una plantilla aprobada por Meta: recordatorios, confirmaciones,
-              cancelaciones y cambios de cita, avisos de la lista de espera y peticiones de
-              reseña. Las enviamos a revisión al conectar; suelen aprobarse en unas horas.
-              Mientras una no esté aprobada, ese aviso sale por el canal de siempre (email,
-              SMS o el WhatsApp de la plataforma).
+            {conn.lastInboundAt && (
+              <span className="ml-2 text-xs text-gray-500">
+                {t("whatsappSettings.lastInbound", { date: formatDateTime(conn.lastInboundAt) })}
+              </span>
+            )}
+            {!sendOnly && (!conn.webhookSubscribedAt || conn.webhookError) && (
+              <p className="mt-1 text-xs text-red-700">{conn.webhookError || t("whatsappSettings.receivingNoHelp")}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={checkAgain}
+              disabled={checking}
+              className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${checking ? "animate-spin" : ""}`} />
+              {checking ? t("whatsappSettings.checking") : t("whatsappSettings.checkAgain")}
+            </button>
+            <button
+              onClick={startReceptionTest}
+              disabled={waiting}
+              className="inline-flex items-center gap-2 rounded border border-gray-300 px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Radio className={`h-3 w-3 ${waiting ? "animate-pulse" : ""}`} />
+              {t("whatsappSettings.receptionTest.cta")}
+            </button>
+          </div>
+          {receptionTest.kind === "waiting" && (
+            <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-700">{t("whatsappSettings.receptionTest.waiting")}</p>
+          )}
+          {receptionTest.kind === "received" && (
+            <p className="rounded-md bg-green-50 p-3 text-xs text-green-800">
+              {t("whatsappSettings.receptionTest.received", { date: formatDateTime(receptionTest.at) })}
             </p>
+          )}
+          {receptionTest.kind === "timeout" && (
+            <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-900">{t("whatsappSettings.receptionTest.timeout")}</p>
+          )}
+          {receptionTest.kind === "unavailable" && (
+            <p className="rounded-md bg-red-50 p-3 text-xs text-red-800">{receptionTest.reason}</p>
+          )}
+          {conn.accessProblem && (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <div className="text-sm font-medium text-gray-900">{t("whatsappSettings.reconnectTitle")}</div>
+              <p className="mt-1 text-xs text-gray-500">{t("whatsappSettings.reconnectIntro")}</p>
+              <div className="mt-2">
+                <Input
+                  label={t("whatsappSettings.fields.accessToken")}
+                  type="password"
+                  value={newToken}
+                  onChange={setNewToken}
+                />
+              </div>
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={() =>
+                    connect({
+                      accessToken: newToken,
+                      wabaId: conn.wabaId,
+                      phoneNumberId: conn.phoneNumberId,
+                      displayName: "",
+                    })
+                  }
+                  disabled={busy || !newToken.trim()}
+                  className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {busy ? t("whatsappSettings.connecting") : t("whatsappSettings.reconnect")}
+                </button>
+              </div>
+            </div>
+          )}
+          {conn.tokenExpiresAt && (
+            <p className="text-sm text-gray-600">
+              {t("whatsappSettings.accessExpires", {
+                date: new Date(conn.tokenExpiresAt).toLocaleDateString("es-ES"),
+              })}
+            </p>
+          )}
+
+          <details className="group rounded-md border border-gray-100 px-3 py-2 text-sm">
+            <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-gray-600">
+              <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+              {t("whatsappSettings.technicalData")}
+            </summary>
+            <dl className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <dt className="text-xs text-gray-500">{t("whatsappSettings.fields.wabaId")}</dt>
+                <dd className="break-all font-mono text-xs">{conn.wabaId || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500">{t("whatsappSettings.fields.phoneNumberId")}</dt>
+                <dd className="break-all font-mono text-xs">{conn.phoneNumberId || "—"}</dd>
+              </div>
+            </dl>
+          </details>
+
+          <div className="border-t border-gray-100 pt-3">
+            <div className="text-sm font-medium text-gray-900">{t("whatsappSettings.templatesTitle")}</div>
+            <p className="text-xs text-gray-500 mt-1">{t("whatsappSettings.templatesIntro")}</p>
             <ul className="mt-2 space-y-1 text-sm">
-              {templates.map((t) => (
-                <li key={t.name} className="flex items-center justify-between">
+              {templates.map((tpl) => (
+                <li key={tpl.name} className="flex items-center justify-between gap-2">
                   <span className="text-xs">
-                    {TEMPLATE_LABELS[t.name] ?? <span className="font-mono">{t.name}</span>}
+                    {TEMPLATE_KEYS[tpl.name] ? t(TEMPLATE_KEYS[tpl.name]) : t("whatsappSettings.templateNames.other")}
                   </span>
                   <span
                     className={`text-xs px-2 py-0.5 rounded ${
-                      t.status === "APPROVED"
+                      tpl.status === "APPROVED"
                         ? "bg-green-100 text-green-700"
-                        : t.status === "REJECTED"
+                        : tpl.status === "REJECTED"
                           ? "bg-red-100 text-red-700"
-                          : "bg-amber-100 text-amber-700"
+                          : tpl.status === "UNKNOWN"
+                            ? "bg-gray-100 text-gray-600"
+                            : "bg-amber-100 text-amber-700"
                     }`}
                   >
-                    {{ APPROVED: "Aprobada", REJECTED: "Rechazada", PENDING: "En revisión", NOT_SUBMITTED: "Sin enviar" }[t.status] ?? t.status}
+                    {TEMPLATE_STATUS_KEYS[tpl.status] ? t(TEMPLATE_STATUS_KEYS[tpl.status]) : tpl.status}
                   </span>
                 </li>
               ))}
             </ul>
-            {templates.some((t) => t.status !== "APPROVED" && t.status !== "PENDING") && (
+            {templates.some((tpl) => tpl.status === "UNKNOWN") && (
+              <p className="mt-2 text-xs text-gray-500">{t("whatsappSettings.templatesUnknown")}</p>
+            )}
+            {/* Nothing to submit while Meta cannot even be asked. */}
+            {!conn.accessProblem &&
+              !templates.some((tpl) => tpl.status === "UNKNOWN") &&
+              templates.some((tpl) => tpl.status !== "APPROVED" && tpl.status !== "PENDING") && (
               <button
                 onClick={submitTemplates}
                 disabled={busy}
                 className="mt-2 text-xs px-3 py-1.5 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
               >
-                Enviar a revisión
+                {t("whatsappSettings.submitTemplates")}
               </button>
             )}
           </div>
           <button
-            onClick={disconnect}
+            onClick={() => setConfirmDisconnect(true)}
             className="text-red-600 hover:bg-red-50 px-3 py-1.5 rounded inline-flex items-center gap-2 text-sm"
           >
-            <Unlink className="w-4 h-4" /> Desconectar
+            <Unlink className="w-4 h-4" /> {t("whatsappSettings.disconnect")}
           </button>
         </div>
       ) : (
         <div className="space-y-6">
+          {/* No "Conectar con Meta" (OAuth): it saved the token without the
+              WhatsApp Business account or number, so it showed "Conectado"
+              and sent nothing. Back once the embedded signup is built; the
+              backend answers 410 meanwhile. */}
+          {sendOnly && setup?.receivingProblem && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{setup.receivingProblem}</p>
+            </div>
+          )}
           <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="font-semibold mb-2">Opción 1 — OAuth Meta</h2>
-            <p className="text-sm text-gray-500 mb-3">
-              Te redirigiremos a Meta Business Manager para autorizar.
-              Necesitas una app de Meta configurada con{" "}
-              <code>whatsapp_business_management</code> y{" "}
-              <code>whatsapp_business_messaging</code>.
-            </p>
-            <button
-              onClick={startOAuth}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 inline-flex items-center gap-2"
-            >
-              <ExternalLink className="w-4 h-4" /> Conectar con Meta
-            </button>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="font-semibold mb-2">Opción 2 — Conexión manual</h2>
-            <p className="text-sm text-gray-500 mb-3">
-              Pega los datos de tu WABA desde Meta Business Manager. Útil en
-              sandbox / dev.
-            </p>
+            <h2 className="font-semibold mb-2">{t("whatsappSettings.manualTitle")}</h2>
+            <p className="text-sm text-gray-500 mb-3">{t("whatsappSettings.manualIntro")}</p>
+            <details open className="group mb-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-sm">
+              <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-gray-800">
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                {t("whatsappSettings.guide.title")}
+              </summary>
+              <ol className="mt-3 list-decimal space-y-2 pl-5 text-gray-700">
+                {GUIDE_STEPS.map((key) => (
+                  <li key={key}>{t(`whatsappSettings.guide.${key}`)}</li>
+                ))}
+              </ol>
+              <p className="mt-3 text-xs text-gray-500">{t("whatsappSettings.guide.note")}</p>
+            </details>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Input label="Access Token" value={manual.accessToken} onChange={(v) => setManual({ ...manual, accessToken: v })} />
-              <Input label="WABA ID" value={manual.wabaId} onChange={(v) => setManual({ ...manual, wabaId: v })} />
-              <Input label="Phone Number ID" value={manual.phoneNumberId} onChange={(v) => setManual({ ...manual, phoneNumberId: v })} />
-              <Input label="Display Phone (E.164)" value={manual.displayPhone} onChange={(v) => setManual({ ...manual, displayPhone: v })} />
-              <Input label="Display Name (opcional)" value={manual.displayName} onChange={(v) => setManual({ ...manual, displayName: v })} />
+              <Input
+                label={t("whatsappSettings.fields.accessToken")}
+                type="password"
+                value={manual.accessToken}
+                onChange={(v) => setManual({ ...manual, accessToken: v })}
+              />
+              <Input
+                label={t("whatsappSettings.fields.wabaId")}
+                value={manual.wabaId}
+                onChange={(v) => setManual({ ...manual, wabaId: v })}
+              />
+              <Input
+                label={t("whatsappSettings.fields.phoneNumberId")}
+                value={manual.phoneNumberId}
+                onChange={(v) => setManual({ ...manual, phoneNumberId: v })}
+              />
+              <Input
+                label={t("whatsappSettings.fields.displayName")}
+                value={manual.displayName}
+                onChange={(v) => setManual({ ...manual, displayName: v })}
+              />
             </div>
             <div className="flex justify-end pt-3">
               <button
-                onClick={connectManual}
+                onClick={() => connect(manual)}
                 disabled={busy}
                 className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 inline-flex items-center gap-2"
               >
-                <LinkIcon className="w-4 h-4" /> {busy ? "Conectando…" : "Conectar"}
+                <LinkIcon className="w-4 h-4" />{" "}
+                {busy ? t("whatsappSettings.connecting") : t("whatsappSettings.connect")}
               </button>
             </div>
           </div>
 
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-800 flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 mt-0.5" />
-            <div>
-              El access token se cifra en reposo con AES-256-GCM (clave en{" "}
-              <code>META_TOKEN_ENCRYPTION_KEY</code>) y nunca se expone por API.
-              Solo el dispatcher interno descifra para llamar a Meta.
-            </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div>{t("whatsappSettings.tokenStored")}</div>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDisconnect}
+        title={t("whatsappSettings.disconnectConfirmTitle")}
+        description={t("whatsappSettings.disconnectConfirmBody")}
+        confirmLabel={t("whatsappSettings.disconnectCta")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={disconnecting}
+        onCancel={() => setConfirmDisconnect(false)}
+        onConfirm={performDisconnect}
+      />
     </div>
   );
 }
@@ -266,16 +531,23 @@ function Input({
   label,
   value,
   onChange,
+  type = "text",
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  type?: string;
+  placeholder?: string;
 }) {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
       <input
+        type={type}
         value={value}
+        placeholder={placeholder}
+        autoComplete="off"
         onChange={(e) => onChange(e.target.value)}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
       />

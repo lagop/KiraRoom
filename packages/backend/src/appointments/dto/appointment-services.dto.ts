@@ -1,4 +1,4 @@
-import { IsUUID, IsString, IsDateString, IsOptional, IsEnum, IsBoolean, IsNumber } from 'class-validator';
+import { IsUUID, IsString, IsDateString, IsOptional, IsEnum, IsBoolean, IsNumber, IsIn, IsInt, Min, Max } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AppointmentServiceType, AppointmentServiceStatus } from '@prisma/client';
 
@@ -136,4 +136,28 @@ export class AppointmentServiceFiltersDto {
   @IsDateString()
   @IsOptional()
   endDate?: Date;
+}
+
+/** Dragging one service of a multi-service appointment (see visit-move.ts). */
+export class MoveVisitServiceDto {
+  @ApiProperty({ enum: ['visit', 'service'], description: 'Move the whole visit, or only this service' })
+  @IsIn(['visit', 'service'])
+  scope!: 'visit' | 'service';
+
+  /**
+   * How far the dragged service moves. A difference, not a clock time: the
+   * calendar draws in the browser's time zone and the server reckons in the
+   * salon's, and a salon in the Canaries with Madrid time set moved visits
+   * by two hours instead of one.
+   */
+  @ApiProperty({ description: 'Minutes the dragged service moves (negative: earlier)' })
+  @IsInt()
+  @Min(-24 * 60)
+  @Max(24 * 60)
+  minutesDelta!: number;
+
+  @ApiPropertyOptional({ description: 'Professional of the column it was dropped on' })
+  @IsOptional()
+  @IsUUID()
+  professionalId?: string;
 }

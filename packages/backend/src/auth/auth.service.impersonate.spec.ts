@@ -65,7 +65,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
           professional: null,
         }),
         // generateTokens reads the session version (tv claim).
-        findUnique: jest.fn().mockResolvedValue({ tokenVersion: 0 }),
+        findUnique: jest.fn().mockResolvedValue({ id: "saas-admin-id", role: "saas_owner", isActive: true, tokenVersion: 0 }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: "audit-id" }) },
       // shimmed: Prisma's $transaction supports both the array form
@@ -100,7 +100,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
       // Impersonation never sends mail; a stub keeps the constructor happy.
       sendWelcome: jest.fn().mockResolvedValue({ success: true }),
       sendEmailVerification: jest.fn().mockResolvedValue({ success: true }),
-    } as any);
+    } as any, { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })), rotate: jest.fn() } as any, {} as any);
   });
 
   const enc = (obj: unknown) =>
@@ -113,31 +113,32 @@ describe("AuthService.impersonate — JWT payload validation", () => {
     impersonate: {
       tenantId: "tenant-id",
       ownerId: "owner-id",
+      reason: "La duena pidio ayuda con la agenda",
     },
   };
 
   it("rejects empty token", async () => {
     await expect(
-      auth.impersonate("", "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate("", IMPERSONATION_AUDIENCE),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it("rejects expired token", async () => {
     await expect(
-      auth.impersonate("expired", "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate("expired", IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/expired/) });
   });
 
   it("rejects forged-signature token", async () => {
     await expect(
-      auth.impersonate("bad", "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate("bad", IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/Invalid/) });
   });
 
   it("rejects payload missing jti (anti-replay enforcement)", async () => {
     const { jti: _drop, ...noJti } = validPayload;
     await expect(
-      auth.impersonate(enc(noJti), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(noJti), IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/payload/) });
   });
 
@@ -145,7 +146,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
     const t = { ...validPayload };
     t.impersonate = { ...t.impersonate, tenantId: undefined };
     await expect(
-      auth.impersonate(enc(t), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(t), IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/payload/) });
   });
 
@@ -153,16 +154,14 @@ describe("AuthService.impersonate — JWT payload validation", () => {
     const t = { ...validPayload };
     t.impersonate = { ...t.impersonate, ownerId: undefined };
     await expect(
-      auth.impersonate(enc(t), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(t), IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/payload/) });
   });
 
   it("rejects payload with wrong audience", async () => {
     await expect(
       auth.impersonate(
-        enc({ ...validPayload, aud: "wrong-aud" }),
-        "support",
-        IMPERSONATION_AUDIENCE,
+        enc({ ...validPayload, aud: "wrong-aud" }), IMPERSONATION_AUDIENCE,
       ),
     ).rejects.toMatchObject({ message: expect.stringMatching(/payload/) });
   });
@@ -173,7 +172,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
     // untouched so the SaaS admin can re-launch and try again.
     prisma.tenant.findFirst.mockResolvedValueOnce(null);
     await expect(
-      auth.impersonate(enc(validPayload), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(validPayload), IMPERSONATION_AUDIENCE),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.usedImpersonationToken.create).not.toHaveBeenCalled();
   });
@@ -181,7 +180,7 @@ describe("AuthService.impersonate — JWT payload validation", () => {
   it("does NOT burn the jti when the owner is deactivated", async () => {
     prisma.user.findFirst.mockResolvedValueOnce(null);
     await expect(
-      auth.impersonate(enc(validPayload), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(validPayload), IMPERSONATION_AUDIENCE),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(prisma.usedImpersonationToken.create).not.toHaveBeenCalled();
   });
@@ -195,15 +194,13 @@ describe("AuthService.impersonate — JWT payload validation", () => {
       message: "Unique constraint failed",
     });
     await expect(
-      auth.impersonate(enc(validPayload), "support", IMPERSONATION_AUDIENCE),
+      auth.impersonate(enc(validPayload), IMPERSONATION_AUDIENCE),
     ).rejects.toMatchObject({ message: expect.stringMatching(/already consumed/) });
   });
 
   it("happy path: writes the consumed jti row AND the audit row in one transaction", async () => {
     const result = await auth.impersonate(
-      enc(validPayload),
-      "support",
-      IMPERSONATION_AUDIENCE,
+      enc(validPayload), IMPERSONATION_AUDIENCE,
     );
     expect(result.user.role).toBe("owner");
     expect(result.tokens.accessToken).toBeDefined();
@@ -224,5 +221,45 @@ describe("AuthService.impersonate — JWT payload validation", () => {
         }),
       }),
     );
+  });
+
+  it("C17: refuses a token without a reason signed into it", async () => {
+    const t = { ...validPayload, impersonate: { tenantId: "tenant-id", ownerId: "owner-id" } };
+    await expect(auth.impersonate(enc(t), IMPERSONATION_AUDIENCE)).rejects.toBeInstanceOf(UnauthorizedException);
+    const long = { ...validPayload, impersonate: { ...validPayload.impersonate, reason: "x".repeat(201) } };
+    await expect(auth.impersonate(enc(long), IMPERSONATION_AUDIENCE)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.usedImpersonationToken.create).not.toHaveBeenCalled();
+  });
+
+  it("C13: refuses when the console's sessions ended since the token was issued", async () => {
+    prisma.user.findUnique.mockResolvedValueOnce({ id: "saas-admin-id", role: "saas_owner", isActive: true, tokenVersion: 3 });
+    await expect(
+      auth.impersonate(enc({ ...validPayload, tv: 2 }), IMPERSONATION_AUDIENCE),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it("C13: refuses when the issuer is no longer an active saas_owner", async () => {
+    prisma.user.findUnique.mockResolvedValueOnce({ id: "saas-admin-id", role: "owner", isActive: true, tokenVersion: 0 });
+    await expect(auth.impersonate(enc(validPayload), IMPERSONATION_AUDIENCE)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it("records the signed reason, not the owner's email, and caps the session at 2 hours (C2, C15, C17)", async () => {
+    const before = Date.now();
+    const result = await auth.impersonate(enc(validPayload), IMPERSONATION_AUDIENCE);
+    const row = prisma.auditLog.create.mock.calls[0][0].data;
+    expect(row.metadata.reason).toBe("La duena pidio ayuda con la agenda");
+    expect(row.metadata.targetOwnerEmail).toBeUndefined();
+    const ends = new Date(result.support.endsAt).getTime();
+    expect(ends - before).toBeGreaterThan(2 * 3600_000 - 5_000);
+    expect(ends - before).toBeLessThanOrEqual(2 * 3600_000 + 5_000);
+    // Both tokens carry the cap and the issuer's session version.
+    const signed = (auth as any).jwtService.sign.mock.calls.map((c: any[]) => c[0]);
+    for (const claims of signed) {
+      expect(claims.impersonatedBy).toBe("saas-admin-id");
+      expect(claims.impersonatorTv).toBe(0);
+      expect(typeof claims.impersonationEndsAt).toBe("number");
+    }
+    const lifetimes = (auth as any).jwtService.sign.mock.calls.map((c: any[]) => c[1].expiresIn);
+    for (const ttl of lifetimes) expect(ttl).toBeLessThanOrEqual(2 * 3600);
   });
 });

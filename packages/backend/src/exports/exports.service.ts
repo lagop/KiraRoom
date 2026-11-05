@@ -1,8 +1,13 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import type { Response } from "express";
 import * as Papa from "papaparse";
 import ExcelJS from "exceljs";
+import { PaymentFilters, paymentWhere } from "../payments/payments-query";
+import { scheduledDateRange } from "../analytics/analytics-metrics";
+import { LocationScope, appointmentLocationWhere } from "../analytics/analytics-location";
+import { CSV_FORMULA_START } from "../common/csv-cell";
 
 export type ExportEntity =
   | "clients"
@@ -18,6 +23,116 @@ export type ExportFormat = "csv" | "xlsx";
 const PAGE_SIZE = 1000;
 const MAX_XLSX_ROWS = 100_000;
 
+/**
+ * A client's name or notes starting with `=`, `+`, `-`, `@`, a tab or a
+ * carriage return is read as a formula when the CSV is opened in a
+ * spreadsheet. `escapeFormulae` prefixes those cells with a quote (and
+ * quotes them) so they stay text; Papa applies it to string values only, so
+ * numbers stay numbers. The pattern is the one every CSV of the backend uses
+ * (common/csv-cell.ts). (XLSX cells are written as strings, never formulas.)
+ */
+const CSV_OPTIONS = { escapeFormulae: CSV_FORMULA_START } as const;
+
+/**
+ * The payments file is read by a salon in a Spanish spreadsheet: amounts in
+ * euros with a decimal comma, so the columns are separated by semicolons
+ * (what Excel in Spanish expects), and a BOM so accents open right.
+ */
+const PAYMENTS_CSV_OPTIONS = { ...CSV_OPTIONS, delimiter: ";" } as const;
+
+const METHOD_LABELS: Record<string, string> = {
+  cash: "Efectivo",
+  card: "Tarjeta",
+  bank_transfer: "Transferencia",
+  wallet: "Cartera",
+  gift_card: "Tarjeta regalo",
+  loyalty_points: "Puntos",
+};
+const STATUS_LABELS: Record<string, string> = {
+  pending: "Pendiente",
+  paid: "Pagado",
+  failed: "Fallido",
+  refunded: "Devuelto",
+};
+
+/** 5000 -> "50,00" (CSV) or 50 (XLSX, a number cell). */
+function eurosCell(cents: number, format: ExportFormat): string | number {
+  const euros = Math.round(cents) / 100;
+  return format === "csv" ? euros.toFixed(2).replace(".", ",") : euros;
+}
+
+/** "dd/mm/aaaa hh:mm" on the salon's clock. */
+function salonDateTime(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("es-ES", {
+    timeZone,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+    .format(date)
+    .replace(",", "");
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A real calendar day "YYYY-MM-DD" (2026-02-31 is not one). */
+function isDay(value: string): boolean {
+  if (!DAY.test(value)) return false;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The appointments export's optional date range, as a filter on
+ * `scheduledDate`: salon calendar days, both inclusive (an appointment's day
+ * is stored as the salon's calendar date, so no timezone is needed). Either
+ * end may be left open. 400 for a day that is not one, or from after to.
+ */
+export function appointmentDayFilter(dateFrom?: string, dateTo?: string): { gte?: Date; lt?: Date } | undefined {
+  if (!dateFrom && !dateTo) return undefined;
+  for (const d of [dateFrom, dateTo]) {
+    if (d && !isDay(d)) throw new BadRequestException("La fecha no es válida: usa el formato AAAA-MM-DD.");
+  }
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw new BadRequestException("La fecha desde no puede ser posterior a la fecha hasta.");
+  }
+  return {
+    ...(dateFrom ? { gte: scheduledDateRange({ start: dateFrom, end: dateFrom }).gte } : {}),
+    ...(dateTo ? { lt: scheduledDateRange({ start: dateTo, end: dateTo }).lt } : {}),
+  };
+}
+
+/** What a payment was for: its appointment's service, else a till sale. */
+export function paymentConcept(p: {
+  description?: string | null;
+  metadata?: unknown;
+  appointment?: { service?: { name?: string | null } | null } | null;
+}): string {
+  const service = p.appointment?.service?.name;
+  if (service) return service;
+  const desc = (p.description ?? "").trim();
+  const sale = desc.replace(/^POS Sale:\s*/i, "");
+  if ((p.metadata as { posSaleId?: string } | null)?.posSaleId || sale !== desc) {
+    return sale ? `Venta en caja: ${sale}` : "Venta en caja";
+  }
+  return desc;
+}
+
+/**
+ * The payments export's filter for one location (Empresa): the payments of
+ * the location's appointments, by Analítica's rule (booked there, or with no
+ * location and a professional who works there). A till sale with no
+ * appointment cannot be placed (a till sale has no location), so it is left
+ * out while a location is chosen, as Analítica leaves products out.
+ */
+export function paymentsExportWhere(where: Prisma.PaymentWhereInput, scope?: LocationScope): Prisma.PaymentWhereInput {
+  if (!scope) return where;
+  return { AND: [where, { appointment: { is: appointmentLocationWhere(scope) as Prisma.AppointmentWhereInput } }] };
+}
+
 @Injectable()
 export class ExportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -27,11 +142,25 @@ export class ExportsService {
     entity: ExportEntity,
     format: ExportFormat,
     res: Response,
+    /**
+     * Payments: the Pagos page's filters (status, method, dates).
+     * Appointments: dateFrom / dateTo only, salon days (appointmentDayFilter).
+     */
+    filters: PaymentFilters = {},
+    /**
+     * Appointments and payments only, Empresa: one location
+     * (analytics-location.ts), checked by the controller to be this salon's.
+     */
+    scope?: LocationScope,
   ): Promise<void> {
+    const timeZone = entity === "payments" ? await this.timezoneOf(tenantId) : "Europe/Madrid";
     const fetchPage = (cursor?: any) =>
-      this.fetchPage(tenantId, entity, cursor);
+      entity === "payments"
+        ? this.fetchPayments(tenantId, filters, timeZone, format, cursor, scope)
+        : this.fetchPage(tenantId, entity, cursor, filters, scope);
+    const csvOptions = entity === "payments" ? PAYMENTS_CSV_OPTIONS : CSV_OPTIONS;
 
-    const filename = `${entity}-${new Date().toISOString().slice(0, 10)}.${format}`;
+    const filename = `${entity === "payments" ? "pagos" : entity}-${new Date().toISOString().slice(0, 10)}.${format}`;
     if (format === "csv") {
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
@@ -61,11 +190,12 @@ export class ExportsService {
         }
         if (!header) {
           header = Object.keys(rows[0]);
-          res.write(Papa.unparse([header]) + "\n");
+          res.write((entity === "payments" ? "﻿" : "") + Papa.unparse([header], csvOptions) + "\n");
         }
         // `Papa.unparse(rows)` with object arrays emits a header row by default;
         // pass `{ header: false }` so we don't duplicate the header on subsequent pages.
-        res.write(Papa.unparse(rows, { header: false }));
+        // Each page ends its last line: the next page's first row was glued to it.
+        res.write(Papa.unparse(rows, { ...csvOptions, header: false }) + "\n");
         if (!nextCursor) {
           hasMore = false;
           break;
@@ -108,16 +238,74 @@ export class ExportsService {
     await workbook.commit();
   }
 
+  private async timezoneOf(tenantId: string): Promise<string> {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+      return tenant?.timezone || "Europe/Madrid";
+    } catch {
+      return "Europe/Madrid";
+    }
+  }
+
+  /**
+   * The Pagos page's list as a file: its filters, newest first, Spanish
+   * headers, the client's name, what it was for, euros (not cents) and what
+   * was refunded of each payment.
+   */
+  private async fetchPayments(
+    tenantId: string,
+    filters: PaymentFilters,
+    timeZone: string,
+    format: ExportFormat,
+    cursor?: string,
+    scope?: LocationScope,
+  ): Promise<{ rows: any[]; nextCursor?: any }> {
+    const take = PAGE_SIZE;
+    const rows = await this.prisma.payment.findMany({
+      where: paymentsExportWhere(paymentWhere(tenantId, filters, timeZone), scope),
+      take,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      include: {
+        client: { select: { firstName: true, lastName: true } },
+        appointment: { select: { service: { select: { name: true } } } },
+        refunds: { where: { status: "succeeded" }, select: { amount: true } },
+      },
+    });
+    return {
+      rows: rows.map((r: any) => {
+        const refunded = (r.refunds ?? []).reduce((s: number, x: { amount: number }) => s + x.amount, 0);
+        const name = r.client ? `${r.client.firstName ?? ""} ${r.client.lastName ?? ""}`.trim() : "";
+        return {
+          Fecha: r.createdAt instanceof Date ? salonDateTime(r.createdAt, timeZone) : String(r.createdAt ?? ""),
+          Clienta: name,
+          Concepto: paymentConcept(r),
+          "Forma de pago": METHOD_LABELS[r.method] ?? r.method,
+          Estado: STATUS_LABELS[r.status] ?? r.status,
+          "Importe (€)": eurosCell(r.amount ?? 0, format),
+          "Devuelto (€)": eurosCell(refunded, format),
+          "ID del cobro": r.id,
+        };
+      }),
+      nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,
+    };
+  }
+
   private async fetchPage(
     tenantId: string,
     entity: ExportEntity,
     cursor?: any,
+    filters: PaymentFilters = {},
+    scope?: LocationScope,
   ): Promise<{ rows: any[]; nextCursor?: any }> {
     const take = PAGE_SIZE;
     switch (entity) {
       case "clients": {
         const rows = await this.prisma.client.findMany({
           where: { tenantId },
+          // Only the exported columns: never the password hash or tokens.
+          select: { id: true, firstName: true, lastName: true, email: true, phone: true, createdAt: true },
           take,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
@@ -136,8 +324,9 @@ export class ExportsService {
         };
       }
       case "appointments": {
+        const scheduledDate = appointmentDayFilter(filters.dateFrom, filters.dateTo);
         const rows = await this.prisma.appointment.findMany({
-          where: { tenantId },
+          where: { tenantId, ...(scheduledDate ? { scheduledDate } : {}), ...appointmentLocationWhere(scope) },
           take,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
@@ -148,34 +337,20 @@ export class ExportsService {
             id: r.id,
             clientId: r.clientId,
             professionalId: r.professionalId,
+            // The salon day and clock it is booked for (startTime is when it was started).
+            date: r.scheduledDate instanceof Date ? r.scheduledDate.toISOString().slice(0, 10) : r.scheduledDate,
+            scheduledTime: r.scheduledTime,
             startTime: r.startTime,
             endTime: r.endTime,
             status: r.status,
-            totalPrice: r.totalPrice,
+            // Euros, from totalAmount (cents): it read a totalPrice column that does not exist and was always empty.
+            totalPrice: r.totalAmount === undefined || r.totalAmount === null ? null : Number(r.totalAmount) / 100,
           })),
           nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,
         };
       }
-      case "payments": {
-        const rows = await this.prisma.payment.findMany({
-          where: { tenantId },
-          take,
-          skip: cursor ? 1 : 0,
-          cursor: cursor ? { id: cursor } : undefined,
-          orderBy: { id: "asc" },
-        });
-        return {
-          rows: rows.map((r: any) => ({
-            id: r.id,
-            clientId: r.clientId,
-            amount: r.amount,
-            status: r.status,
-            method: r.method,
-            createdAt: r.createdAt,
-          })),
-          nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,
-        };
-      }
+      case "payments":
+        return this.fetchPayments(tenantId, {}, "Europe/Madrid", "csv", cursor);
       case "services": {
         const rows = await this.prisma.service.findMany({
           where: { tenantId },
@@ -230,6 +405,8 @@ export class ExportsService {
             type: r.type,
             amount: r.amount,
             balanceAfter: r.balanceAfter,
+            // How a top-up was paid (cash, card, bizum, bank_transfer); empty for other movements.
+            method: r.method ?? "",
             createdAt: r.createdAt,
           })),
           nextCursor: rows.length === take ? rows[rows.length - 1].id : undefined,

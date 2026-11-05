@@ -6,24 +6,32 @@ import { useState, useEffect, Suspense } from 'react';
 import { ArrowLeft, Save, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api';
+import { useTranslations } from '@/lib/use-translation';
+import {
+  currentSpecialty,
+  specialtiesForSave,
+  specialtyIsRequired,
+  specialtyOptions,
+} from '@/lib/professional-specialties';
+import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import { TimeOffManager } from '@/components/time-off/TimeOffManager';
+import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { WebVisibilityFields, type WebNameDisplay } from '@/components/professionals/WebVisibilityFields';
+import { NO_LOCATIONS, locationsOf, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
+import {
+  defaultSchedule,
+  hasProblems,
+  scheduleFromWorkingHours,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from '@/lib/weekly-schedule';
 
-const specialties = [
-  'Hair Stylist',
-  'Nail Technician',
-  'Makeup Artist',
-  'Massage Therapist',
-  'Esthetician',
-  'Barber',
-  'Beauty Consultant',
-];
-
-const statusOptions = [
-  { value: 'active', label: 'Active' },
-  { value: 'inactive', label: 'Inactive' },
-  { value: 'blocked', label: 'Blocked' },
-];
+const statusOptions = ['active', 'inactive', 'blocked'] as const;
 
 interface FormData {
+  /** "Mostrar en la web" (WebVisibilityFields). */
+  webNameDisplay: WebNameDisplay;
+  webShowPhoto: boolean;
   firstName: string;
   lastName: string;
   email: string;
@@ -52,9 +60,12 @@ interface Service {
 function EditProfessionalForm() {
   const params = useParams();
   const router = useRouter();
+  const t = useTranslations();
   const professionalId = params?.id as string;
 
   const [formData, setFormData] = useState<FormData>({
+    webNameDisplay: 'initial',
+    webShowPhoto: false,
     firstName: '',
     lastName: '',
     email: '',
@@ -66,10 +77,32 @@ function EditProfessionalForm() {
   });
 
   const [services, setServices] = useState<Service[]>([]);
+  // The specialty as stored: shown as it is (free text included), required
+  // only if there is one, and sent only when changed (lib/professional-specialties).
+  const [originalSpecialty, setOriginalSpecialty] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Why a save failed when it is not about one field (the server's reason,
+  // e.g. the plan's limit). It used to be shown under the email.
+  const [generalError, setGeneralError] = useState<string | null>(null);
+  const [wasActive, setWasActive] = useState(true);
+  // The weekly schedule. Null while none is recorded: such a professional is
+  // bookable at any hour, and a default week is only shown once the salon
+  // asks for one. Sent only when edited, so saving a name never rewrites it.
+  const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
+  const [scheduleTouched, setScheduleTouched] = useState(false);
+  // Multi-local only: sent only when changed (the picker hides itself otherwise).
+  const [locations, setLocations] = useState<LocationChoice>(NO_LOCATIONS);
+  const [locationsTouched, setLocationsTouched] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const editSchedule = (next: WeeklySchedule) => {
+    setSchedule(next);
+    setScheduleTouched(true);
+    setScheduleError(null);
+  };
 
   // Fetch services and professional data
   useEffect(() => {
@@ -95,16 +128,25 @@ function EditProfessionalForm() {
           // Extract service IDs from the nested structure
           const serviceIds = (professional as any).services?.map((ps: any) => ps.serviceId || ps.service?.id).filter(Boolean) || [];
            
+          const specialty = currentSpecialty(professional.specialties);
+          setOriginalSpecialty(specialty);
+          setWasActive(!!professional.isActive);
           setFormData({
+            webNameDisplay: ((professional as any).webNameDisplay as WebNameDisplay) || 'full',
+            webShowPhoto: (professional as any).webShowPhoto !== false,
             firstName: professional.firstName || '',
             lastName: professional.lastName || '',
             email: professional.email || '',
             phone: professional.phone || '',
-            specialty: professional.specialties?.[0] || '',
+            specialty,
             status: professional.isActive ? 'active' : 'inactive',
             bio: (professional as any).bio || '',
             serviceIds,
           });
+          setSchedule(scheduleFromWorkingHours(professional.workingHours));
+          setScheduleTouched(false);
+          setLocations(locationsOf(professional));
+          setLocationsTouched(false);
         }
       } catch (err) {
         console.error('Failed to fetch professional:', err);
@@ -122,21 +164,21 @@ function EditProfessionalForm() {
     const newErrors: FormErrors = {};
 
     if (!formData.firstName.trim()) {
-      newErrors.firstName = 'First name is required';
+      newErrors.firstName = t('professionals.validation.firstNameRequired');
     }
 
     if (!formData.lastName.trim()) {
-      newErrors.lastName = 'Last name is required';
+      newErrors.lastName = t('professionals.validation.lastNameRequired');
     }
 
     if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
+      newErrors.email = t('professionals.validation.emailRequired');
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      newErrors.email = 'Invalid email format';
+      newErrors.email = t('professionals.validation.emailInvalid');
     }
 
-    if (!formData.specialty) {
-      newErrors.specialty = 'Specialty is required';
+    if (!formData.specialty && specialtyIsRequired(originalSpecialty)) {
+      newErrors.specialty = t('professionals.validation.specialtyRequired');
     }
 
     setErrors(newErrors);
@@ -155,12 +197,18 @@ function EditProfessionalForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaveSuccess(false);
+    setGeneralError(null);
 
     if (!validateForm()) {
       return;
     }
+    if (scheduleTouched && schedule && hasProblems(schedule)) {
+      setScheduleError('Revisa el horario: hay tramos que no se pueden guardar.');
+      return;
+    }
 
     setIsSaving(true);
+    setScheduleError(null);
 
     try {
       // Prepare update payload
@@ -169,10 +217,14 @@ function EditProfessionalForm() {
         lastName: formData.lastName,
         email: formData.email,
         phone: formData.phone || undefined,
-        specialties: [formData.specialty],
+        specialties: specialtiesForSave(originalSpecialty, formData.specialty),
         bio: formData.bio || undefined,
         isActive: formData.status === 'active',
         serviceIds: formData.serviceIds,
+        webNameDisplay: formData.webNameDisplay,
+        webShowPhoto: formData.webShowPhoto,
+        ...(scheduleTouched && schedule ? { workingHours: workingHoursFromSchedule(schedule) } : {}),
+        ...locationsPayload(locations, locationsTouched),
       };
 
       await apiClient.updateProfessional(professionalId, updateData);
@@ -185,7 +237,14 @@ function EditProfessionalForm() {
       }, 1500);
     } catch (err) {
       console.error('Error updating professional:', err);
-      setErrors({ ...errors, email: 'Failed to update professional. Please try again.' });
+      // A refused schedule comes back with its reason, in Spanish: show it
+      // under the schedule rather than as an email error.
+      const message = err instanceof Error ? err.message : '';
+      if (scheduleTouched && /horario|tramo/i.test(message)) {
+        setScheduleError(message);
+      } else {
+        setGeneralError(message || t('professionals.editPage.updateFailed'));
+      }
     } finally {
       setIsSaving(false);
     }
@@ -221,8 +280,8 @@ function EditProfessionalForm() {
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </Link>
           <div>
-             <h1 className="text-2xl font-bold text-gray-900 truncate">Edit Professional</h1>
-            <p className="text-gray-500 mt-1">Update professional information</p>
+             <h1 className="text-2xl font-bold text-gray-900 truncate">{t('professionals.editPage.title')}</h1>
+            <p className="text-gray-500 mt-1">{t('professionals.editPage.subtitle')}</p>
           </div>
         </div>
       </div>
@@ -232,18 +291,23 @@ function EditProfessionalForm() {
         {/* Success Message */}
         {saveSuccess && (
           <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-            Professional updated successfully! Redirecting...
+            {t('professionals.editPage.saved')}
+          </div>
+        )}
+        {generalError && (
+          <div role="alert" className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            {generalError}
           </div>
         )}
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-6">Professional Information</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-6">{t('professionals.editPage.infoTitle')}</h2>
 
            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {/* First Name */}
             <div>
               <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
-                First Name *
+                {t('professionals.fields.firstName')} *
               </label>
               <input
                 type="text"
@@ -254,7 +318,7 @@ function EditProfessionalForm() {
                 className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors ${
                   errors.firstName ? 'border-red-500' : 'border-gray-300'
                 }`}
-                placeholder="Enter first name"
+                placeholder={t('professionals.fields.firstNamePlaceholder')}
               />
               {errors.firstName && (
                 <p className="mt-1 text-sm text-red-500">{errors.firstName}</p>
@@ -264,7 +328,7 @@ function EditProfessionalForm() {
             {/* Last Name */}
             <div>
               <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
-                Last Name *
+                {t('professionals.fields.lastName')} *
               </label>
               <input
                 type="text"
@@ -275,7 +339,7 @@ function EditProfessionalForm() {
                 className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors ${
                   errors.lastName ? 'border-red-500' : 'border-gray-300'
                 }`}
-                placeholder="Enter last name"
+                placeholder={t('professionals.fields.lastNamePlaceholder')}
               />
               {errors.lastName && (
                 <p className="mt-1 text-sm text-red-500">{errors.lastName}</p>
@@ -285,7 +349,7 @@ function EditProfessionalForm() {
             {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email Address *
+                {t('professionals.fields.email')} *
               </label>
               <input
                 type="email"
@@ -296,7 +360,7 @@ function EditProfessionalForm() {
                 className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors ${
                   errors.email ? 'border-red-500' : 'border-gray-300'
                 }`}
-                placeholder="Enter email address"
+                placeholder={t('professionals.fields.emailPlaceholder')}
               />
               {errors.email && (
                 <p className="mt-1 text-sm text-red-500">{errors.email}</p>
@@ -306,7 +370,7 @@ function EditProfessionalForm() {
             {/* Phone */}
             <div>
               <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">
-                Phone Number
+                {t('professionals.fields.phone')}
               </label>
               <input
                 type="tel"
@@ -315,14 +379,15 @@ function EditProfessionalForm() {
                 value={formData.phone}
                 onChange={handleChange}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
-                placeholder="Enter phone number"
+                placeholder={t('professionals.fields.phonePlaceholder')}
               />
             </div>
 
             {/* Specialty */}
             <div>
               <label htmlFor="specialty" className="block text-sm font-medium text-gray-700 mb-2">
-                Specialty *
+                {t('professionals.fields.specialty')}
+                {specialtyIsRequired(originalSpecialty) && ' *'}
               </label>
               <select
                 id="specialty"
@@ -333,10 +398,14 @@ function EditProfessionalForm() {
                   errors.specialty ? 'border-red-500' : 'border-gray-300'
                 }`}
               >
-                <option value="">Select specialty</option>
-                {specialties.map((specialty) => (
-                  <option key={specialty} value={specialty}>
-                    {specialty}
+                <option value="">
+                  {specialtyIsRequired(originalSpecialty)
+                    ? t('professionals.fields.selectSpecialty')
+                    : t('professionals.fields.noSpecialty')}
+                </option>
+                {specialtyOptions(originalSpecialty).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.labelKey ? t(option.labelKey) : option.value}
                   </option>
                 ))}
               </select>
@@ -348,7 +417,7 @@ function EditProfessionalForm() {
             {/* Status */}
             <div>
               <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-2">
-                Status
+                {t('professionals.fields.status')}
               </label>
               <select
                 id="status"
@@ -358,18 +427,24 @@ function EditProfessionalForm() {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
               >
                 {statusOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                  <option key={option} value={option}>
+                    {t(`professionals.statusOptions.${option}`)}
                   </option>
                 ))}
               </select>
+              {wasActive && formData.status !== 'active' && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Deja de aparecer para reservar y, si entra al panel, se le quita el acceso. Sus citas
+                  pendientes no se cancelan: reasígnalas. Si vuelve, tendrás que darle acceso otra vez.
+                </p>
+              )}
             </div>
           </div>
 
           {/* Bio */}
           <div className="mt-6">
             <label htmlFor="bio" className="block text-sm font-medium text-gray-700 mb-2">
-              Bio
+              {t('professionals.fields.bio')}
             </label>
             <textarea
               id="bio"
@@ -378,15 +453,24 @@ function EditProfessionalForm() {
               onChange={handleChange}
               rows={4}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors resize-none"
-              placeholder="Write a brief bio about the professional..."
+              placeholder={t('professionals.fields.bioPlaceholder')}
             />
-            <p className="mt-1 text-sm text-gray-500">Brief description for the professional profile</p>
+            <p className="mt-1 text-sm text-gray-500">{t('professionals.fields.bioHint')}</p>
+          </div>
+
+          <div className="mt-6">
+            <WebVisibilityFields
+              nameDisplay={formData.webNameDisplay}
+              showPhoto={formData.webShowPhoto}
+              onChange={(next) => setFormData((prev) => ({ ...prev, ...next }))}
+              t={t}
+            />
           </div>
 
           {/* Services Selection */}
           <div className="mt-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Services Provided
+              {t('professionals.fields.servicesProvided')}
             </label>
              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {services.map((service) => (
@@ -410,10 +494,51 @@ function EditProfessionalForm() {
             </div>
             {services.length === 0 && (
               <p className="text-sm text-gray-500 mt-2">
-                No services available. Please create services first.
+                {t('professionals.fields.noServices')}
               </p>
             )}
           </div>
+
+          <div className="mt-6">
+            <LocationsPicker
+              value={locations}
+              disabled={isSaving}
+              onChange={(next) => {
+                setLocations(next);
+                setLocationsTouched(true);
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Weekly schedule */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Horario semanal</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Las reservas online y la recepcionista solo ofrecen huecos dentro de estos tramos.
+          </p>
+          {schedule ? (
+            <WeeklyScheduleEditor value={schedule} onChange={editSchedule} disabled={isSaving} />
+          ) : (
+            <div className="rounded-lg border border-dashed border-gray-300 p-4">
+              <p className="text-sm text-gray-700">
+                Este profesional no tiene horario registrado, así que se le puede reservar a cualquier hora en que
+                el salón abre.
+              </p>
+              <button
+                type="button"
+                onClick={() => editSchedule(defaultSchedule())}
+                className="mt-3 inline-flex items-center px-4 py-2 border border-indigo-600 text-indigo-700 rounded-lg hover:bg-indigo-50 transition-colors"
+              >
+                Definir horario
+              </button>
+            </div>
+          )}
+          {scheduleError && (
+            <p role="alert" className="mt-3 text-sm text-red-600">
+              {scheduleError}
+            </p>
+          )}
         </div>
 
         {/* Action Buttons */}
@@ -422,7 +547,7 @@ function EditProfessionalForm() {
             href={`/dashboard/professionals/${professionalId}`}
             className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('professionals.editPage.cancel')}
           </Link>
           <button
             type="submit"
@@ -432,17 +557,27 @@ function EditProfessionalForm() {
             {isSaving ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Saving...
+                {t('professionals.editPage.saving')}
               </>
             ) : (
               <>
                 <Save className="w-4 h-4 mr-2" />
-                Save Changes
+                {t('professionals.editPage.save')}
               </>
             )}
           </button>
         </div>
       </form>
+
+      {/* Outside the form: each absence is saved on its own, not with "Guardar cambios". */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Ausencias</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Vacaciones, días libres, bajas o unas horas sueltas. En ese tiempo no se ofrecen citas online ni por la
+          recepcionista; las citas que ya tenga no se cancelan.
+        </p>
+        <TimeOffManager professionalId={professionalId} />
+      </div>
     </div>
   );
 }

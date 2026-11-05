@@ -6,6 +6,9 @@ import { SubscriptionsService } from '../services/subscriptions.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Roles, SALON_MANAGERS } from "../../auth/decorators/roles.decorator";
 import { SaasOwner } from "../../saas/decorators/saas-owner.decorator";
+import { AuditLogService } from "../../saas/audit-log.service";
+import { UserRole } from "@prisma/client";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 /**
  * Tenant-scoped add-on surface. Distinct from the saas-admin
@@ -21,6 +24,7 @@ export class TenantAddOnsController {
     private readonly prisma: PrismaService,
     private readonly subs: SubscriptionsService,
     private readonly bundles: MessageBundlesService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /**
@@ -68,8 +72,12 @@ export class TenantAddOnsController {
    * includes, or a salon without a paid subscription. Answers the row as
    * Stripe left it, so the page shows "Activo" only when it is.
    */
+  @NotDuringSupport()
   @Post('tenants/current/add-ons/:key')
-  @Roles(...SALON_MANAGERS)
+  // A charge on the owner's card: billing is the owner's (B7), like the
+  // subscription routes in PaymentsController. Admins still read the
+  // catalogue and what is installed.
+  @Roles('owner')
   async purchase(@Param('key') key: string, @Req() req: any) {
     const tenantId = this.tenantId(req);
     const row = await this.addons.purchase(tenantId, key);
@@ -82,8 +90,9 @@ export class TenantAddOnsController {
   }
 
   /** Stop an add-on: removed from the Stripe subscription, then ended here. */
+  @NotDuringSupport()
   @Delete('tenants/current/add-ons/:key')
-  @Roles(...SALON_MANAGERS)
+  @Roles('owner')
   async cancel(
     @Param('key') key: string,
     @Req() req: any,
@@ -101,6 +110,7 @@ export class TenantAddOnsController {
   }
 
   /** SaaS-admin manual top-up (used in dev / promo flows). */
+  @NotDuringSupport()
   @Post('message-bundles/tenants/current/topup')
   @SaasOwner()
   async topup(
@@ -122,6 +132,13 @@ export class TenantAddOnsController {
       tenantId,
       credits,
       source: 'manual' });
+    // Audit 8, C9: every console change is on record, this one too.
+    await this.auditLog.record('tenant.credits.topup', {
+      actorId: req.user.id,
+      actorRole: UserRole.saas_owner,
+      tenantId,
+      metadata: { credits, source: 'manual' },
+    });
     return out;
   }
 

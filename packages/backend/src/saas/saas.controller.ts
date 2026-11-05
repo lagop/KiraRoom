@@ -6,13 +6,27 @@ import {
   ApiBearerAuth,
 } from "@nestjs/swagger";
 import { SaasService, PaginatedResult } from "./saas.service";
+import { SaasAnalyticsService } from "./saas-analytics.service";
+import { parseMonthsParam } from "./platform-metrics";
 import { CreateTenantDto } from "./dto/create-tenant.dto";
 import { UpdateTenantDto } from "./dto/update-tenant.dto";
 import { TenantFilterDto } from "./dto/tenant-filter.dto";
+import { BlockTenantDto, CourtesyTenantDto } from "./dto/console-actions.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { SaasOwnerGuard } from "./guards/saas-owner.guard";
 import { SaasOwner } from "./decorators/saas-owner.decorator";
 import { UserRole } from "@prisma/client";
+import { IsString, MaxLength, MinLength } from "class-validator";
+import { AuditLogService } from "./audit-log.service";
+import { SUPPORT_REASON_MAX, SUPPORT_REASON_MIN } from "../auth/session-token";
+
+/** C17: why the platform owner is entering the salon; signed into the token. */
+export class LaunchSalonDto {
+  @IsString()
+  @MinLength(SUPPORT_REASON_MIN, { message: `Escribe el motivo de la sesión de soporte (mínimo ${SUPPORT_REASON_MIN} caracteres).` })
+  @MaxLength(SUPPORT_REASON_MAX, { message: `El motivo no puede pasar de ${SUPPORT_REASON_MAX} caracteres.` })
+  reason!: string;
+}
 
 @ApiTags("SaaS Management")
 @ApiBearerAuth()
@@ -20,7 +34,11 @@ import { UserRole } from "@prisma/client";
 @SaasOwner()
 @Controller("saas")
 export class SaasController {
-  constructor(private readonly saasService: SaasService) {}
+  constructor(
+    private readonly saasService: SaasService,
+    private readonly auditLog: AuditLogService,
+    private readonly analytics: SaasAnalyticsService,
+  ) {}
 
   @Get("tenants")
   @ApiOperation({ summary: "Get all tenants (SaaS Owner only)" })
@@ -42,8 +60,17 @@ export class SaasController {
   @ApiOperation({ summary: "Create a new tenant (SaaS Owner only)" })
   @ApiResponse({ status: 201, description: "Tenant created successfully" })
   @ApiResponse({ status: 400, description: "Invalid input or slug already exists" })
-  async createTenant(@Body() createTenantDto: CreateTenantDto) {
-    return this.saasService.createTenant(createTenantDto);
+  async createTenant(@Req() req: any, @Body() createTenantDto: CreateTenantDto) {
+    const tenant = await this.saasService.createTenant(createTenantDto, req.user);
+    // C9: who created it. The owner's email is not copied into the row (C15);
+    // the tenant id leads to it while the salon exists.
+    await this.auditLog.record("tenant.create", {
+      actorId: req.user.id,
+      actorRole: UserRole.saas_owner,
+      tenantId: tenant.id,
+      metadata: { plan: tenant.plan, source: "saas/console" },
+    });
+    return tenant;
   }
 
   @Patch("tenants/:id")
@@ -51,10 +78,11 @@ export class SaasController {
   @ApiResponse({ status: 200, description: "Tenant updated successfully" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
   async updateTenant(
+    @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateTenantDto: UpdateTenantDto,
   ) {
-    return this.saasService.updateTenant(id, updateTenantDto);
+    return this.saasService.updateTenant(id, updateTenantDto, req.user);
   }
 
   @Delete("tenants/:id")
@@ -70,7 +98,7 @@ export class SaasController {
   @ApiOperation({ summary: "Get tenant statistics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant statistics" })
   async getTenantStats(@Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.getTenantStats(id);
+    return this.analytics.getTenantStats(id);
   }
 
   @Get("tenants/:id/progress")
@@ -86,23 +114,37 @@ export class SaasController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Suspend tenant (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Tenant suspended successfully" })
-  async suspendTenant(@Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.suspendTenant(id);
+  async suspendTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.saasService.suspendTenant(id, req.user);
   }
 
-  @Post("tenants/:id/reactivate")
+  @Post("tenants/:id/block")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Reactivate tenant (SaaS Owner only)" })
-  @ApiResponse({ status: 200, description: "Tenant reactivated successfully" })
-  async reactivateTenant(@Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.reactivateTenant(id);
+  @ApiOperation({ summary: "Block tenant for abuse: access cut now, nothing sent, Stripe collection paused (SaaS Owner only)" })
+  async blockTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string, @Body() body: BlockTenantDto) {
+    return this.saasService.blockTenant(id, body.reason, req.user);
+  }
+
+  @Post("tenants/:id/unblock")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Unblock tenant (SaaS Owner only)" })
+  async unblockTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.saasService.unblockTenant(id, req.user);
+  }
+
+  @Post("tenants/:id/courtesy")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Courtesy: active without paying on a plan until a date (SaaS Owner only)" })
+  @ApiResponse({ status: 409, description: "The owner asked to delete it: send cancelDeletion to cancel that too" })
+  async courtesyTenant(@Req() req: any, @Param("id", ParseUUIDPipe) id: string, @Body() body: CourtesyTenantDto) {
+    return this.saasService.courtesyTenant(id, { plan: body.plan, until: body.until, cancelDeletion: body.cancelDeletion }, req.user);
   }
 
   @Get("analytics/overview")
   @ApiOperation({ summary: "Get platform-wide analytics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Platform analytics" })
   async getPlatformAnalytics() {
-    return this.saasService.getPlatformAnalytics();
+    return this.analytics.getPlatformAnalytics();
   }
 
   @Get("tenants/:id/growth")
@@ -112,16 +154,14 @@ export class SaasController {
     @Param("id", ParseUUIDPipe) id: string,
     @Query("months") months?: string,
   ) {
-    const monthsNum = months ? parseInt(months, 10) : 6;
-    return this.saasService.getSalonGrowthMetrics(id, monthsNum);
+    return this.analytics.getSalonGrowthMetrics(id, parseMonthsParam(months));
   }
 
   @Get("analytics/growth")
   @ApiOperation({ summary: "Get platform growth metrics (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Platform growth metrics with evolution" })
   async getPlatformGrowthMetrics(@Query("months") months?: string) {
-    const monthsNum = months ? parseInt(months, 10) : 6;
-    return this.saasService.getPlatformGrowthMetrics(monthsNum);
+    return this.analytics.getPlatformGrowthMetrics(parseMonthsParam(months));
   }
 
   @Get("users")
@@ -136,7 +176,11 @@ export class SaasController {
   @ApiOperation({ summary: "Launch salon dashboard as owner (SaaS Owner only)" })
   @ApiResponse({ status: 200, description: "Returns impersonation token + owner info; consume via POST /auth/impersonate" })
   @ApiResponse({ status: 404, description: "Tenant not found" })
-  async launchSalonDashboard(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.saasService.launchSalonDashboard(id, req.user.id);
+  async launchSalonDashboard(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: LaunchSalonDto,
+  ) {
+    return this.saasService.launchSalonDashboard(id, req.user.id, body.reason);
   }
 }

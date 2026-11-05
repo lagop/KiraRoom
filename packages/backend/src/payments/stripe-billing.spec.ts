@@ -1,6 +1,6 @@
 import { WebhooksController } from "./webhooks.controller";
 import { SubscriptionsService } from "./services/subscriptions.service";
-import { activationFromCheckout, activationFromSubscription } from "./plan-activation";
+import { activationFromCheckout, activationFromSubscription, checkoutTrialEnd } from "./plan-activation";
 import { monthlyPlanRevenue } from "../saas/saas.service";
 import { IS_PUBLIC_KEY } from "../auth/decorators/public.decorator";
 
@@ -22,8 +22,10 @@ function controller(tenant: any = { id: "t1", subscriptionStatus: "trialing" }) 
       findUnique: jest.fn(async () => tenant),
       findFirst: jest.fn(async () => tenant),
       update: jest.fn(async () => ({})),
+      updateMany: jest.fn(async () => ({ count: 1 })),
     },
   };
+  c.readOnlyNotices = { notify: jest.fn(async () => undefined) };
   c.addonsService = {
     provisionFromStripe: jest.fn(),
     cancelFromStripe: jest.fn(),
@@ -95,9 +97,33 @@ describe("Stripe webhook", () => {
       type: "customer.subscription.deleted",
       data: { object: subscription({ status: "canceled" }) },
     });
-    expect(c.prisma.tenant.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "cancelled" }) }),
+    expect(c.prisma.tenant.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "t1", subscriptionStatus: { not: "cancelled" } },
+        data: expect.objectContaining({ subscriptionStatus: "cancelled" }),
+      }),
     );
+    expect(c.readOnlyNotices.notify).toHaveBeenCalledWith("t1", "cancelled", expect.any(Date));
+  });
+
+  it("does not email again when the dashboard already cancelled it", async () => {
+    const c = controller({ id: "t1", subscriptionStatus: "cancelled", stripeSubscriptionId: "sub_1" });
+    c.prisma.tenant.updateMany.mockResolvedValue({ count: 0 });
+    await c.processStripeEvent({
+      type: "customer.subscription.deleted",
+      data: { object: subscription({ status: "canceled" }) },
+    });
+    expect(c.readOnlyNotices.notify).not.toHaveBeenCalled();
+  });
+
+  it("ignores an older subscription ending when the salon pays another one", async () => {
+    const c = controller({ id: "t1", subscriptionStatus: "active", stripeSubscriptionId: "sub_new" });
+    await c.processStripeEvent({
+      type: "customer.subscription.deleted",
+      data: { object: subscription({ id: "sub_old", status: "canceled" }) },
+    });
+    expect(c.prisma.tenant.updateMany).not.toHaveBeenCalled();
+    expect(c.readOnlyNotices.notify).not.toHaveBeenCalled();
   });
 });
 
@@ -134,10 +160,12 @@ describe("checkout session", () => {
         findUnique: jest.fn(async () => ({ id: "t1", email: "a@b.test", name: "Salón", stripeCustomerId: "cus_1" })),
         update: jest.fn(),
       },
+      location: { count: jest.fn(async () => 1) },
+      professional: { count: jest.fn(async () => 2) },
     };
-    const config: any = { get: (k: string, d?: string) => (k === "STRIPE_SECRET_KEY" ? "sk_test_x" : d) };
-    const subs = new SubscriptionsService(prisma, config);
-    (subs as any).stripe = { checkout: { sessions: { create } } };
+    const config: any = { get: (_k: string, d?: string) => d };
+    const platformStripe: any = { client: () => ({ checkout: { sessions: { create } } }), current: () => ({ taxEnabled: false }) };
+    const subs = new SubscriptionsService(prisma, config, platformStripe);
 
     await subs.createCheckoutSession("t1", "empresa", 2);
 
@@ -153,6 +181,57 @@ describe("checkout session", () => {
       plan: "empresa",
       locationCount: "2",
     });
+  });
+});
+
+describe("subscribing during the free trial", () => {
+  const now = new Date("2026-11-01T10:00:00Z");
+  const days = (n: number) => new Date(now.getTime() + n * 24 * 60 * 60 * 1000);
+
+  function service(tenant: any) {
+    const create = jest.fn(async () => ({ url: "https://checkout", id: "cs_1" }));
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => tenant), update: jest.fn() },
+      location: { count: jest.fn(async () => 1) },
+      professional: { count: jest.fn(async () => 2) },
+    };
+    const config: any = { get: (_k: string, d?: string) => d };
+    const platformStripe: any = { client: () => ({ checkout: { sessions: { create } } }), current: () => ({ taxEnabled: false }) };
+    return { subs: new SubscriptionsService(prisma, config, platformStripe), create };
+  }
+  const base = { id: "t1", email: "a@b.test", name: "Salón", stripeCustomerId: "cus_1" };
+
+  it("keeps the days left: the first charge waits for the trial to end", () => {
+    expect(checkoutTrialEnd({ subscriptionStatus: "trialing", trialEnd: days(10) }, now)).toBe(
+      Math.floor(days(10).getTime() / 1000),
+    );
+  });
+
+  it("charges at once out of trial, and in the trial's last two days (Stripe wants 48 h)", () => {
+    expect(checkoutTrialEnd({ subscriptionStatus: "active", trialEnd: days(10) }, now)).toBeUndefined();
+    expect(checkoutTrialEnd({ subscriptionStatus: "trialing", trialEnd: days(1.9) }, now)).toBeUndefined();
+    expect(checkoutTrialEnd({ subscriptionStatus: "trialing", trialEnd: null }, now)).toBeUndefined();
+  });
+
+  it("the checkout of a salon in trial carries the trial end", async () => {
+    const trialEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+    const { subs, create } = service({ ...base, subscriptionStatus: "trialing", trialEnd });
+    await subs.createCheckoutSession("t1", "pro");
+    const args: any = (create.mock.calls[0] as any[])[0];
+    expect(args.subscription_data.trial_end).toBe(Math.floor(trialEnd.getTime() / 1000));
+    expect(args.subscription_data.metadata.plan).toBe("pro");
+  });
+
+  it("a salon that already pays changes plan instead of starting a second subscription", async () => {
+    const { subs, create } = service({ ...base, subscriptionStatus: "active", stripeSubscriptionId: "sub_1" });
+    await expect(subs.createCheckoutSession("t1", "empresa")).rejects.toThrow(/cambia de plan/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("a cancelled salon may subscribe again", async () => {
+    const { subs, create } = service({ ...base, subscriptionStatus: "cancelled", stripeSubscriptionId: "sub_old" });
+    await subs.createCheckoutSession("t1", "pro");
+    expect(create).toHaveBeenCalled();
   });
 });
 

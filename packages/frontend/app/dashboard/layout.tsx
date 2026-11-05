@@ -9,6 +9,15 @@ import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
 import { VerifactuBanner } from "@/components/verifactu/verifactu-banner";
+import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
+import { TrialEndingBanner } from "@/components/billing/TrialEndingBanner";
+import { EmailVerificationBanner } from "@/components/auth/email-verification-banner";
+import { TermsAcceptanceModal } from "@/components/auth/terms-acceptance-modal";
+import { managersOnlyPage } from "@/lib/dashboard-nav";
+import { getCurrentUser } from "@/lib/utils";
+import { ManagersOnlyNotice } from "./components/managers-only-notice";
+import { endSupportTab, supportTab } from "@/lib/auth-storage";
+import { useTranslations } from "@/lib/use-translation";
 
 /**
  * Decode the current access token's impersonation claims and update
@@ -59,6 +68,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   } | null>(null);
   const router = useRouter();
   const pathname = usePathname();
+  const t = useTranslations();
+  // The salon and the end of this support session, kept by this tab (C10).
+  const [support, setSupport] = useState<{ tenantName: string; endsAt?: string } | null>(null);
+  useEffect(() => {
+    setSupport(supportTab());
+  }, [pathname]);
 
   // Close the mobile drawer on every navigation so it doesn't stay
   // pinned open after the user picks a link.
@@ -90,10 +105,22 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     setImpersonation(readImpersonationFromStorage());
   }, [pathname]);
 
+  // The signed-in role, read after mount (the server has no user) and again
+  // on each page, as the sidebar does. Undefined until read: the page is not
+  // mounted before, so a management page opened by a professional never
+  // sends its requests; on later pages the role is already known.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, [pathname]);
+  // A management page a professional opened by its address: the notice, not
+  // the page (whose buttons the API would refuse).
+  const blocked = managersOnlyPage(role, pathname ?? "");
+
   // Effect 2: cross-tab sync. If the user logs out in another tab, the
   // `storage` event fires here so this tab's banner disappears too.
-  // The impersonated session is single-tab anyway (JWT in localStorage
-  // only), but the cleanup is cheap and prevents ghost banners.
+  // A support session lives in its own tab (sessionStorage, C10), so this
+  // only matters for normal sessions; the cleanup is cheap either way.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onStorage = (e: StorageEvent) => {
@@ -112,26 +139,35 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const closeMobileSidebar = () => setMobileSidebarOpen(false);
 
   const exitImpersonation = async () => {
-    removeToken();
-    removeRefreshToken();
+    // Server first, while the access token still exists: it ends the support
+    // session, clears its own cookie and records the end (C4). The console's
+    // session was never touched (C10): this tab closes, or goes back to it.
     try {
       await apiClient.logout();
     } catch {
-      // Even if the request fails, the local tokens are gone — that's what matters.
+      removeToken();
+      removeRefreshToken();
     }
+    endSupportTab();
     if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
+      window.close();
+      // A tab the script did not open cannot close itself: back to the console.
+      router.replace("/saas/tenants");
     }
-    router.replace("/saas/login");
   };
+
+  const endsAtLabel = support?.endsAt
+    ? new Date(support.endsAt).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+    : null;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      {/* Sidebar — always visible on every viewport. The mobile
-          drawer overlay below is kept as an optional secondary
-          entry point for users who want a fullscreen menu. */}
+      {/* Sidebar — a column from md up. Below md it is not rendered as
+          a column (it pushed the page right and looked open on load):
+          the header's menu button opens the drawer below, which starts
+          closed. Pure CSS, so server and client render the same. */}
       <div
-        className={`shrink-0 sticky top-0 self-start h-screen overflow-y-auto transition-all duration-300 z-20 ${
+        className={`hidden md:block shrink-0 sticky top-0 self-start h-screen overflow-y-auto transition-all duration-300 z-20 ${
           sidebarCollapsed ? "w-16" : "w-64"
         }`}
       >
@@ -150,8 +186,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         />
       )}
       <div
-        className={`fixed inset-y-0 left-0 z-50 md:hidden transform transition-transform duration-300 ${
-          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        // Closed: off screen and invisible, so its links are not tabbable
+        // or read out while it is shut.
+        aria-hidden={!mobileSidebarOpen}
+        className={`fixed inset-y-0 left-0 z-50 md:hidden transform transition-[transform,visibility] duration-300 ${
+          mobileSidebarOpen ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <DashboardSidebar
@@ -172,22 +211,22 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <ShieldAlert className="w-5 h-5 flex-shrink-0 mt-0.5 sm:mt-0" />
               <div className="text-sm">
                 <strong className="font-semibold">
-                  You are impersonating this tenant.
+                  {t("supportBanner.title", { salon: support?.tenantName || t("supportBanner.this_salon") })}
                 </strong>{" "}
-                Every action you take is attributed to your account in the
-                <code className="mx-1 bg-red-700 px-1 rounded">audit_logs</code>
-                table (impersonation id{" "}
-                <code className="bg-red-700 px-1 rounded break-all">
-                  {impersonation.id}
-                </code>
-                ). End the session when you are done.
+                {t("supportBanner.attribution")}{" "}
+                {endsAtLabel ? t("supportBanner.ends_at", { time: endsAtLabel }) : t("supportBanner.ends_max")}{" "}
+                {t("supportBanner.limits")}{" "}
+                <span className="opacity-80">
+                  ({t("supportBanner.session_id")}{" "}
+                  <code className="bg-red-700 px-1 rounded break-all">{impersonation.id}</code>)
+                </span>
               </div>
             </div>
             <button
               onClick={exitImpersonation}
               className="bg-white text-red-700 px-3 py-1 rounded font-medium text-sm hover:bg-red-50 self-start sm:self-auto flex-shrink-0"
             >
-              Exit impersonation
+              {t("supportBanner.exit")}
             </button>
           </div>
         )}
@@ -198,15 +237,24 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           // hamburger here only opens the mobile drawer.
           mobileOnly
         />
+        {/* Trial ended without a plan, or the subscription was cancelled or suspended. */}
+        <ReadOnlyBanner />
+        {/* Last 7 days of the trial, owner only (D25). */}
+        <TrialEndingBanner />
+        {/* Owner whose email is not confirmed: a new link (audit 7A, S1). */}
+        <EmailVerificationBanner />
 
         {/* Page content */}
         <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">
+          {/* Orden HAC/1177/2024 art. 16.4: on every page, whatever the role. */}
           <VerifactuBanner />
-          {children}
+          {role === undefined ? null : blocked ? <ManagersOnlyNotice /> : children}
         </main>
       </div>
       {/* P1 — Onboarding wizard surfaces */}
       <OnboardingHost />
+      {/* Owner of a salon without an acceptance of the current terms (D3). */}
+      <TermsAcceptanceModal />
       {/* GDPR — Cookie consent banner */}
       <CookieBanner />
     </div>

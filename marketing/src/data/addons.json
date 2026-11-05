@@ -1,12 +1,12 @@
 {
-  "_doc": "Add-on catalog displayed on the marketing home. MUST stay in sync with docs/billing-plans-rev3.md §4 (Add-ons) and the backend `add_ons` table. Pricing is the monthly recurring amount billed via Stripe.",
+  "_doc": "Add-on catalog displayed on the marketing home. MUST match the `add_ons` table the panel sells from (seeded and updated by the migrations in packages/backend/prisma/migrations; web_domain is withheld in addons.service.ts WITHHELD_ADDON_KEYS, and ai_expansion is no longer sold). Prices are the monthly amount billed via Stripe. `soon`: in the catalog but not purchasable yet.",
   "currency": "EUR",
   "items": [
-    { "key": "ai_expansion",        "name": "IA Expansion",          "price": 24, "tagline": "Quita el cap de 500 conv/mes y desbloquea cancelaciones y escalations automáticas" },
-    { "key": "loyalty_giftcards",   "name": "Loyalty & Gift Cards",  "price": 12, "tagline": "Puntos, promos y gift cards para que vuelvan" },
-    { "key": "email_marketing",     "name": "Email Marketing",       "price": 12, "tagline": "Campañas segmentadas por audiencia" },
-    { "key": "multichannel",        "name": "Multicanal",            "price": 19, "tagline": "Messenger, Instagram y Telegram con la IA" },
-    { "key": "google_reviews_auto", "name": "Reseñas tras la cita",  "price": 19, "tagline": "Pide opinión después de cada cita y ofrece dejarla en Google" },
-    { "key": "deposits_antinoshow", "name": "Depósitos anti-plantón","price": 5,  "tagline": "Cobra señal al reservar, reduce no-shows", "soon": true }
+    { "key": "ai_messages_1000",    "name": "1.000 mensajes de IA",           "price": 19, "tagline": "1.000 mensajes más al mes (unas 140 conversaciones) para la recepcionista IA, en cualquier plan" },
+    { "key": "loyalty_giftcards",   "name": "Fidelización y tarjetas regalo", "price": 12, "tagline": "Puntos, promociones y tarjetas regalo para que tus clientas vuelvan (incluido en Pro)" },
+    { "key": "email_marketing",     "name": "Email marketing",                "price": 12, "tagline": "Campañas de email segmentadas por audiencia (incluido en Pro)" },
+    { "key": "multichannel",        "name": "Multicanal",                     "price": 19, "tagline": "Messenger, Instagram y Telegram atendidos por la recepcionista IA (incluido en Pro)" },
+    { "key": "google_reviews_auto", "name": "Reseñas tras la cita",           "price": 19, "tagline": "Pide opinión después de cada cita y ofrece dejarla en tu ficha de Google" },
+    { "key": "deposits_antinoshow", "name": "Depósitos anti-plantón",         "price": 5,  "tagline": "Cobra una señal al reservar para reducir las ausencias", "soon": true }
   ]
 }

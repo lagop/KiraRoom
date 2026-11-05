@@ -20,6 +20,16 @@ const DEFAULT_LEAD_DAYS = 3;
 const DEFAULT_MIN_VISITS = 3;
 const STD_DEV_CAP_DAYS = 30;
 const LOOKBACK_APPOINTMENTS = 10;
+/** Clients read per page when a whole salon is recomputed. */
+export const TENANT_RECOMPUTE_PAGE = 200;
+
+/**
+ * The channel a rebooking reminder goes out on. Only email delivers today,
+ * so "whatsapp" and "both" (and anything else) are email.
+ */
+export function rebookingChannelOf(_stored: unknown): "email" {
+  return "email";
+}
 
 function clampStdDev(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -44,10 +54,11 @@ export class ClientCadenceService {
     return {
       enabled: raw.enabled !== false,
       leadDays: typeof raw.leadDays === "number" ? (raw.leadDays as number) : DEFAULT_LEAD_DAYS,
-      channelFallback:
-        raw.channelFallback === "email" || raw.channelFallback === "whatsapp"
-          ? (raw.channelFallback as "email" | "whatsapp")
-          : ("both" as const),
+      // Email only: WhatsApp is not wired for these reminders, and a salon
+      // that had picked "WhatsApp" or "Email y WhatsApp" silently stopped
+      // getting any sent. Those salons send by email now
+      // (rebookingChannelOf); the stored value is left as it was.
+      channelFallback: rebookingChannelOf(raw.channelFallback),
       minVisits:
         typeof raw.minVisits === "number"
           ? (raw.minVisits as number)
@@ -90,6 +101,8 @@ export class ClientCadenceService {
         clientId,
         status: "completed",
         completionTime: { not: null },
+        // The onboarding test booking is not a visit (O5).
+        isTest: false,
       },
       orderBy: { completionTime: "desc" },
       take: LOOKBACK_APPOINTMENTS * 3, // safety upper bound
@@ -184,24 +197,69 @@ export class ClientCadenceService {
   }
 
   /**
-   * Walk every client with >= minVisits completed appointments for a tenant
-   * and refresh their cadence. Heavy operation — should be invoked from a
-   * background job or one-off backfill script.
+   * Refreshes the cadence of every client of the tenant with a completed
+   * visit, so a change of "días de antelación" or "mínimo de visitas" reaches
+   * the clients the salon already has, not only those who come back. Clients
+   * are read in pages of TENANT_RECOMPUTE_PAGE (by id) and recomputed one at
+   * a time, so a large salon neither loads every client at once nor floods
+   * the database. The reminders already sent are kept (computeForClient), so
+   * no client gets a second email for the same visit cycle.
    */
   async computeForTenant(tenantId: string): Promise<number> {
-    const cfg = await this.getTenantConfig(tenantId);
-    const completed = await this.prisma.appointment.findMany({
-      where: { tenantId, status: "completed" },
-      select: { clientId: true },
-      distinct: ["clientId"],
-    });
     let count = 0;
-    for (const a of completed) {
-      await this.computeForClient(a.clientId);
-      count++;
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.prisma.client.findMany({
+        where: { tenantId, isTest: false, appointments: { some: { status: "completed", isTest: false } } },
+        select: { id: true },
+        orderBy: { id: "asc" },
+        take: TENANT_RECOMPUTE_PAGE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      for (const c of page) {
+        try {
+          await this.computeForClient(c.id);
+          count++;
+        } catch (err) {
+          this.logger.warn(`Cadence recompute of client ${c.id} failed: ${(err as Error).message}`);
+        }
+      }
+      if (page.length < TENANT_RECOMPUTE_PAGE) break;
+      cursor = page[page.length - 1].id;
     }
-    void cfg;
     return count;
+  }
+
+  /** Tenants whose recompute is running, and those asked for again meanwhile. */
+  private readonly recomputing = new Set<string>();
+  private readonly recomputeAgain = new Set<string>();
+
+  /**
+   * Runs computeForTenant without making the caller wait (the settings save
+   * answers at once). One run per tenant at a time: a save during a run asks
+   * for one more run after it, with the settings saved last.
+   */
+  recomputeTenantInBackground(tenantId: string): Promise<void> {
+    if (this.recomputing.has(tenantId)) {
+      this.recomputeAgain.add(tenantId);
+      return Promise.resolve();
+    }
+    this.recomputing.add(tenantId);
+    const run = async (): Promise<void> => {
+      try {
+        do {
+          this.recomputeAgain.delete(tenantId);
+          const n = await this.computeForTenant(tenantId);
+          this.logger.log(`Rebooking cadences recomputed for tenant ${tenantId}: ${n} clients`);
+        } while (this.recomputeAgain.has(tenantId));
+      } catch (err) {
+        this.logger.warn(`Rebooking recompute for tenant ${tenantId} failed: ${(err as Error).message}`);
+      } finally {
+        this.recomputing.delete(tenantId);
+        this.recomputeAgain.delete(tenantId);
+      }
+    };
+    return run();
   }
 
   /**

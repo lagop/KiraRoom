@@ -1,15 +1,24 @@
 ﻿
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, RedisClientType } from 'redis';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AiFairUseAction } from '@prisma/client';
 import { SubscriptionsService } from '../../payments/services/subscriptions.service';
 import { MetricsService, COUNTERS } from '../../common/observability/metrics.service';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { AI_PACK_ADDON_KEYS, aiDailyCap } from '@kira/shared';
+import {
+  AI_USAGE_SELECT,
+  aiUsagePeriod,
+  aiUsageThisMonth,
+  incrementAiUsage,
+  nextAiUsagePeriodStart,
+} from '../../common/ai-usage/ai-monthly-usage';
 
 export interface FairUseDecision {
   allowed: boolean;
-  reason: 'ok' | 'no_plan' | 'cap_exceeded';
+  reason: 'ok' | 'no_plan' | 'cap_exceeded' | 'daily_cap_exceeded';
   capSource: 'plan' | 'unlimited' | 'addon';
   cap: number | null;
   used: number;
@@ -19,9 +28,10 @@ export interface FairUseDecision {
 /**
  * Count and gate AI conversations per tenant per month (Plan v2).
  *
- * Source of truth: `Tenant.aiConversationsUsed` (Postgres). Updated
- * with an atomic `UPDATE ... SET aiConversationsUsed = aiConversationsUsed + 1`
- * so the increment is correct under concurrent LLM calls.
+ * Source of truth: `Tenant.aiConversationsUsed` (Postgres), the count of
+ * the month in `aiConversationsPeriod`: a count from another month reads
+ * as 0 (see common/ai-usage/ai-monthly-usage.ts). Updated with one atomic
+ * statement, so the increment is correct under concurrent LLM calls.
  *
  * Cache layer: a Redis INCR shadowed by the same key shape
  * (`vrm:ai:cnt:{tenantId}:{YYYY-MM}`) so 99 % of decisions don't
@@ -45,6 +55,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     private readonly config: ConfigService,
     private readonly subs: SubscriptionsService,
     private readonly metrics: MetricsService,
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -86,12 +97,19 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
   }
 
 
-  /** Returns the effective cap for the tenant (null = unlimited). */
+  /**
+   * The month's AI message cap for the tenant: 500 in the trial, else the
+   * plan's (Empresa: per location) plus 1,000 per AI pack. Never unlimited:
+   * each message is a paid model call. null only for an unknown tenant.
+   */
   async getEffectiveCap(tenantId: string): Promise<number | null> {
     const ctx = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: {
         plan: true,
+        subscriptionStatus: true,
+        trialEnd: true,
+        maxLocations: true,
         tenantAddOns: {
           where: { status: 'active' },
           select: { addOn: { select: { key: true } } },
@@ -99,10 +117,21 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       },
     });
     if (!ctx) return null;
-    const hasAiExpansion = ctx.tenantAddOns.some(
-      (a) => a.addOn?.key === 'ai_expansion',
-    );
-    return this.subs.resolveEffectiveAiCap(ctx.plan, hasAiExpansion);
+    const packs = (ctx.tenantAddOns ?? []).filter((a) => AI_PACK_ADDON_KEYS.has(a.addOn?.key ?? '')).length;
+    const inTrial =
+      ctx.subscriptionStatus === 'trialing' &&
+      !!ctx.trialEnd &&
+      ctx.trialEnd.getTime() > Date.now();
+    return this.subs.aiCap(ctx.plan, { inTrial, locations: ctx.maxLocations, packs });
+  }
+
+  /** AI messages the tenant has used today (UTC). */
+  async getDailyUsage(tenantId: string): Promise<number> {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { aiMessagesToday: true, aiMessagesDay: true },
+    });
+    return t?.aiMessagesDay === currentDay() ? (t.aiMessagesToday ?? 0) : 0;
   }
 
   /** Returns the configured fair-use action for the tenant. */
@@ -135,8 +164,7 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
   async getUsage(tenantId: string): Promise<number> {
     if (this.redisAvailable && this.redis) {
       try {
-        const yyyymm = currentYearMonth();
-        const key = `vrm:ai:cnt:${tenantId}:${yyyymm}`;
+        const key = `vrm:ai:cnt:${tenantId}:${aiUsagePeriod()}`;
         const cached = await this.redis.get(key);
         if (cached !== null) return Number(cached);
       } catch (e) {
@@ -145,9 +173,9 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     }
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { aiConversationsUsed: true },
+      select: AI_USAGE_SELECT,
     });
-    return tenant?.aiConversationsUsed ?? 0;
+    return aiUsageThisMonth(tenant);
   }
 
 
@@ -159,16 +187,14 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
    * source of truth. If Redis is down or slow, the Postgres write
    * still wins and the next read will see the right value.
    *
-   * For plans with cap=null we skip the counter altogether (no
-   * reason to track Pro/Enterprise usage beyond observability).
+   * Also counts the day, for the daily cap.
    */
   async increment(tenantId: string): Promise<{ newCount: number; cappedBy: number | null }> {
     const cap = await this.getEffectiveCap(tenantId);
     if (cap === null) {
       return { newCount: 0, cappedBy: null };
     }
-    const yyyymm = currentYearMonth();
-    const redisKey = `vrm:ai:cnt:${tenantId}:${yyyymm}`;
+    const redisKey = `vrm:ai:cnt:${tenantId}:${aiUsagePeriod()}`;
     let newCount = 0;
 
     if (this.redisAvailable && this.redis) {
@@ -184,20 +210,29 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     }
 
     try {
-      const updated = await this.prisma.tenant.update({
-        where: { id: tenantId },
-        data: { aiConversationsUsed: { increment: 1 } },
-        select: { aiConversationsUsed: true },
-      });
-      if (newCount === 0) newCount = updated.aiConversationsUsed;
-      // Align Redis if it under-reported (cache miss path).
-      if (this.redisAvailable && this.redis && newCount !== updated.aiConversationsUsed) {
-        await this.redis.set(redisKey, String(updated.aiConversationsUsed));
+      const used = await incrementAiUsage(this.prisma, tenantId);
+      if (newCount === 0) newCount = used;
+      // Align Redis with Postgres (cache miss path, or a stale key).
+      if (this.redisAvailable && this.redis && newCount !== used) {
+        newCount = used;
+        await this.redis.set(redisKey, String(used), { EX: 35 * 24 * 60 * 60 });
       }
     } catch (e) {
       this.logger.error(
         `Postgres increment failed for tenant ${tenantId}: ${(e as Error).message}`,
       );
+    }
+
+    // Today's count: one atomic statement, restarting at 1 on a new day.
+    try {
+      const day = currentDay();
+      await this.prisma.$executeRaw`
+        UPDATE "tenants"
+        SET "aiMessagesToday" = CASE WHEN "aiMessagesDay" = ${day} THEN "aiMessagesToday" + 1 ELSE 1 END,
+            "aiMessagesDay" = ${day}
+        WHERE "id" = ${tenantId}`;
+    } catch (e) {
+      this.logger.error(`Daily AI count failed for tenant ${tenantId}: ${(e as Error).message}`);
     }
 
     return { newCount, cappedBy: cap };
@@ -229,9 +264,12 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
       };
     }
     const used = await this.getUsage(tenantId);
+    const today = await this.getDailyUsage(tenantId);
+    const dailyCap = aiDailyCap(cap);
     const action = await this.getFairUseAction(tenantId);
+    const reason = used >= cap ? 'cap_exceeded' : 'daily_cap_exceeded';
 
-    if (used < cap) {
+    if (used < cap && today < dailyCap) {
       this.metrics.counter(COUNTERS.AI_CALLS, 'AI conversation outcomes by status').inc({ status: 'success' });
       return {
         allowed: true,
@@ -259,9 +297,12 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     // we report whatever the data has (esencial / pro / empresa).
     const planLabel = await this.getPlanLabel(tenantId);
     this.metrics.counter(COUNTERS.AI_FAIRUSE_CAP_HIT, 'AI fair-use cap hit by plan (cap_exceeded path)').inc({ plan: planLabel });
+    void this.notifyCapReached(tenantId, reason, reason === 'cap_exceeded' ? cap : dailyCap).catch((e: Error) =>
+      this.logger.warn(`AI cap notice not sent for tenant ${tenantId}: ${e.message}`),
+    );
     return {
       allowed: false,
-      reason: 'cap_exceeded',
+      reason,
       capSource: 'plan',
       cap,
       used,
@@ -269,22 +310,66 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
     };
   }
 
-  /** Resets the counter for a tenant (called by the monthly scheduler). */
-  async resetMonthly(tenantId: string): Promise<void> {
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+  /**
+   * Tells the salon's owners and admins, once a day, that the receptionist
+   * hit a cap and is handing conversations to the team. Without it the
+   * salon only found out from its clients.
+   */
+  private async notifyCapReached(
+    tenantId: string,
+    reason: 'cap_exceeded' | 'daily_cap_exceeded',
+    limit: number,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    const day = currentDay();
+    // Claim today's notice; a concurrent refusal finds it taken.
+    const claimed = await this.prisma.tenant.updateMany({
+      where: { id: tenantId, OR: [{ aiCapNotifiedOn: null }, { aiCapNotifiedOn: { not: day } }] },
+      data: { aiCapNotifiedOn: day },
+    });
+    if (claimed.count === 0) return;
+
+    const managers = await this.prisma.user.findMany({
+      where: { tenantId, role: { in: ['owner', 'admin'] }, isActive: true },
+      select: { id: true },
+    });
+    const limitText = limit.toLocaleString('es-ES');
+    const title = 'Tu recepcionista IA ha llegado a su límite';
+    const message =
+      reason === 'cap_exceeded'
+        ? `Has usado los ${limitText} mensajes de IA de este mes. Hasta que empiece el mes que viene, la recepcionista pasa las conversaciones a tu equipo. Puedes añadir 1.000 mensajes más por 19 €/mes en Facturación.`
+        : `Hoy se han usado ${limitText} mensajes de IA, el máximo de un día. Hasta mañana la recepcionista pasa las conversaciones a tu equipo. Si no reconoces tanto uso, revisa las conversaciones.`;
+    for (const m of managers) {
+      await this.notifications.create({
+        tenantId,
+        userId: m.id,
+        type: 'system_alert' as any,
+        title,
+        message,
+        data: { kind: 'ai_cap', reason, limit, url: '/dashboard/billing' },
+      });
+    }
+  }
+
+  /**
+   * Starts the month's count at 0 (the monthly scheduler). Usage is
+   * already 0 in a new month without it; this keeps the row tidy and
+   * drops the month's Redis key.
+   */
+  async resetMonthly(tenantId: string, now: Date = new Date()): Promise<void> {
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
         aiConversationsUsed: 0,
-        aiConversationsResetAt: next,
+        aiConversationsPeriod: aiUsagePeriod(now),
+        aiConversationsResetAt: nextAiUsagePeriodStart(now),
       },
     });
     // Drop this month's Redis key so the next call reads from
     // Postgres and stays consistent.
     if (this.redisAvailable && this.redis) {
       try {
-        await this.redis.del(`vrm:ai:cnt:${tenantId}:${currentYearMonth(now)}`);
+        await this.redis.del(`vrm:ai:cnt:${tenantId}:${aiUsagePeriod(now)}`);
       } catch {
         /* ignore */
       }
@@ -292,8 +377,8 @@ export class AiConversationCounterService implements OnModuleInit, OnModuleDestr
   }
 }
 
-function currentYearMonth(now: Date = new Date()): string {
-  const y = now.getUTCFullYear();
-  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
-  return `${y}-${m}`;
+/** Today as YYYY-MM-DD in UTC, the daily cap's key. */
+function currentDay(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
 }
+

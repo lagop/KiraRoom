@@ -15,9 +15,9 @@ import {
 import apiClient from "@/lib/api";
 
 const PLANS = [
-  { id: "esencial", label: "Esencial · 29 €/mes" },
-  { id: "pro", label: "Pro · 59 €/mes" },
-  { id: "empresa", label: "Empresa · 119 €/mes" },
+  { id: "esencial", label: "Esencial · 49 €/mes" },
+  { id: "pro", label: "Pro · 79 €/mes" },
+  { id: "empresa", label: "Empresa · 149 €/local/mes" },
 ];
 
 export default function InviteTenantPage() {
@@ -30,6 +30,9 @@ export default function InviteTenantPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [magicLink, setMagicLink] = useState<string | null>(null);
+  // Whether the email really went out (T15): the link is shown either way.
+  const [emailSent, setEmailSent] = useState(true);
+  const [sentTo, setSentTo] = useState("");
   const [copied, setCopied] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -46,6 +49,8 @@ export default function InviteTenantPage() {
         lastName: lastName.trim() || undefined,
       });
       setMagicLink(res.magicLink);
+      setEmailSent(res.emailSent !== false);
+      setSentTo(email.trim());
     } catch (e: any) {
       const msg =
         e?.response?.data?.message || e?.message || "No se pudo enviar la invitación.";
@@ -72,7 +77,13 @@ export default function InviteTenantPage() {
         href="/saas/tenants"
         className="inline-flex items-center text-sm text-slate-600 hover:text-slate-900 mb-4"
       >
-        <ArrowLeft className="w-4 h-4 mr-1" /> Volver a Tenants
+        <ArrowLeft className="w-4 h-4 mr-1" /> Volver a salones
+      </Link>
+      <Link
+        href="/saas/tenants/invites"
+        className="ml-4 inline-flex items-center text-sm text-slate-600 hover:text-slate-900 mb-4"
+      >
+        Ver invitaciones
       </Link>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3 mb-6">
@@ -81,7 +92,7 @@ export default function InviteTenantPage() {
       </div>
 
       <p className="text-sm text-slate-600 mb-6">
-        El propietario recibirá un email con un enlace válido durante 7
+        La dueña recibirá un email con un enlace válido durante 7
         días. Al hacer clic completará un wizard de 3 pasos (contraseña,
         dirección del salón, zona horaria) y la cuenta + tenant se
         crearán automáticamente con 14 días de prueba del plan Pro.
@@ -106,7 +117,7 @@ export default function InviteTenantPage() {
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">
-            Email del propietario
+            Email de la dueña
           </label>
           <input
             type="email"
@@ -199,7 +210,38 @@ export default function InviteTenantPage() {
         </div>
       </form>
 
-      {magicLink && (
+      {magicLink && !emailSent && (
+        <div role="alert" className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle className="w-5 h-5 text-amber-600" />
+            <h3 className="font-semibold text-amber-900">Invitación creada, pero el email no se ha enviado</h3>
+          </div>
+          <p className="text-sm text-amber-800 mb-3">
+            No se pudo enviar el email a <strong>{sentTo}</strong>. Copia el enlace y envíaselo tú:
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value={magicLink}
+              className="flex-1 px-3 py-2 text-xs font-mono bg-white border border-amber-300 rounded"
+            />
+            <button
+              type="button"
+              onClick={copyLink}
+              className="inline-flex items-center gap-1 px-3 py-2 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700"
+            >
+              <Copy className="w-4 h-4" />
+              {copied ? "Copiado" : "Copiar"}
+            </button>
+          </div>
+          <p className="text-xs text-amber-700 mt-2">
+            El enlace caduca en 7 días y solo puede usarse una vez. Puedes reenviarlo desde «Ver invitaciones».
+          </p>
+        </div>
+      )}
+
+      {magicLink && emailSent && (
         <div className="mt-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
           <div className="flex items-center gap-2 mb-2">
             <Check className="w-5 h-5 text-emerald-600" />
@@ -208,7 +250,7 @@ export default function InviteTenantPage() {
             </h3>
           </div>
           <p className="text-sm text-emerald-800 mb-3">
-            Hemos enviado el email a <strong>{email}</strong>. Si el
+            Hemos enviado el email a <strong>{sentTo}</strong>. Si el
             correo no llega en 5 minutos, puedes compartir el enlace
             manualmente:
           </p>

@@ -2,6 +2,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ChatConversation, ChatMessage, IntentHistoryItem, ClientProfile, Tenant } from '@prisma/client';
 
+/** The web chat starts over after this long without a message (audit D19). */
+export const WEB_CHAT_SESSION_MINUTES = 30;
+
 @Injectable()
 export class ConversationMemoryRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -107,7 +110,11 @@ export class ConversationMemoryRepository {
    * The salon may arrive as its slug (the client portal sends one); the
    * conversation is stored under the tenant's id.
    */
-  async findActiveConversationByClientId(clientId: string, tenantId: string): Promise<ChatConversation | null> {
+  async findActiveConversationByClientId(
+    clientId: string,
+    tenantId: string,
+    opts: { channel?: string } = {},
+  ): Promise<ChatConversation | null> {
     if (!clientId || clientId === 'anonymous') return null;
 
     let resolvedTenantId = tenantId;
@@ -120,8 +127,11 @@ export class ConversationMemoryRepository {
       resolvedTenantId = tenant.id;
     }
 
-    const oneHourAgo = new Date();
-    oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+    // The web chat's session ends after WEB_CHAT_SESSION_MINUTES idle (a
+    // shared computer at the salon, a visitor who left); the other channels
+    // are one person's own thread, kept for an hour.
+    const idleMinutes = opts.channel === 'web' ? WEB_CHAT_SESSION_MINUTES : 60;
+    const since = new Date(Date.now() - idleMinutes * 60_000);
 
     return this.prisma.chatConversation.findFirst({
       where: {
@@ -130,12 +140,16 @@ export class ConversationMemoryRepository {
         // at the salon picks it up, the receptionist is still the one
         // answering, and starting over lost everything the client had said.
         status: { in: ['active', 'handoff'] },
-        lastActivityAt: {
-          gte: oneHourAgo,
-        },
-        OR: [
-          ...(this.isValidUUID(clientId) ? [{ clientId }] : []),
-          { context: { path: ['visitorKey'], equals: clientId } },
+        AND: [
+          {
+            OR: [
+              ...(this.isValidUUID(clientId) ? [{ clientId }] : []),
+              { context: { path: ['visitorKey'], equals: clientId } },
+            ],
+          },
+          // A conversation paused from the panel stays the one her messages
+          // go to, however long she waits: the pause must hold.
+          { OR: [{ lastActivityAt: { gte: since } }, { assistantPausedAt: { not: null } }] },
         ],
       },
       orderBy: { lastActivityAt: 'desc' },
@@ -144,6 +158,27 @@ export class ConversationMemoryRepository {
         intentHistory: true,
       },
     });
+  }
+
+  /**
+   * "Nueva conversación" in the web chat: her open conversations end, so the
+   * next message starts one with no memory. A paused one is left as it is.
+   */
+  async closeActiveConversations(clientId: string, tenantId: string): Promise<number> {
+    if (!clientId || clientId === 'anonymous' || !this.isValidUUID(tenantId)) return 0;
+    const res = await this.prisma.chatConversation.updateMany({
+      where: {
+        tenantId,
+        status: { in: ['active', 'handoff'] },
+        assistantPausedAt: null,
+        OR: [
+          ...(this.isValidUUID(clientId) ? [{ clientId }] : []),
+          { context: { path: ['visitorKey'], equals: clientId } },
+        ],
+      },
+      data: { status: 'completed' },
+    });
+    return res.count;
   }
 
   /**
@@ -365,34 +400,7 @@ export class ConversationMemoryRepository {
     };
   }
 
-  /**
-   * Delete old conversations (older than 30 days)
-   */
-  async deleteOldConversations(daysToKeep: number = 30): Promise<number> {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
-
-    const conversationsToDelete = await this.prisma.chatConversation.findMany({
-      where: {
-        createdAt: { lt: cutoffDate },
-        status: 'completed',
-      },
-    });
-
-    const conversationIds = conversationsToDelete.map((conv) => conv.id);
-
-    await Promise.all([
-      this.prisma.chatMessage.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      }),
-      this.prisma.intentHistoryItem.deleteMany({
-        where: { conversationId: { in: conversationIds } },
-      }),
-      this.prisma.chatConversation.deleteMany({
-        where: { id: { in: conversationIds } },
-      }),
-    ]);
-
-    return conversationsToDelete.length;
-  }
+  // deleteOldConversations(30) used to be here: nobody called it, and it only
+  // looked at "completed" conversations, a status the code almost never sets.
+  // ConversationRetentionScheduler deletes by last activity, any status.
 }

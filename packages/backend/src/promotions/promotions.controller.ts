@@ -7,14 +7,10 @@ import {
 } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
-import { Roles } from "../auth/decorators/roles.decorator";
+import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
-import {
-  PromotionsService,
-  CreatePromotionDto,
-  UpdatePromotionDto,
-  ApplyPromotionDto,
-} from "./promotions.service";
+import { PromotionsService } from "./promotions.service";
+import { CreatePromotionDto, UpdatePromotionDto } from "./dto/promotion.dto";
 import { Request } from "express";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
@@ -53,8 +49,9 @@ export class PromotionsController {
     return this.promotionsService.getAll(tenantId);
   }
 
+  /** Uses and total discounted per promotion: the Promociones screen (managers). */
   @Get("statistics")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @Roles(...SALON_MANAGERS)
   @ApiOperation({ summary: "Get promotion usage statistics" })
   @ApiQuery({ name: "promotionId", required: false })
   async getStatistics(
@@ -96,22 +93,16 @@ export class PromotionsController {
     return this.promotionsService.update(id, tenantId, dto);
   }
 
+  /**
+   * Deletes a promotion, or archives it when it was already used at the
+   * till. There is no endpoint that applies a code: the till does
+   * (POST /pos/quote and /pos/checkout, `promotionCode`).
+   */
   @Delete(":id")
   @Roles(UserRole.owner, UserRole.admin)
-  @ApiOperation({ summary: "Delete a promotion" })
+  @ApiOperation({ summary: "Delete (or archive, when used) a promotion" })
   async delete(@Req() req: AuthenticatedRequest, @Param("id", ParseUUIDPipe) id: string) {
     const tenantId = req.user.tenantId;
     return this.promotionsService.delete(id, tenantId);
-  }
-
-  @Post("apply")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Apply a promotion code" })
-  async apply(
-    @Req() req: AuthenticatedRequest,
-    @Body() dto: ApplyPromotionDto,
-  ) {
-    const tenantId = req.user.tenantId;
-    return this.promotionsService.applyPromotion(tenantId, dto);
   }
 }

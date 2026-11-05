@@ -23,7 +23,7 @@ import { LLMService } from "./llm.service";
 function promptFor(context: Record<string, unknown>): string {
   const configService = { get: (): undefined => undefined } as unknown as ConfigService;
   const stub = {} as any;
-  const service = new LLMService(stub, configService, stub, stub, stub, stub, stub);
+  const service = new LLMService(stub, configService, stub, stub, stub, stub);
   return (service as any).buildSystemPrompt(context);
 }
 
@@ -39,7 +39,6 @@ const BASE = {
   assistantName: "Kira",
   timezone: "Atlantic/Canary",
   minCancelHours: 24,
-  faqs: [],
 };
 
 describe("the Spanish prompt carries the real hours", () => {
@@ -111,13 +110,45 @@ describe("the English prompt carries the real hours too", () => {
   });
 });
 
+describe("a salon that closes for lunch", () => {
+  // salonShiftsFrom gives each day its open stretches. Showing only the widest
+  // window had the receptionist promise a 15:00 that check_availability then
+  // refused.
+  const SPLIT_WEEK = {
+    monday: [
+      { start: "10:00", end: "14:00" },
+      { start: "17:00", end: "20:00" },
+    ],
+    tuesday: [{ start: "09:00", end: "18:00" }],
+  };
+
+  it("names every stretch of the day in Spanish", () => {
+    const prompt = promptFor({ ...BASE, language: "es", workingHours: SPLIT_WEEK });
+
+    expect(prompt).toContain("- lunes: 10:00–14:00 y 17:00–20:00\n- martes: 09:00–18:00");
+    expect(prompt).toContain("- miércoles: cerrado");
+  });
+
+  it("and in English", () => {
+    const prompt = promptFor({ ...BASE, language: "en", workingHours: SPLIT_WEEK });
+
+    expect(prompt).toContain("- Monday: 10:00–14:00 and 17:00–20:00");
+  });
+
+  it("treats an empty list of stretches as closed", () => {
+    const prompt = promptFor({ ...BASE, language: "es", workingHours: { ...SPLIT_WEEK, friday: [] } });
+
+    expect(prompt).toContain("- viernes: cerrado");
+  });
+});
+
 describe("an unknown week is admitted, not invented", () => {
   it("falls back to saying the hours are unavailable when there is no week", () => {
     // A salon whose professionals have no schedule recorded. Saying so is
     // correct; making up a Monday-to-Friday default is how this started.
     const prompt = promptFor({ ...BASE, language: "es", workingHours: {} });
 
-    expect(prompt).toContain("Not available");
+    expect(prompt).toContain("No disponible");
     expect(prompt).not.toContain("- lunes:");
   });
 
@@ -194,5 +225,67 @@ describe("the booking flow ends honestly", () => {
     expect(promptFor({ ...withSlug, language: "es" })).toMatch(/El email es opcional/);
     expect(promptFor({ ...withSlug, language: "en" })).toMatch(/\*\*phone\*\* \(required/);
     expect(promptFor({ ...withSlug, language: "en" })).toMatch(/The email is optional/);
+  });
+});
+
+describe("the salon's own opening hours, when the owner set them", () => {
+  // getSalonContext reads the salon's week (Tenant.openingHours) first and
+  // only falls back to its professionals' schedules when there is none.
+  async function contextFor(tenant: Record<string, unknown>) {
+    const configService = { get: (): undefined => undefined } as unknown as ConfigService;
+    const prisma = {
+      tenant: {
+        findFirst: jest.fn(async () => ({
+          id: "tenant-1",
+          name: "Salon Prueba",
+          slug: "salon-prueba",
+          language: "es",
+          services: [],
+          customDomain: null,
+          ...tenant,
+        })),
+      },
+    };
+    const flags = { isFeatureUnlocked: async () => false };
+    const stub = {} as any;
+    const service = new LLMService(stub, configService, prisma as any, flags as any, stub, stub);
+    const context = await (service as any).getSalonContext("tenant-1");
+    return { context, prompt: (service as any).buildSystemPrompt(context) as string };
+  }
+
+  const PROFESSIONALS = [
+    {
+      firstName: "Ana",
+      lastName: "P",
+      specialties: [],
+      workingHours: [{ day: "sunday", openTime: "09:00", closeTime: "19:00" }],
+    },
+  ];
+
+  it("describes the salon's week, shifts and closed days", async () => {
+    const { prompt } = await contextFor({
+      openingHours: [
+        { day: "monday", openTime: "10:00", closeTime: "14:00" },
+        { day: "monday", openTime: "17:00", closeTime: "20:00" },
+        { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+      ],
+      professionals: PROFESSIONALS,
+    });
+    expect(prompt).toContain("- lunes: 10:00–14:00 y 17:00–20:00");
+    expect(prompt).toContain("- sábado: 10:00–14:00");
+    // A professional's Sunday shift does not open the salon.
+    expect(prompt).toContain("- domingo: cerrado");
+  });
+
+  it("reads the legacy { open, close } as every day", async () => {
+    const { prompt } = await contextFor({ openingHours: { open: "09:00", close: "20:00" }, professionals: [] });
+    expect(prompt).toContain("- lunes: 09:00–20:00");
+    expect(prompt).toContain("- domingo: 09:00–20:00");
+  });
+
+  it("falls back to the professionals' schedules when the salon set none", async () => {
+    const { prompt } = await contextFor({ openingHours: {}, professionals: PROFESSIONALS });
+    expect(prompt).toContain("- domingo: 09:00–19:00");
+    expect(prompt).toContain("- lunes: cerrado");
   });
 });

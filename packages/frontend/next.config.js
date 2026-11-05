@@ -5,11 +5,17 @@
  * protection) and announced "X-Powered-By: Next.js". X-Frame-Options leaves
  * out /embed/*: salons put the booking widget in an iframe on their own site.
  */
+const { cspHeaders } = require('./csp')
+
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1'
+
 const securityHeaders = [
   { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+  // Report-only for now: see csp.js.
+  ...cspHeaders({ apiUrl, dev: process.env.NODE_ENV !== 'production' }),
 ]
 
 /**
@@ -42,7 +48,7 @@ const nextConfig = {
     domains: ['localhost'],
   },
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1',
+    NEXT_PUBLIC_API_URL: apiUrl,
   },
   async headers() {
     return [

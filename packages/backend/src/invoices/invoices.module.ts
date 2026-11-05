@@ -6,6 +6,9 @@ import { InvoicesController } from "./invoices.controller";
 import { InvoiceService } from "./invoices.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
 import { InvoicePdfService } from "./pdf/invoice-pdf.service";
+import { InvoiceRenderService } from "./pdf/invoice-render.service";
+import { InvoiceEmailService } from "./invoice-email.service";
+import { AuditLogService } from "../saas/audit-log.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { FiscalCertificateService } from "./fiscal/fiscal-certificate.service";
 import { FiscalRetryQueue } from "./fiscal/fiscal-retry.queue";
@@ -18,6 +21,8 @@ import { VerifactuRecordsService } from "./fiscal/verifactu/verifactu-records.se
 import { VerifactuDispatcher } from "./fiscal/verifactu/verifactu-dispatcher.service";
 import { VerifactuTransport } from "./fiscal/verifactu/transport";
 import { VerifactuController } from "./fiscal/verifactu/verifactu.controller";
+// Saving the fiscal identity updates the salon's Stripe customer (B1).
+import { PlatformModule } from "../platform/platform.module";
 
 /**
  * Bind the dispatch callback the retry queue needs on module init.
@@ -53,12 +58,15 @@ class InvoicesModuleInit implements OnModuleInit {
 }
 
 @Module({
-  imports: [PrismaModule, AccountingModule, NotificationsModule, TaxReportsModule],
+  imports: [PrismaModule, AccountingModule, NotificationsModule, TaxReportsModule, PlatformModule],
   controllers: [InvoicesController, VerifactuController],
   providers: [
     InvoiceService,
     InvoiceCalculator,
     InvoicePdfService,
+    InvoiceRenderService,
+    InvoiceEmailService,
+    AuditLogService,
     FiscalService,
     FiscalCertificateService,
     FiscalRetryQueue,

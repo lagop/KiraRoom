@@ -7,8 +7,6 @@ import { VirtualReceptionistController } from './virtual-receptionist.controller
 import { VirtualReceptionistService } from './virtual-receptionist.service';
 import { LLMService } from './services/llm.service';
 import { ConversationService } from './services/conversation.service';
-import { FAQService } from './services/faq.service';
-import { FAQCacheService } from './services/faq-cache.service';
 import { AiConversationCounterService } from './services/ai-conversation-counter.service';
 import { BookingService } from './services/booking.service';
 import { ReceptionistStatsService } from './services/receptionist-stats.service';
@@ -18,11 +16,13 @@ import { OpenAIProvider } from './providers/openai.provider';
 import { AnthropicProvider } from './providers/anthropic.provider';
 import { GoogleProvider } from './providers/google.provider';
 import { LlamaProvider } from './providers/llama.provider';
-import { MiniMaxProvider } from './providers/MiniMax.provider';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ConversationMemoryRepository } from './repositories/conversation-memory.repository';
 import { ProfessionalsModule } from '../professionals/professionals.module';
 import { AiFairUseResetScheduler } from './schedulers/ai-fair-use-reset.scheduler';
+import { ConversationRetentionScheduler } from './schedulers/conversation-retention.scheduler';
+import { ReceptionistInboxService } from './inbox/receptionist-inbox.service';
+import { AuditLogService } from '../saas/audit-log.service';
 import { UpsellModule } from '../upsell/upsell.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { SalonToolsService } from './tools/salon-tools';
@@ -40,6 +40,8 @@ import { ChannelReceptionistService } from './channels/channel-receptionist.serv
 import { MetaGraphClient } from './channels/meta-graph.client';
 import { TelegramBotClient } from './channels/telegram-bot.client';
 import { PlatformModule } from '../platform/platform.module';
+import { PublicChatAccessService } from './public-chat/public-chat-access.service';
+import { ChannelHealthModule } from '../channel-health/channel-health.module';
 
 @Module({
   imports: [
@@ -51,24 +53,24 @@ import { PlatformModule } from '../platform/platform.module';
     PaymentsModule,
     AppointmentsModule,
     PlatformModule,
+    // Marks a Page or bot token Meta / Telegram refused (channel providers).
+    ChannelHealthModule,
   ],
   controllers: [VirtualReceptionistController, ChannelsConfigController, ChannelsMetaCallbackController],
   providers: [
     VirtualReceptionistService,
     LLMService,
     ConversationService,
-    FAQService,
-    FAQCacheService,
     AiConversationCounterService,
     BookingService,
     ReceptionistStatsService,
+    PublicChatAccessService,
     AnalysisService,
     LLMProviderFactory,
     OpenAIProvider,
     AnthropicProvider,
     GoogleProvider,
     LlamaProvider,
-    MiniMaxProvider,
     ConversationMemoryRepository,
     WebChannelProvider,
     FacebookMessengerProvider,
@@ -82,6 +84,10 @@ import { PlatformModule } from '../platform/platform.module';
     MetaGraphClient,
     TelegramBotClient,
     SalonToolsService,
+    ConversationRetentionScheduler,
+    ReceptionistInboxService,
+    AuditLogService,
+    AiFairUseResetScheduler,
   ],
   exports: [
     ChannelReceptionistService,
@@ -89,7 +95,6 @@ import { PlatformModule } from '../platform/platform.module';
     VirtualReceptionistService,
     LLMService,
     ConversationService,
-    FAQService,
     BookingService,
     AnalysisService,
     ChannelRegistry,

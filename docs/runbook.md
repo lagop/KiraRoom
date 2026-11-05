@@ -11,7 +11,7 @@
 | Production API | `https://api.kiraroom.net` |
 | Production dashboard (tenants) | `https://app.kiraroom.net` |
 | SaaS admin console | `https://admin.kiraroom.net` |
-| Commercial website (separate repo) | `https://kiraroom.com` |
+| Commercial website | `https://kiraroom.com`: static site in the private repo `lagop/kiraroom-landing`, published to Hostinger from `main` (see [website.md](website.md)) |
 | Database host | Hostinger VPS, **NOT** exposed to internet |
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
@@ -170,7 +170,7 @@ in:
 
 ```bash
 ssh root@<vps-ip>
-docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+docker exec kiraroom-backend-prod env | grep -E "ANTHROPIC_API_KEY|DEFAULT_LLM_PROVIDER"
 # (value will be masked; this is for confirming presence only)
 ```
 
@@ -179,19 +179,51 @@ docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
 The virtual receptionist and Staff Copilot both call the LLM service.
 If a key is revoked or rate-limited:
 
-1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
-   Google AI Studio depending on which key is rotated).
+1. Sign in to console.anthropic.com (the receptionist and the copilot
+   run on Anthropic only).
 2. Mint a new key.
-3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
-   the `backend` service → update the matching `*_API_KEY=` env var
-   → Save → Hostinger redeploys.
+3. Paste it in the admin console (Plataforma > LLM) and press
+   "Probar conexión"; the backend picks it up on the next request.
 4. Verify a chatbot reply still works in the dashboard — the LLM
    service logs the provider + response time per call.
 
-If rotating `MINIMAX_API_KEY`, also update the per-tenant
-`VirtualReceptionistConfig` rows that store the key in the DB
-(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
-or `npx prisma studio`).
+The key is stored encrypted in the platform LLM config row, not per
+salon.
+
+## Recovering the platform owner (lost password or lost phone)
+
+Re-running the seed script is the recovery path. On an existing account it:
+sets the new password, clears the lockout, **switches two-step verification
+off and deletes its secret and recovery codes**, and ends every session
+(including any open support session):
+
+```bash
+printf '%s' 'the new password' | docker exec -i \
+  -e SAAS_OWNER_EMAIL='you@yourdomain.com' \
+  kiraroom-backend-prod node dist/scripts/seed-saas-owner.js --password-stdin
+```
+
+Then sign in at `/saas/login` and turn two-step verification on again in
+`/saas/seguridad` straight away (new QR, new recovery codes).
+
+If only the password was lost and the authenticator app still works, add
+`--keep-2fa` to leave two-step verification as it is.
+
+A lost password with the authenticator still at hand can also go through
+"¿Has olvidado la contraseña?" on `/saas/login` (the usual reset email).
+
+**Mandatory 2FA for the platform owner (audit 8 D15).** `SAAS_OWNER_2FA_REQUIRED=true`
+in the backend's environment makes the console usable only with two-step
+verification on: without it, every console route answers 403
+`SAAS_OWNER_2FA_REQUIRED` and the console sends her to `/saas/seguridad`
+to set it up (sign-in, profile, 2FA setup, password change and sign-out keep
+working). Default `false`; turn it on only once 2FA is on and the recovery
+codes are kept somewhere safe. The seed recovery above still works with it on:
+it clears 2FA, and the next sign-in lands on the setup page.
+
+Wrong passwords for the platform owner lock the **address** they come from
+(5 in 30 minutes), not the account, so a stranger cannot keep you out; from
+another network you can still sign in.
 
 ## First deploy: creating the platform owner
 
@@ -220,7 +252,7 @@ of quoting (ssh, then the remote shell) is enough for a `# Operational runbook
 | Production API | `https://api.kiraroom.net` |
 | Production dashboard (tenants) | `https://app.kiraroom.net` |
 | SaaS admin console | `https://admin.kiraroom.net` |
-| Commercial website (separate repo) | `https://kiraroom.com` |
+| Commercial website | `https://kiraroom.com`: static site in the private repo `lagop/kiraroom-landing`, published to Hostinger from `main` (see [website.md](website.md)) |
 | Database host | Hostinger VPS, **NOT** exposed to internet |
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
@@ -379,7 +411,7 @@ in:
 
 ```bash
 ssh root@<vps-ip>
-docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
+docker exec kiraroom-backend-prod env | grep -E "ANTHROPIC_API_KEY|DEFAULT_LLM_PROVIDER"
 # (value will be masked; this is for confirming presence only)
 ```
 
@@ -388,19 +420,73 @@ docker exec kiraroom-backend-prod env | grep MINIMAX_API_KEY
 The virtual receptionist and Staff Copilot both call the LLM service.
 If a key is revoked or rate-limited:
 
-1. Sign in to the provider dashboard (MiniMax, OpenAI, Anthropic, or
-   Google AI Studio depending on which key is rotated).
+1. Sign in to console.anthropic.com (the receptionist and the copilot
+   run on Anthropic only).
 2. Mint a new key.
-3. Open Hostinger hPanel → VPS → Docker Manager → your stack → edit
-   the `backend` service → update the matching `*_API_KEY=` env var
-   → Save → Hostinger redeploys.
+3. Paste it in the admin console (Plataforma > LLM) and press
+   "Probar conexión"; the backend picks it up on the next request.
 4. Verify a chatbot reply still works in the dashboard — the LLM
    service logs the provider + response time per call.
 
-If rotating `MINIMAX_API_KEY`, also update the per-tenant
-`VirtualReceptionistConfig` rows that store the key in the DB
-(Hostinger UI doesn't expose DB rows, so this requires SSH + psql
-or `npx prisma studio`).
+The key is stored encrypted in the platform LLM config row, not per
+salon.
+
+### Rotating META_TOKEN_ENCRYPTION_KEY
+
+Despite its name, `META_TOKEN_ENCRYPTION_KEY` is the **single master
+key** of `EncryptionService`. It encrypts every stored secret: the
+platform console's Stripe, Resend and AI keys, the salons' Stripe keys,
+WhatsApp/Meta/Telegram tokens, fiscal certificates, accounting tokens
+and two-step secrets. There is no in-app rotation.
+
+**Never change it in `.env` on its own.** Every one of those values
+becomes unreadable: the console marks Stripe, email and AI as "sin
+configurar" in red (they do not fall back to the `.env` values, which
+could switch Stripe from test to live mode), salons lose their
+channels, and two-step sign-in stops working.
+
+To rotate it (only if it leaked):
+
+1. Back up the database first (see "Backups").
+2. Generate the new key: `openssl rand -base64 32`.
+3. Dry run, from `packages/backend` (inside the backend container or
+   with the production `DATABASE_URL`):
+   `OLD_KEY=<current value> NEW_KEY=<new value> npx ts-node scripts/reencrypt-secrets.ts`.
+   It prints per column how many values it would re-encrypt and how
+   many it cannot open; it never prints a value. Anything "unreadable"
+   means OLD_KEY is not the key in use: stop.
+4. Run it again with `--apply` (one transaction, all or nothing).
+5. Straight away set `META_TOKEN_ENCRYPTION_KEY=<new value>` in
+   `/opt/kiraroom/.env.production` and
+   `docker compose -f docker-compose.prod.yml --env-file .env.production up -d backend`.
+   Between steps 4 and 5 the running backend cannot read the secrets.
+6. Check the console: Stripe, Email and IA show no red notice.
+
+### Switching KiraRoom's Stripe from test to live
+
+KiraRoom's own Stripe account (it bills the salons) is set in the
+console (Ajustes > Stripe) over the `.env`. The secret key and its
+webhook secret always come from the same place (console or `.env`),
+and the console refuses a mix.
+
+1. In Stripe (live mode) create the webhook to
+   `https://api.kiraroom.net/api/v1/webhooks/stripe` with the six
+   events the console lists, and copy its signing secret.
+2. In the console, either paste the live secret key, publishable key
+   and that webhook secret together and press "Guardar", or press
+   "Volver a lo del servidor (.env)" if the `.env` already holds the
+   live trio. Before saving, the console shows how many salons have a
+   test-mode customer or subscription and which active plans were paid
+   in test mode: review them (those salons must contract again; their
+   test plans stay active in the database until you change them).
+3. The old test webhook secret is kept as "the other mode's": test
+   events still arriving (retries, renewals of test subscriptions) are
+   acknowledged with 200 and ignored, instead of failing until Stripe
+   disables the endpoint. Once no test events arrive, delete the test
+   webhook in Stripe and press "Quitar" on that field.
+
+Events of the other mode than the key in force are never applied (a
+test payment cannot activate a plan while live keys are in force).
 
 ## First deploy: creating the platform owner
 
@@ -452,6 +538,28 @@ Until revenue justifies PagerDuty (€21/user/mo), use:
 3. **Warning probes** (every 5min):
    - `GET https://app.kiraroom.net` — dashboard loads
    - `GET https://api.kiraroom.net/api/v1/invoices` — fiscal dispatch reachable
+
+### What emails the platform owner (audit 8 D6, D7, D15)
+
+| Source | What | Configured by |
+| --- | --- | --- |
+| Backend (OpsAlertService) | AEAT / TicketBAI / SII rejections, scheduled jobs that throw, more permanent bounces (20) or spam complaints (3) in a day than the threshold. One email per kind per hour. | `OPS_ALERT_EMAIL` (else `FOUNDER_EMAIL`, else admin@kiraroom.net), `OPS_ALERT_BOUNCES_PER_DAY`, `OPS_ALERT_COMPLAINTS_PER_DAY` |
+| GlitchTip | Every 5xx and unexpected exception (SentryExceptionFilter) and failed jobs | `SENTRY_DSN` on the backend; GlitchTip's own emails via `GLITCHTIP_EMAIL_URL` |
+| Alertmanager | The Prometheus rules in ops/prometheus/rules (API down, no inbound messages, outbound failures, gate) | docker-compose.observability.yml: `ALERTMANAGER_SMTP_PASSWORD` (the Resend API key), `OPS_ALERT_EMAIL`, `ALERTMANAGER_FROM` (a sender on a domain verified in Resend; default `EMAIL_FROM`, else `noreply@kiraroom.net`) |
+| Uptime Kuma | The probes above | Its own UI (Telegram or email notification) |
+
+To activate the observability part on the server, next to
+docker-compose.observability.yml:
+
+1. Set `METRICS_SCRAPE_TOKEN` (same value as the backend) and
+   `ALERTMANAGER_SMTP_PASSWORD`; optionally `OPS_ALERT_EMAIL`,
+   `ALERTMANAGER_FROM`, `GLITCHTIP_HOST`, `GLITCHTIP_EMAIL_URL`.
+2. `docker compose -f docker-compose.observability.yml up -d` (pulls
+   `louislam/uptime-kuma:1` and `prom/alertmanager:v0.27.0`).
+3. Check that `http://localhost:9090/targets` shows kiraroom-backend UP (the
+   token is read from a file now) and `/alerts` lists the 4 rules.
+4. Send a test alert and confirm it reaches the inbox:
+   `docker exec kira-alertmanager amtool alert add test severity=warning --alertmanager.url=http://localhost:9093`.
 
 ## Operational runbooks
 
@@ -532,8 +640,9 @@ This is the **worst-case scenario**. Treat as SEV1.
 4. All existing JWTs are now invalid. Users will be forced to log in
    again (a fresh token is issued from `POST /auth/login`).
 5. Audit `audit_logs` for any unusual activity in the previous hours.
-6. Consider rotating tenant secrets too (META_TOKEN_ENCRYPTION_KEY,
-   OAUTH_STATE_SECRET, etc.).
+6. Consider rotating other secrets too (OAUTH_STATE_SECRET, etc.).
+   META_TOKEN_ENCRYPTION_KEY only with the re-encryption script: see
+   "Rotating META_TOKEN_ENCRYPTION_KEY".
 7. Document the incident in a post-mortem at `docs/post-mortems/`.
 
 ### Design note: `POST /auth/impersonate` is intentionally `@Public()`

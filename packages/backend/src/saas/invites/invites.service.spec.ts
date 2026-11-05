@@ -52,10 +52,12 @@
 import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { InvitesService } from "./invites.service";
 import { InviteStatus, UserRole } from "@prisma/client";
+import { TERMS_VERSION } from "../../auth/legal-terms";
 
 // ────────────────────── mock helpers
 
 function makePrismaMock() {
+  const legalAcceptances: any[] = [];
   const tenantInvites = new Map<string, any>();
   const tenants = new Map<string, any>();
   const users = new Map<string, any>();
@@ -201,6 +203,19 @@ updateMany: async (args: any) => {
       },
     },
 user: {
+      // Case-insensitive email lookup (the service ignores case).
+      findFirst: async (args: any) => {
+        const e = args.where?.email;
+        const email = typeof e === "string" ? e : e?.equals;
+        const row = typeof email === "string" ? users.get(email.toLowerCase()) : undefined;
+        if (!row) return null;
+        if (args.select) {
+          const out: any = {};
+          for (const k of Object.keys(args.select)) out[k] = row[k];
+          return out;
+        }
+        return row;
+      },
       findUnique: async (args: any) => {
         const id =
           typeof args.where.email === "string"
@@ -234,14 +249,22 @@ user: {
     },
   };
 
+  (tx as any).legalAcceptance = {
+    create: async (args: any) => {
+      legalAcceptances.push(args.data);
+      return { id: `la-${legalAcceptances.length}`, ...args.data };
+    },
+  };
+
   const prisma: any = {
     tenantInvite: tx.tenantInvite,
     tenant: tx.tenant,
     user: tx.user,
+    legalAcceptance: (tx as any).legalAcceptance,
     $transaction: async (fn: any) => fn(tx),
   };
 
-  return { prisma, tenantInvites, tenants, users, tx };
+  return { prisma, tenantInvites, tenants, users, tx, legalAcceptances };
 }
 
 function makeConfigMock() {
@@ -310,6 +333,10 @@ m.tenantInvites.set(token, row);
   return row;
 }
 
+function makeSessionsMock() {
+  return { start: jest.fn(async () => ({ sid: "sid-1", jti: "jti-1" })) } as any;
+}
+
 // ────────────────────── tests
 
 describe("InvitesService.createInvite", () => {
@@ -321,6 +348,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const view = await svc.createInvite(
@@ -352,6 +380,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -379,6 +408,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -410,6 +440,7 @@ describe("InvitesService.createInvite", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.createInvite(
@@ -434,6 +465,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     const ctx = await svc.getInviteForAcceptance("tok-1-long-enough-16");
     expect(ctx.email).toBe("owner@glamour.com");
@@ -452,6 +484,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(svc.getInviteForAcceptance("tok-expired")).rejects.toThrow();
   });
@@ -464,6 +497,7 @@ describe("InvitesService.getInviteForAcceptance", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(svc.getInviteForAcceptance("short")).rejects.toThrow();
   });
@@ -477,6 +511,7 @@ describe("InvitesService.acceptInvite (TOCTOU race + edge cases)", () => {
     postalCode: "28013",
     country: "ES",
     timezone: "Europe/Madrid",
+    acceptTerms: true,
   };
 
   it("creates the tenant + owner user and returns tokens on first accept", async () => {
@@ -488,9 +523,10 @@ seedActiveInvite(m, "tok-accept-1-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
-    const result = await svc.acceptInvite("tok-accept-1-long-16", validAcceptDto as any);
+    const result = await svc.acceptInvite("tok-accept-1-long-16", validAcceptDto as any, { ip: "203.0.113.7" });
 
     expect(result.accessToken).toMatch(/^jwt\./);
     expect(result.refreshToken).toMatch(/^jwt\./);
@@ -501,6 +537,16 @@ seedActiveInvite(m, "tok-accept-1-long-16");
     const row = m.tenantInvites.get("tok-accept-1-long-16");
     expect(row.status).toBe(InviteStatus.accepted);
     expect(row.acceptedAt).toBeInstanceOf(Date);
+    // S3: the terms acceptance is recorded with the new salon and its owner.
+    expect(m.legalAcceptances).toEqual([
+      expect.objectContaining({
+        tenantId: result.tenantId,
+        acceptedByUserId: result.userId,
+        termsVersion: TERMS_VERSION,
+        ip: "203.0.113.7",
+        source: "invite",
+      }),
+    ]);
   });
 
   it("rejects a second accept of the same token (TOCTOU race protection)", async () => {
@@ -517,6 +563,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const first = await svc.acceptInvite("tok-once-16-chars-long", validAcceptDto as any);
@@ -538,6 +585,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -554,6 +602,7 @@ seedActiveInvite(m, "tok-once-16-chars-long");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     await expect(
@@ -589,6 +638,7 @@ seedActiveInvite(m, "tok-collision-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const result = await svc.acceptInvite("tok-collision-long-16", validAcceptDto as any);
@@ -617,6 +667,7 @@ seedActiveInvite(m, "tok-collision-long-16");
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.acceptInvite("tok-3x-very-long-16", validAcceptDto as any),
@@ -639,6 +690,7 @@ describe("InvitesService.resendInvite (atomicity)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const view = await svc.resendInvite(
@@ -665,10 +717,46 @@ describe("InvitesService.resendInvite (atomicity)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
     await expect(
       svc.resendInvite(m.tenantInvites.get("tok-done").id, "saas-admin-1"),
-    ).rejects.toThrow(/already accepted/i);
+    ).rejects.toThrow(/ya se aceptó/i);
+  });
+
+  it("resends an expired invite with a fresh link (audit 8 T15)", async () => {
+    const m = makePrismaMock();
+    seedActiveInvite(m, "tok-old", { status: InviteStatus.expired, expiresAt: new Date(Date.now() - 60_000) });
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.resendInvite(m.tenantInvites.get("tok-old").id, "saas-admin-1");
+    expect(view.status).toBe(InviteStatus.pending);
+    expect(view.emailSent).toBe(true);
+    expect(m.tenantInvites.get("tok-old").status).toBe(InviteStatus.expired);
+  });
+
+  it("refuses to resend a revoked invite, in Spanish", async () => {
+    const m = makePrismaMock();
+    seedActiveInvite(m, "tok-rev", { status: InviteStatus.revoked });
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    await expect(svc.resendInvite(m.tenantInvites.get("tok-rev").id, "saas-admin-1")).rejects.toThrow(/anulada/);
+  });
+});
+
+describe("InvitesService.createInvite emailSent (audit 8 T15)", () => {
+  it("says the email was not sent when the provider failed, and still returns the link", async () => {
+    const m = makePrismaMock();
+    const email = { sendTenantInvite: async () => ({ success: false, error: "down" }) } as any;
+    const svc = new InvitesService(m.prisma, email, makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.createInvite({ email: "new@salon.test", tenantName: "Nuevo", plan: "esencial" as any }, "saas-admin-1");
+    expect(view.emailSent).toBe(false);
+    expect(view.magicLink).toContain("/accept-invite/");
+  });
+
+  it("says it was sent when the provider accepted it", async () => {
+    const m = makePrismaMock();
+    const svc = new InvitesService(m.prisma, makeEmailMock(), makeAuditMock(), makeConfigMock(), makeJwtMock(), makeSessionsMock());
+    const view = await svc.createInvite({ email: "new2@salon.test", tenantName: "Nuevo 2", plan: "esencial" as any }, "saas-admin-1");
+    expect(view.emailSent).toBe(true);
   });
 });
 
@@ -691,6 +779,7 @@ describe("InvitesService.listInvites (A1.1: N+1 fix)", () => {
       makeAuditMock(),
       makeConfigMock(),
       makeJwtMock(),
+      makeSessionsMock(),
     );
 
     const updateManySpy = jest.spyOn(m.prisma.tenantInvite, "updateMany");
@@ -729,6 +818,7 @@ describe("InvitesService.buildMagicLink (APP_BASE_URL fallback)", () => {
       makeAuditMock(),
       { get: () => undefined } as any,
       makeJwtMock(),
+      makeSessionsMock(),
     );
     // @ts-expect-error — overwrite private logger for the test
     svc.logger = logger;

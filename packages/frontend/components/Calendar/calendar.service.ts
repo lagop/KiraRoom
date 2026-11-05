@@ -1,5 +1,7 @@
 // components/calendar/calendar.service.ts
 import apiClient, { Appointment, Professional as ApiProfessional, Client, Service, AppointmentService } from '../../lib/api';
+import { dayQueryRange, FALLBACK_SALON_TIMEZONE, salonInstant } from './salon-time';
+import { isBreakService } from './day-grid';
 
 // Extended appointment type that includes populated relationships
 interface PopulatedAppointment extends Appointment {
@@ -10,23 +12,14 @@ interface PopulatedAppointment extends Appointment {
 }
 
 // The salon is the caller's, from the token: no tenantId is sent.
-export const fetchCalendarData = async (date: Date) => {
+// `day` ("YYYY-MM-DD") is a day of the salon's calendar.
+export const fetchCalendarData = async (day: string) => {
   try {
-    // Fetch appointments for the selected date
-    const startDate = new Date(date);
-    startDate.setHours(0, 0, 0, 0);
-    
-    const endDate = new Date(date);
-    endDate.setHours(23, 59, 59, 999);
-    
-      const appointments = await apiClient.getAppointments({
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-      });
-      
-      // Fetch professionals for the tenant
-      const professionals = await apiClient.getProfessionalsPublic();
-    
+    const [appointments, professionals] = await Promise.all([
+      apiClient.getAppointments(dayQueryRange(day)),
+      apiClient.getProfessionalsPublic(),
+    ]);
+
     return { appointments, professionals };
   } catch (error) {
     console.error('Error fetching calendar data:', error);
@@ -35,6 +28,30 @@ export const fetchCalendarData = async (date: Date) => {
       console.error('Error stack:', error.stack);
     }
     throw error;
+  }
+};
+
+export interface SalonSettings {
+  /** The salon's own zone (Tenant.timezone): the calendar draws its clock. */
+  timeZone: string;
+  /**
+   * Tenant.openingHours as stored: the salon's week, a legacy `{ open, close }`
+   * or nothing. Read with lib/salon-hours.ts.
+   */
+  openingHours: unknown;
+}
+
+/** What the calendar needs from the salon, asked for once. */
+export const fetchSalonSettings = async (): Promise<SalonSettings> => {
+  try {
+    const tenant = await apiClient.getTenant();
+    return {
+      timeZone: tenant.timezone || FALLBACK_SALON_TIMEZONE,
+      openingHours: tenant.openingHours ?? null,
+    };
+  } catch (error) {
+    console.error('Error fetching the salon settings:', error);
+    return { timeZone: FALLBACK_SALON_TIMEZONE, openingHours: null };
   }
 };
 
@@ -60,9 +77,15 @@ const calculateTotalDuration = (appointment: PopulatedAppointment): number => {
   return serialDuration + parallelDuration;
 };
 
+/**
+ * Calendar blocks from the server's appointments. Every block's start and end
+ * are real instants: an appointment's day and "HH:MM" are read on the salon's
+ * clock (`timeZone`), as the server does, never on the browser's.
+ */
 export const transformToCalendarFormat = (
   backendAppointments: PopulatedAppointment[],
-  backendProfessionals: ApiProfessional[]
+  backendProfessionals: ApiProfessional[],
+  timeZone: string,
 ) => {
   // Transform backend appointments to Calendar format
   const calendarAppointments: any[] = [];
@@ -80,18 +103,15 @@ export const transformToCalendarFormat = (
     // Determine appointment type
     let type: "appointment" | "lunch" | "blocked" = "appointment";
     
-    // If the service name contains "lunch" or "break", mark as lunch
-    if (appointment.service && typeof appointment.service === 'object') {
-      if (appointment.service.name.toLowerCase().includes('lunch') ||
-          appointment.service.name.toLowerCase().includes('break')) {
-        type = "lunch";
-      }
+    // A lunch or a break, by the service's name (in Spanish or English).
+    if (appointment.service && typeof appointment.service === 'object' && isBreakService(appointment.service.name)) {
+      type = "lunch";
     }
     
     // Handle multi-service appointments with different professionals
     if (appointment.services && appointment.services.length > 1) {
       // Create separate calendar appointments for each service/professional combination
-      const appointmentStart = new Date(`${datePart}T${appointment.scheduledTime}:00`);
+      const appointmentStart = salonInstant(datePart, appointment.scheduledTime, timeZone);
       let currentTime = appointmentStart.getTime();
       
       // First pass: identify parallel and serial services
@@ -130,6 +150,7 @@ export const transformToCalendarFormat = (
         
         calendarAppointments.push({
           id: `${appointment.id}-${index}`,
+          appointmentId: appointment.id,
           professionalId,
           clientName,
           serviceName,
@@ -139,6 +160,9 @@ export const transformToCalendarFormat = (
           isMultiService: true,
           status: appointment.status,
           appointmentServiceId: serviceAppointment.id,
+          isParallel: !!serviceAppointment.isParallel,
+          locationId: (appointment as any).locationId ?? null,
+          isTest: !!(appointment as any).isTest,
         });
         
         // Move current time forward for the next serial service
@@ -149,7 +173,7 @@ export const transformToCalendarFormat = (
     } else {
       // Single service appointment
       const totalDuration = calculateTotalDuration(appointment);
-      const startDateTime = new Date(`${datePart}T${appointment.scheduledTime}:00`);
+      const startDateTime = salonInstant(datePart, appointment.scheduledTime, timeZone);
       const endDateTime = new Date(startDateTime.getTime() + totalDuration * 60000);
       
       let serviceName: string | undefined;
@@ -159,6 +183,7 @@ export const transformToCalendarFormat = (
       
       calendarAppointments.push({
         id: appointment.id,
+        appointmentId: appointment.id,
         professionalId: appointment.professionalId,
         clientName,
         serviceName,
@@ -167,6 +192,8 @@ export const transformToCalendarFormat = (
         type,
         isMultiService: false,
         status: appointment.status,
+        locationId: (appointment as any).locationId ?? null,
+        isTest: !!(appointment as any).isTest,
       });
     }
   });
@@ -179,6 +206,9 @@ export const transformToCalendarFormat = (
     // to initials. This used to load a random stranger from i.pravatar.cc,
     // sending each professional id to that third party.
     avatarUrl: professional.profileImage || undefined,
+    isActive: professional.isActive,
+    // Staff receive the full row, with the hours the onboarding stores.
+    workingHours: Array.isArray((professional as any).workingHours) ? (professional as any).workingHours : undefined,
   }));
   
   return { appointments: calendarAppointments, professionals: calendarProfessionals };

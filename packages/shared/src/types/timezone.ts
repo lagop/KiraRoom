@@ -64,3 +64,95 @@ export function isKnownSalonTimezone(value: unknown): boolean {
 export function salonTimezoneLabel(value: string): string {
   return SALON_TIMEZONES.find((t) => t.value === value)?.label ?? value;
 }
+
+/** Where a salon is, as its address fields hold it. Every field is optional. */
+export interface SalonAddress {
+  street?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  state?: string | null;
+  country?: string | null;
+}
+
+/**
+ * Places that only exist in the Canary Islands: the islands, the two
+ * provinces and the larger towns. Accents and case are ignored. "Palma" alone
+ * is Mallorca, so only "La Palma" (the island) counts.
+ */
+const CANARY_PLACES = [
+  'canarias',
+  'islas canarias',
+  'gran canaria',
+  'las palmas',
+  'las palmas de gran canaria',
+  'tenerife',
+  'santa cruz de tenerife',
+  'lanzarote',
+  'fuerteventura',
+  'la palma',
+  'la gomera',
+  'el hierro',
+  'la graciosa',
+  'arrecife',
+  'puerto del rosario',
+  'san cristobal de la laguna',
+  'telde',
+  'arona',
+  'adeje',
+  'maspalomas',
+  'san bartolome de tirajana',
+  'santa lucia de tirajana',
+  'puerto de la cruz',
+  'la orotava',
+  'los llanos de aridane',
+  'granadilla de abona',
+  'icod de los vinos',
+  'arucas',
+  'aguimes',
+  'galdar',
+  'mogan',
+  'corralejo',
+  'teguise',
+  'yaiza',
+];
+
+function normalisePlace(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Whether a Spanish address is in the Canary Islands: a postcode of the two
+ * Canarian provinces (35 Las Palmas, 38 Santa Cruz de Tenerife), or a place
+ * name that only exists there. An address in another country never is.
+ */
+export function isCanaryIslandsAddress(address: SalonAddress): boolean {
+  const country = (address.country ?? '').trim().toUpperCase();
+  if (country && country !== 'ES' && country !== 'ESPAÑA' && country !== 'SPAIN') return false;
+
+  const postcode = (address.postalCode ?? '').replace(/\s+/g, '');
+  if (/^\d{5}$/.test(postcode)) return /^(35|38)/.test(postcode);
+  // A postcode written into the street line ("C/ Triana 12, 35002").
+  const inStreet = (address.street ?? '').match(/\b(\d{5})\b/);
+  if (inStreet && /^(35|38)/.test(inStreet[1])) return true;
+
+  const words = ` ${[address.city, address.state, address.street].filter(Boolean).map((t) => normalisePlace(t as string)).join(' ')} `;
+  return CANARY_PLACES.some((place) => words.includes(` ${place} `));
+}
+
+/**
+ * The timezone a salon should be on, when the one it has is clearly wrong for
+ * its address; otherwise null.
+ *
+ * Every sign-up starts on Europe/Madrid, so a salon in Las Palmas kept
+ * Peninsula time and saw its calendar and reminders an hour off. Only that
+ * case is corrected: a salon that chose any other zone keeps it.
+ */
+export function suggestedSalonTimezone(current: string | null | undefined, address: SalonAddress): string | null {
+  if ((current || DEFAULT_SALON_TIMEZONE) !== 'Europe/Madrid') return null;
+  return isCanaryIslandsAddress(address) ? 'Atlantic/Canary' : null;
+}

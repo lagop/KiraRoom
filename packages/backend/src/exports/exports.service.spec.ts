@@ -1,4 +1,5 @@
-import { ExportsService } from "./exports.service";
+import { BadRequestException } from "@nestjs/common";
+import { ExportsService, appointmentDayFilter } from "./exports.service";
 
 type Row = Record<string, any>;
 
@@ -173,5 +174,82 @@ describe("ExportsService", () => {
       expect(body[0]).toBe(0x50);
       expect(body[1]).toBe(0x4b);
     });
+  });
+});
+
+describe("ExportsService CSV: cells a spreadsheet would run", () => {
+  it("keeps a value starting with = + - @ tab or CR as text", async () => {
+    const rows = [
+      { id: "1", firstName: '=HYPERLINK("x")', lastName: "+34", email: "-a@x.com", phone: "@SUM(1)", createdAt: "2026-01-01" },
+      { id: "2", firstName: "\tTab", lastName: "\rCR", email: "b@x.com", phone: "600 111-222", createdAt: "2026-01-02" },
+      { id: "3", firstName: "Ana", lastName: "López", email: "a@x.com", phone: "600111222", createdAt: "2026-01-03" },
+    ];
+    const { prisma } = buildPrisma(rows);
+    const res = mockResponse();
+
+    await new ExportsService(prisma).stream("tenant-1", "clients", "csv", res);
+
+    const body = res.chunks.join("");
+    expect(body).toContain(`"'=HYPERLINK(""x"")"`);
+    expect(body).toContain(`"'+34"`);
+    expect(body).toContain(`"'-a@x.com"`);
+    expect(body).toContain(`"'@SUM(1)"`);
+    expect(body).toContain(`"'\tTab"`);
+    expect(body).toContain(`"'\rCR"`);
+    // Ordinary values, a dash inside included, are untouched.
+    expect(body).toContain("600 111-222");
+    expect(body).toContain("3,Ana,López,a@x.com,600111222,2026-01-03");
+  });
+
+  it("starts each page on its own line", async () => {
+    const rows = Array.from({ length: 1001 }, (_, i) => ({ id: String(i), firstName: `F${i}` }));
+    const { prisma } = buildPrisma(rows);
+    const res = mockResponse();
+
+    await new ExportsService(prisma).stream("tenant-1", "clients", "csv", res);
+
+    const lines = res.chunks.join("").split(/\r?\n/).filter(Boolean);
+    expect(lines).toHaveLength(1 + 1001);
+    expect(lines[1000]).toBe("999,F999,,,,");
+    expect(lines[1001]).toBe("1000,F1000,,,,");
+  });
+});
+
+describe("appointments export date range (S3)", () => {
+  it("filters on the salon day the appointment is booked for, both ends inclusive", async () => {
+    const findMany = jest.fn(async () => [
+      {
+        id: "a1",
+        clientId: "c1",
+        professionalId: "p1",
+        scheduledDate: new Date("2026-10-05T00:00:00.000Z"),
+        scheduledTime: "10:30",
+        startTime: null,
+        endTime: "11:30",
+        status: "completed",
+        totalAmount: 4550,
+      },
+    ]);
+    const svc = new ExportsService({ appointment: { findMany } } as any);
+    const res: any = { chunks: [] as string[], write(c: string) { this.chunks.push(c); return true; }, end() {}, setHeader() {} };
+
+    await svc.stream("t1", "appointments", "csv", res, { dateFrom: "2026-10-01", dateTo: "2026-10-31" });
+
+    expect((findMany.mock.calls[0] as any[])[0].where).toEqual({
+      tenantId: "t1",
+      scheduledDate: { gte: new Date("2026-10-01T00:00:00.000Z"), lt: new Date("2026-11-01T00:00:00.000Z") },
+    });
+    const body = res.chunks.join("");
+    expect(body).toContain("date,scheduledTime");
+    // The day and the price in euros (it read a column that does not exist).
+    expect(body).toContain("a1,c1,p1,2026-10-05,10:30,,11:30,completed,45.5");
+  });
+
+  it("leaves either end open, and refuses days that are not days or a reversed range", () => {
+    expect(appointmentDayFilter()).toBeUndefined();
+    expect(appointmentDayFilter("2026-10-01")).toEqual({ gte: new Date("2026-10-01T00:00:00.000Z") });
+    expect(appointmentDayFilter(undefined, "2026-10-31")).toEqual({ lt: new Date("2026-11-01T00:00:00.000Z") });
+    expect(() => appointmentDayFilter("2026-02-31")).toThrow(BadRequestException);
+    expect(() => appointmentDayFilter("2026-10-31", "2026-10-01")).toThrow(BadRequestException);
   });
 });

@@ -12,12 +12,12 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
-import { ConfigService } from "@nestjs/config";
 import { Request } from "express";
 import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators/public.decorator";
 import { verifySvixSignature } from "../common/webhooks/svix-signature";
 import { ResendEventsService, ResendWebhookEvent } from "./resend-events.service";
+import { PlatformEmailConfigService } from "../platform/platform-email-config.service";
 
 /**
  * POST /api/v1/webhooks/resend -- Resend's delivery events.
@@ -34,7 +34,7 @@ export class ResendWebhooksController {
   private readonly logger = new Logger(ResendWebhooksController.name);
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly platformEmail: PlatformEmailConfigService,
     private readonly events: ResendEventsService,
   ) {}
 
@@ -53,11 +53,12 @@ export class ResendWebhooksController {
     @Headers("svix-timestamp") svixTimestamp?: string,
     @Headers("svix-signature") svixSignature?: string,
   ) {
-    const secret = this.configService.get<string>("RESEND_WEBHOOK_SECRET");
+    // Set in the platform console, else RESEND_WEBHOOK_SECRET in .env.
+    const secret = this.platformEmail.current().webhookSecret;
     if (!secret) {
       // 503 so Resend keeps retrying until the operator sets the secret,
       // instead of the events being acknowledged and lost.
-      this.logger.error("Resend webhook called but RESEND_WEBHOOK_SECRET is not set; refusing.");
+      this.logger.error("Resend webhook called but no webhook secret is set (console or RESEND_WEBHOOK_SECRET); refusing.");
       throw new ServiceUnavailableException("Resend webhook not configured");
     }
     if (!req.rawBody) throw new BadRequestException("Missing body");

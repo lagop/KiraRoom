@@ -40,17 +40,14 @@ describe("PasswordResetService.request", () => {
     expect(stored.passwordResetExpires.getTime() - Date.now()).toBeLessThanOrEqual(PasswordResetService.TTL_MS);
   });
 
-  it("sends one link per salon to a client with accounts in several", async () => {
+  it("sends nothing to a client: clients no longer have accounts", async () => {
     const p = prisma({
-      clients: [
-        { id: "c1", email: "c@x.test", firstName: "C", tenant: { name: "Uno" } },
-        { id: "c2", email: "c@x.test", firstName: "C", tenant: { name: "Dos" } },
-      ],
+      clients: [{ id: "c1", email: "c@x.test", firstName: "C", tenant: { name: "Uno" } }],
     });
     const mail = email();
-    await new PasswordResetService(p, mail).request("c@x.test");
-    expect(mail.sendPasswordReset).toHaveBeenCalledTimes(2);
-    expect(mail.sendPasswordReset.mock.calls.map((c: any) => c[0].salon)).toEqual(["Uno", "Dos"]);
+    await new PasswordResetService(p, mail).request("c@x.test", "uno");
+    expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+    expect(p.client.update).not.toHaveBeenCalled();
   });
 
   it("does nothing, and says nothing, for an unknown address", async () => {
@@ -79,12 +76,12 @@ describe("PasswordResetService.reset", () => {
     });
   });
 
-  it("works for a client account", async () => {
+  it("sets no client password, even with a link sent before accounts were removed", async () => {
     const p = prisma({ client: { id: "c1" } });
-    await new PasswordResetService(p, email()).reset("b".repeat(64), "nueva-clave-1");
-    expect(p.client.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "c1" }, data: expect.objectContaining({ tokenVersion: { increment: 1 } }) }),
-    );
+    await expect(new PasswordResetService(p, email()).reset("b".repeat(64), "nueva-clave-1")).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(p.client.update).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown or expired token, and a short password", async () => {
@@ -97,7 +94,7 @@ describe("PasswordResetService.reset", () => {
 
 describe("logout", () => {
   function auth(p: any) {
-    return new AuthService(p, {} as any, {} as any, {} as any, {} as any);
+    return new AuthService(p, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   }
 
   it("ends every session of a user", async () => {
@@ -119,19 +116,19 @@ describe("JwtStrategy", () => {
   const strategy = (p: any) => new JwtStrategy({ get: () => "secret-of-sufficient-length-1234567890" } as any, p);
 
   it("refuses a token from before the last logout or password change", async () => {
-    await expect(strategy(prisma({ user })).validate({ sub: "u1", role: "owner", tv: 1 } as any)).rejects.toMatchObject({
+    await expect(strategy(prisma({ user })).validate({ typ: "access", sub: "u1", role: "owner", tv: 1 } as any)).rejects.toMatchObject({
       status: 401,
     });
   });
 
   it("accepts a token with the current session version", async () => {
-    await expect(strategy(prisma({ user })).validate({ sub: "u1", role: "owner", tv: 2 } as any)).resolves.toMatchObject({
+    await expect(strategy(prisma({ user })).validate({ typ: "access", sub: "u1", role: "owner", tv: 2 } as any)).resolves.toMatchObject({
       id: "u1",
     });
   });
 
   it("treats tokens minted before tv existed as version 0", async () => {
     const fresh = { ...user, tokenVersion: 0 };
-    await expect(strategy(prisma({ user: fresh })).validate({ sub: "u1", role: "owner" } as any)).resolves.toBeTruthy();
+    await expect(strategy(prisma({ user: fresh })).validate({ typ: "access", sub: "u1", role: "owner" } as any)).resolves.toBeTruthy();
   });
 });

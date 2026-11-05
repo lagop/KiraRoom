@@ -4,15 +4,26 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Logger,
   Optional,
 } from "@nestjs/common";
+import { salonHasSmsNotices } from "../notifications/sms-plan-gate";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
-  workingWindowFor,
-  fitsInWindow,
+  ShiftWindow,
+  bookingSlotStep,
+  candidateStarts,
+  clockOf as clockOfMinutes,
+  workingWindowsFor,
+  bookableWindows,
+  fitsInShifts,
   minutesOf,
+  salonWindowsFor,
+  subtractWindows,
 } from "./working-hours";
+import { availableWindows, dayBlocks, salonClosedOn } from "../time-off/time-off-rules";
+import { timeOffBetween } from "../time-off/time-off-query";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
 import {
   AppointmentStatus,
@@ -26,18 +37,85 @@ import { LoyaltyService } from "../loyalty/loyalty.service";
 import { InvoiceService } from "../invoices/invoices.service";
 import { EmailService } from "../notifications/services/email.service";
 import { SmsService } from "../notifications/services/sms.service";
-import { WhatsAppService } from "../notifications/services/whatsapp.service";
 import {
   AppointmentNoticeKind,
   WhatsAppTemplateService,
 } from "../whatsapp/whatsapp-template.service";
 import { NotificationType } from "../notifications/dto";
+import { salonTeamRecipients } from "./salon-team-recipients";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
+import { refreshClientStats } from "../clients/client-stats";
 import { salonInstant } from "./salon-time";
+import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
+import { assertCanBook, assertCanReschedule, salonDayAndTime } from "./reschedule-check";
+import {
+  MoveScope,
+  VisitService,
+  changedServices,
+  clientDoubleBooked,
+  currentVisitSchedule,
+  planRetime,
+  planVisitMove,
+  visitSpan,
+} from "./visit-move";
+import {
+  BusyBlock,
+  VISIT_ROW_ORDER,
+  VISIT_ROW_SELECT,
+  appointmentBusyBlocks,
+  cleanupMinutesOf,
+  clashesWithBlock,
+  plannedCleanup,
+  VisitRow,
+  clockOf,
+  endClock,
+  freesProfessional,
+  isLiveRow,
+  layoutVisit,
+  normalizeAddons,
+  visitSchedule,
+  visitTotals,
+} from "./visit-totals";
+import { editChangesRows, planRowEdit } from "./visit-edit";
+import { priceIsFrozen } from "./visit-sync";
+import { bookedAddon, bookedService, bookedServiceName, snapshotAddons, snapshotOf, withBookedService } from "./appointment-snapshot";
+import { VISIT_LINE_PROFESSIONAL, colleagueProfessional } from "./appointment-response";
 import { appointmentLocationId } from "../multi-location/appointment-location";
-import { normalizePhone, phoneKey } from "../common/phone";
-import type { OnlineBookingDto } from "./dto/book-appointment.dto";
+import { assertProfessionalsAt, professionalsAt } from "../multi-location/professional-locations";
+import { salonPublicUrlFromEnv } from "../web-domain/public-url";
+import {
+  bookingPlace,
+  clientLocations,
+  formatLocationAddress,
+  professionalLocationsOf,
+} from "../multi-location/client-locations";
+import {
+  clientEmailFilter,
+  findClientIdByPhone,
+  normalizeClientEmail,
+  normalizeClientPhone,
+  salonCountry,
+} from "../clients/client-contact";
+import { isReadOnlyStatus } from "../common/guards/read-only-tenant.guard";
+import type { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
+import type { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
+import { appointmentTotalCents, assertVisitChargeable } from "../payments/appointment-payment";
+import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
+import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
+import { isForeignKeyViolation } from "../common/prisma/history-deletes";
+import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
+import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
+import { publicBookingSmsHeld, reservePublicBookingSms } from "./public-booking-sms-cap";
+import { isTestBooking } from "../onboarding/test-booking";
+import { appointmentCancelUrl, bookedOnline, parseAppointmentCancelToken } from "./public-cancel-link";
+import {
+  assertTransition,
+  concurrentChange,
+  isStaleWrite,
+  needsConsent,
+} from "./appointment-status";
 
 interface AppointmentActivity {
   action: string;
@@ -69,31 +147,17 @@ export interface CreateAppointmentDto {
   widgetInstanceId?: string;
 }
 
+/**
+ * req.user for the team. It carries no professional id: a professional's
+ * own record is the one whose userId is theirs (see ownProfessionalId).
+ */
 export interface AuthenticatedUser {
   id: string;
   tenantId: string;
   role: string;
-  professionalId?: string;
 }
 
-export interface UpdateAppointmentDto {
-  serviceId?: string;
-  professionalId?: string;
-  scheduledDate?: string;
-  scheduledTime?: string;
-  notes?: string;
-  status?: AppointmentStatus;
-  cancellationReason?: string;
-  addons?: Array<{
-    addonId: string;
-    quantity: number;
-  }>;
-  services?: Array<{
-    serviceId: string;
-    professionalId?: string | null;
-    isParallel?: boolean;
-  }>;
-}
+export { UpdateAppointmentDto };
 
 export interface AppointmentFiltersDto {
   tenantId?: string;
@@ -107,11 +171,113 @@ export interface AppointmentFiltersDto {
   searchQuery?: string;
 }
 
+/** What a status change may carry besides the status. */
+/** How long an online booking may wait for the salon to confirm it: then it is cancelled. */
+export const PENDING_BOOKING_MAX_HOURS = 48;
+
+/** The reason recorded when the client cancels from her link. */
+export const CLIENT_LINK_CANCEL_REASON = "Cancelada por el cliente desde el enlace del aviso";
+
+/** What the public "Cancelar mi cita" page shows. */
+export interface CancelLinkInfo {
+  /** cancellable; too_late (inside minCancelHours: call the salon); cancelled; closed (past, done, no-show). */
+  state: "cancellable" | "too_late" | "cancelled" | "closed";
+  canCancel: boolean;
+  status: string;
+  salonName: string;
+  salonPhone: string | null;
+  serviceName: string | null;
+  /** First name only. */
+  professionalName: string | null;
+  /** YYYY-MM-DD, the salon's day. */
+  date: string;
+  /** HH:mm, the salon's clock. */
+  time: string;
+  minCancelHours: number;
+}
+
+export interface StatusChangeOptions {
+  /** Cancellation reason. */
+  reason?: string;
+  /** Completion notes; they replace the appointment's when given. */
+  notes?: string;
+  /** Further columns written with the status, for internal callers (the copilot's no-show fee). */
+  data?: Record<string, unknown>;
+  /**
+   * Cancelled because the professional is away or the salon is closed: the
+   * freed slot is not offered to the wait list (nobody can be booked in it),
+   * and the client's notice links to the booking page to book again.
+   */
+  blockedSlot?: boolean;
+  /**
+   * An online booking the salon left pending too long, cancelled by the
+   * expiry job (pending-booking-expiry.scheduler.ts): the client is told the
+   * salon could not confirm it, with a link to book again.
+   */
+  notConfirmed?: boolean;
+}
+
+/** Appointments that still hold their time: the ones a time off clash can still move or cancel. */
+const LIVE_APPOINTMENT_STATUSES: string[] = [
+  AppointmentStatus.pending,
+  AppointmentStatus.confirmed,
+  AppointmentStatus.in_progress,
+];
+
+/** The salon's booking page with the service picked: where a cancelled client books again. */
+function rebookUrl(slug: string, serviceId?: string | null): string {
+  const base = salonPublicUrlFromEnv(slug, null);
+  if (!serviceId) return base;
+  const url = new URL(base);
+  url.searchParams.set("serviceId", serviceId);
+  return url.toString();
+}
+
+/** What the client reads when the salon cancels for time off and no reason is given. */
+export const TIME_OFF_CANCEL_REASON = "No podremos atenderte en ese horario.";
+
 export interface PendingPaymentFiltersDto {
   searchQuery?: string;
   dateFrom?: string;
   dateTo?: string;
   status?: string;
+}
+
+/**
+ * The candidate slots of a salon that recorded no hours of its own:
+ * 09:00–20:00. It was hardcoded to 09:00–18:00 once, which made the
+ * suggestion engine return nothing past 17:30.
+ */
+const DEFAULT_SLOT_GRID: ShiftWindow = { startMinutes: 9 * 60, endMinutes: 20 * 60 };
+
+/**
+ * A professional's agenda as an appointment filter: their appointments and
+ * the colleagues' visits where they do one of the services. A visit "corte
+ * con Ana + color con Marta" has Ana as its professional; Marta only
+ * appeared on its service row, so her calendar (and her pending payments)
+ * left out the colour she had to do.
+ */
+export function staffAgendaWhere(ownProfessionalId: string) {
+  return {
+    OR: [
+      { professionalId: ownProfessionalId },
+      { services: { some: { professionalId: ownProfessionalId } } },
+    ],
+  };
+}
+
+/**
+ * An appointment as a staff member sees it (`own` is their professional;
+ * null for the owner and managers, who see it whole): a colleague's visit
+ * they take part in carries its professional's name and photo only, not the
+ * colleague's whole record (commission, personal email and phone...).
+ */
+export function asSeenBy<T extends { professionalId?: string | null; professional?: unknown }>(
+  appointment: T,
+  own: string | null,
+): T {
+  if (!own || !appointment || appointment.professionalId === own) return appointment;
+  return { ...appointment, professional: colleagueProfessional(appointment.professional) };
 }
 
 @Injectable()
@@ -124,7 +290,6 @@ export class AppointmentsService {
     private notificationsService: NotificationsService,
     private emailService: EmailService,
     private smsService: SmsService,
-    private whatsappService: WhatsAppService,
     private translationsService: TranslationsService,
     private consentService: ConsentService,
     @Optional() private clientCadenceService?: ClientCadenceService,
@@ -132,6 +297,11 @@ export class AppointmentsService {
     @Optional() private readonly waitListService?: WaitListService,
     @Optional() private readonly loyaltyService?: LoyaltyService,
     @Optional() private readonly whatsappTemplates?: WhatsAppTemplateService,
+    // Whether the salon still has multi-location (Empresa) for the booking
+    // locations (client-locations.ts). Global FeatureFlagModule.
+    @Optional() private readonly featureFlags?: FeatureFlagService,
+    // The owner's and admins' emails on online bookings and self-cancellations (audit 7 D12).
+    @Optional() private readonly salonAlerts?: SalonBookingAlertsService,
   ) {}
 
   /**
@@ -164,6 +334,15 @@ export class AppointmentsService {
   }
 
   /**
+   * The visit's commission snapshot once it is completed and paid, and
+   * recomputed while it is not paid out (commissions/appointment-commission.ts).
+   * Never fails the change that set it off.
+   */
+  private async commissionAfterChange(tenantId: string, appointmentId: string) {
+    await snapshotAppointmentCommissions(this.prisma as any, tenantId, [appointmentId], this.logger);
+  }
+
+  /**
    * A WhatsApp notice from the salon's own WhatsApp Business number, with
    * the Meta-approved template for it. A confirmation, cancellation or change
    * usually reaches a client who has not written in the last 24 hours, and
@@ -178,7 +357,7 @@ export class AppointmentsService {
         phone: appointment.client.phone,
         clientName: appointment.client.firstName,
         salonName: appointment.tenant?.name || "tu salón",
-        serviceName: appointment.service?.name || "tu servicio",
+        serviceName: bookedServiceName(appointment, "tu servicio"),
         date: new Date(appointment.scheduledDate),
         time: appointment.scheduledTime,
         country: appointment.tenant?.country ?? undefined,
@@ -197,17 +376,41 @@ export class AppointmentsService {
    * Enrich appointment data with computed totalAmount (in cents) and amountDue.
    * The database totalAmount field is not set on creation, so we compute it from service price.
    */
-  private enrichAppointment(apt: any): any {
-    const servicePrice = Number(apt.service?.price || 0);
+  private enrichAppointment(raw: any, basis?: SalonTaxBasis | null): any {
+    // Its services as they were booked (appointment-snapshot.ts): the panel
+    // shows and adds up these, not today's catalog.
+    const apt = raw?.service ? withBookedService(raw) : raw;
+    if (Array.isArray(apt?.services)) {
+      apt.services = apt.services.map((r: any) => (r?.service ? withBookedService(r) : r));
+    }
+    const servicePrice = Number(bookedService(apt)?.price || 0);
     const totalAmount = apt.totalAmount && Number(apt.totalAmount) > 0
       ? Number(apt.totalAmount)
       : Math.round(servicePrice * 100); // Convert dollars to cents
     const amountPaid = Number(apt.amountPaid || 0);
+    // amountPaid is money (tax included); totalAmount is the catalogue
+    // figure. For a salon whose prices are the base, what is due is the
+    // money total (base + tax: appointment-charge.ts), what the till
+    // charges. A visit of several services may differ by a cent from its
+    // invoice here; the till prices it exactly (POST /pos/quote).
+    const chargeTotal = basis ? moneyOfCatalogueCents(totalAmount, basis) : totalAmount;
     return {
       ...apt,
+      // Rows saved before the fix hold {"set": [...]}: always a plain list.
+      ...(apt.addons !== undefined ? { addons: normalizeAddons(apt.addons) } : {}),
       totalAmount,
-      amountDue: Math.max(0, totalAmount - amountPaid),
+      chargeTotal,
+      amountDue: Math.max(0, chargeTotal - amountPaid),
     };
+  }
+
+  /** The salon's tax basis for amountDue (null when it cannot be read: catalogue = money). */
+  private async chargeBasisOf(tenantId: string): Promise<SalonTaxBasis | null> {
+    const tenant = await (this.prisma as any).tenant?.findUnique?.({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    return tenant && tenant.fiscalSettings !== undefined ? salonTaxBasis(tenant.fiscalSettings) : null;
   }
 
   /**
@@ -217,7 +420,10 @@ export class AppointmentsService {
    * for 03:00, for yesterday, or for a slot already taken.
    *
    * - The salon is the chosen professional's -- or, for the widget's "any
-   *   professional", the widget's.
+   *   professional", the widget's. A widget named alongside a professional
+   *   must be that salon's (assertBookableOnline).
+   * - Only a service the salon offers online (active, isOnlineBookable), and
+   *   only an active professional.
    * - The start must be inside the service's booking window
    *   (minAdvanceBooking hours to maxAdvanceBooking days from now).
    * - The slot must be one getAvailableSlots offers: on the professional's
@@ -226,7 +432,7 @@ export class AppointmentsService {
    *   concurrent requests for the same slot cannot both pass the check.
    *   Notifications are sent after the lock is released.
    */
-  async createOnline(dto: OnlineBookingDto) {
+  async createOnline(dto: OnlineBookingDto, meta: { ip?: string } = {}) {
     const professionalId = dto.professionalId || undefined;
     let tenantId: string;
     let widgetProfessionals: string[] = [];
@@ -239,20 +445,29 @@ export class AppointmentsService {
       if (!professional) throw new NotFoundException("Profesional no encontrado");
       tenantId = professional.tenantId;
     } else {
-      // "Any professional" is the widget's option; the widget says which salon.
-      if (!dto.widgetInstanceId) {
-        throw new BadRequestException("Elige un profesional");
+      // "Any professional": the widget says which salon (and narrows the
+      // team to its list); the salon page sends its salon. Either way the
+      // service must be that salon's (assertBookableOnline).
+      if (dto.widgetInstanceId) {
+        const widget = await this.prisma.widgetInstance.findUnique({
+          where: { id: dto.widgetInstanceId },
+          select: { tenantId: true, professionals: true },
+        });
+        if (!widget) throw new NotFoundException("Widget no encontrado");
+        tenantId = widget.tenantId;
+        widgetProfessionals = widget.professionals ?? [];
+      } else {
+        if (!dto.tenantId) throw new BadRequestException("Elige un profesional");
+        const tenant = await this.prisma.tenant.findFirst({
+          where: { id: dto.tenantId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!tenant) throw new NotFoundException("Salón no encontrado");
+        tenantId = tenant.id;
       }
-      const widget = await this.prisma.widgetInstance.findUnique({
-        where: { id: dto.widgetInstanceId },
-        select: { tenantId: true, professionals: true },
-      });
-      if (!widget) throw new NotFoundException("Widget no encontrado");
-      tenantId = widget.tenantId;
-      widgetProfessionals = widget.professionals ?? [];
     }
 
-    return this.bookOnline(tenantId, dto, widgetProfessionals);
+    return this.bookOnline(tenantId, dto, widgetProfessionals, meta);
   }
 
   /**
@@ -262,14 +477,17 @@ export class AppointmentsService {
    * lock and insert; notifications after the lock.
    *
    * `allowedProfessionals` limits "any professional" to a widget's list.
+   * `meta.ip` is the booker's, for the record of what she ticked.
    */
   async bookOnline(
     tenantId: string,
     dto: OnlineBookingDto,
     allowedProfessionals: string[] = [],
+    meta: { ip?: string } = {},
   ) {
     const professionalId = dto.professionalId || undefined;
     const widgetProfessionals = allowedProfessionals;
+    await this.assertBookableOnline(tenantId, dto);
     const window = await this.onlineBookingWindow(tenantId, dto.serviceId);
     if (!window) throw new NotFoundException("Servicio no encontrado");
 
@@ -285,6 +503,11 @@ export class AppointmentsService {
     }
 
     const date = new Date(scheduledDay);
+    // At one of the salon's locations: only who works there (multi-local).
+    const locationId = dto.locationId || undefined;
+    if (locationId && professionalId) {
+      await assertProfessionalsAt(this.prisma as any, tenantId, locationId, [professionalId]);
+    }
     const appointment = await this.prisma.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${scheduledDay}`}))`;
@@ -297,25 +520,112 @@ export class AppointmentsService {
           assigned = professionalId;
         } else {
           assigned = await this.findFreeProfessional(
-            tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals,
+            tenantId, date, dto.serviceId, dto.scheduledTime, widgetProfessionals, locationId,
           );
         }
 
         // Inserted through the normal client: it commits at once, before this
         // transaction ends and releases the lock, so the next request's check
-        // sees it.
-        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId);
+        // sees it. `online`: an existing client's contact details are left
+        // as they are (findOrCreateClient).
+        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId, { online: true });
       },
       { timeout: 15_000 },
     );
 
-    const notified = await this.afterAppointmentCreated(appointment, dto.source);
+    // What she ticked, once the booking found or created her; before the
+    // confirmation goes out, so a WhatsApp request already applies to it.
+    if ((dto.refusesMarketingEmail || dto.wantsWhatsAppNotices || dto.wantsWhatsAppPromotions) && appointment.clientId) {
+      await this.consentService
+        ?.recordBookingChoices({
+          tenantId,
+          clientId: appointment.clientId,
+          appointmentId: appointment.id,
+          source: dto.source === "widget" ? "widget" : "booking",
+          ip: meta.ip,
+          typedPhone: dto.clientInfo?.phone,
+          refusesMarketingEmail: dto.refusesMarketingEmail,
+          wantsWhatsAppNotices: dto.wantsWhatsAppNotices,
+          wantsWhatsAppPromotions: dto.wantsWhatsAppPromotions,
+        })
+        .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
+    }
+
+    // From outside the salon: its SMS count against the daily caps
+    // (public-booking-sms-cap.ts).
+    const notified = await this.afterAppointmentCreated(appointment, dto.source, { publicBooking: true });
+    // The salon's owner and admins hear of it (their preference permitting).
+    void this.salonAlerts?.notify("booked", appointment.id);
     // Not columns: tell the chat receptionist whether it may say the
     // confirmation email or SMS was sent.
     return Object.assign(appointment, {
       confirmationEmailSent: notified?.emailSent === true,
       confirmationSmsSent: notified?.smsSent === true,
     });
+  }
+
+  /**
+   * What an online booking may not name, whoever makes it (the site, the
+   * widget, the virtual receptionist): a service the salon does not offer
+   * online -- inactive, or marked not bookable online -- an inactive
+   * professional, or another salon's widget. The panel's bookings
+   * (createByStaff) do not come through here: the team may book any of
+   * the salon's services by hand.
+   */
+  private async assertBookableOnline(tenantId: string, dto: OnlineBookingDto): Promise<void> {
+    const professionalId = dto.professionalId || undefined;
+    const [service, professional, widget] = await Promise.all([
+      this.prisma.service.findFirst({
+        where: { id: dto.serviceId, tenantId },
+        select: { isActive: true, isOnlineBookable: true },
+      }),
+      professionalId
+        ? this.prisma.professional.findFirst({
+            where: { id: professionalId, tenantId },
+            select: { isActive: true },
+          })
+        : Promise.resolve(undefined),
+      dto.widgetInstanceId
+        ? this.prisma.widgetInstance.findFirst({
+            where: { id: dto.widgetInstanceId, tenantId },
+            select: { id: true },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    if (!service || !service.isActive) throw new NotFoundException("Servicio no encontrado");
+    if (!service.isOnlineBookable) {
+      throw new ForbiddenException({
+        code: "SERVICE_NOT_BOOKABLE_ONLINE",
+        message: "Este servicio no se puede reservar online. Llama al salón para pedir cita.",
+      });
+    }
+    if (professional !== undefined && !professional?.isActive) {
+      throw new NotFoundException("Profesional no encontrado");
+    }
+    // Attribution only, but never to another salon's widget.
+    if (widget === null) throw new NotFoundException("Widget no encontrado");
+    // The booking page only offers the professionals who perform the
+    // service; a direct POST could name anyone.
+    if (professionalId && !(await this.offersService(tenantId, professionalId, dto.serviceId))) {
+      throw new BadRequestException("Ese profesional no realiza este servicio. Elige otro profesional.");
+    }
+  }
+
+  /**
+   * Whether a professional performs a service, by the rule the public
+   * booking page (salon-booking-page.tsx) and findFreeProfessional use: the
+   * active professionals linked to the service (ProfessionalService) -- or,
+   * when none is linked, as in salons that never filled that in, every
+   * active professional.
+   */
+  async offersService(tenantId: string, professionalId: string, serviceId: string): Promise<boolean> {
+    const active: Array<{ id: string; services?: Array<{ serviceId: string }> }> =
+      await this.prisma.professional.findMany({
+        where: { tenantId, isActive: true },
+        select: { id: true, services: { select: { serviceId: true } } },
+      });
+    const offering = active.filter((p) => (p.services ?? []).some((s) => s.serviceId === serviceId));
+    return offering.length === 0 || offering.some((p) => p.id === professionalId);
   }
 
   /**
@@ -345,6 +655,29 @@ export class AppointmentsService {
     };
   }
 
+  /**
+   * The last salon-calendar day a client may book a service online (GET
+   * /appointments/booking-window): the booking page and the widget stop the
+   * date picker there and, for a later day, say "solo se puede reservar hasta
+   * el …" instead of "no quedan horas libres". Only a service offered online.
+   */
+  async publicBookingWindow(
+    tenantId: string,
+    serviceId: string,
+    now: number = Date.now(),
+  ): Promise<{ maxAdvanceDays: number; lastDay: string }> {
+    const service = await this.prisma.service.findFirst({
+      where: { id: serviceId, tenantId, isActive: true, isOnlineBookable: true },
+      select: { id: true },
+    });
+    const window = service ? await this.onlineBookingWindow(tenantId, serviceId) : null;
+    if (!window) throw new NotFoundException("Servicio no encontrado");
+    const lastDay = new Intl.DateTimeFormat("en-CA", { timeZone: window.timeZone }).format(
+      new Date(now + window.maxHours * 3_600_000),
+    );
+    return { maxAdvanceDays: window.maxHours / 24, lastDay };
+  }
+
   fitsOnlineWindow(
     day: string,
     time: string,
@@ -355,6 +688,19 @@ export class AppointmentsService {
     if (hoursAhead < window.minHours) return "too-soon";
     if (hoursAhead > window.maxHours) return "too-far";
     return "ok";
+  }
+
+  /**
+   * The per-salon, per-day booking lock (`booking:<tenant>:<YYYY-MM-DD>`)
+   * that online and panel bookings take before their check and insert, for
+   * each day given, in order so two callers never wait on each other. Moves
+   * from the panel take it too (update, applyVisit). Inside `tx`; released
+   * when it commits.
+   */
+  private async lockBookingDays(tx: any, tenantId: string, days: string[]): Promise<void> {
+    for (const day of [...new Set(days.map((d) => d.slice(0, 10)))].sort()) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
+    }
   }
 
   private async isSlotFree(
@@ -380,14 +726,24 @@ export class AppointmentsService {
     serviceId: string,
     time: string,
     allowed: string[],
+    /** Only those who work at this location (multi-local). */
+    locationId?: string,
   ): Promise<string> {
+    const here = locationId ? await professionalsAt(this.prisma as any, tenantId, locationId) : null;
     const active = await this.prisma.professional.findMany({
-      where: { tenantId, isActive: true, ...(allowed.length ? { id: { in: allowed } } : {}) },
+      where: { tenantId, isActive: true },
       select: { id: true, services: { select: { serviceId: true } } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     });
     const offering = active.filter((p) => p.services.some((s) => s.serviceId === serviceId));
-    const candidates = offering.length > 0 ? offering : active;
+    // Who offers the service is decided salon-wide (nobody linked to it means
+    // everyone), as for a named professional (offersService) and as
+    // getAvailableSlots offers it; the widget's list and the location then
+    // narrow that down. Deciding it within the widget's list gave the
+    // service to a widget professional who does not do it.
+    const candidates = (offering.length > 0 ? offering : active).filter(
+      (p) => (allowed.length === 0 || allowed.includes(p.id)) && (!here || here.has(p.id)),
+    );
     for (const candidate of candidates) {
       if (await this.isSlotFree(tenantId, date, candidate.id, serviceId, time)) return candidate.id;
     }
@@ -411,13 +767,25 @@ export class AppointmentsService {
    *
    * Online bookings require a phone and make the email optional, so a
    * returning client may come with either. A detail the record lacks is
-   * filled in; one it has is never overwritten by what a booking form says.
+   * filled in on a booking by the team (`fillMissing`); one it has is never
+   * overwritten by what a booking form says.
+   *
+   * A public booking (the site, the widget, the receptionist) changes
+   * nothing on an existing client: whoever books is only known by the one
+   * detail that matched. Filling in the other one from the form would send
+   * that client's notices to whoever typed it. The booking is still made
+   * for the matched client; the appointment has no contact fields of its
+   * own to keep the differing detail in.
    */
   private async findOrCreateClient(
     tenantId: string,
     info: { firstName: string; lastName: string; email?: string; phone?: string },
+    db: any = this.prisma,
+    { fillMissing }: { fillMissing: boolean } = { fillMissing: true },
   ): Promise<string> {
-    const email = info.email?.trim() || undefined;
+    // Emails are stored in lower case and matched whatever their case (see
+    // clients/client-contact.ts): "Ana@Mail.com" is the client "ana@mail.com".
+    const email = normalizeClientEmail(info.email) ?? undefined;
     const phone = info.phone?.trim() || undefined;
     if (!email && !phone) {
       // An undefined filter is dropped by Prisma: a lookup without either
@@ -426,40 +794,36 @@ export class AppointmentsService {
     }
 
     let existing = email
-      ? await this.prisma.client.findFirst({ where: { email, tenantId } })
+      ? await db.client.findFirst({
+          where: { email: clientEmailFilter(email), tenantId },
+          orderBy: { createdAt: "asc" },
+        })
       : null;
     if (!existing && phone) {
       // Stored numbers are in whatever format they were typed ("600 111
-      // 222", "+34600111222"): compare their last nine digits in SQL.
-      const key = phoneKey(phone);
-      const rows = key.length === 9
-        ? await this.prisma.$queryRaw<Array<{ id: string }>>`
-            SELECT id FROM clients
-            WHERE "tenantId" = ${tenantId}
-              AND right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 9) = ${key}
-            ORDER BY "createdAt" ASC
-            LIMIT 1`
-        : [];
-      existing = rows[0] ? await this.prisma.client.findFirst({ where: { id: rows[0].id, tenantId } }) : null;
+      // 222", "+34600111222"): compared on their last nine digits.
+      const id = await findClientIdByPhone(db, tenantId, phone);
+      existing = id ? await db.client.findFirst({ where: { id, tenantId } }) : null;
     }
 
     if (existing) {
+      if (!fillMissing) return existing.id;
       const fill: Record<string, string> = {};
       if (email && !existing.email) fill.email = email;
-      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone);
+      if (phone && !existing.phone) fill.phone = await this.salonPhone(tenantId, phone, db);
       if (Object.keys(fill).length > 0) {
-        await this.prisma.client.update({ where: { id: existing.id }, data: fill });
+        await db.client.update({ where: { id: existing.id, tenantId }, data: fill });
       }
       return existing.id;
     }
 
-    const created = await this.prisma.client.create({
+    const created = await db.client.create({
       data: {
         tenantId,
         firstName: info.firstName,
         lastName: info.lastName,
         email: email ?? null,
-        phone: phone ? await this.salonPhone(tenantId, phone) : null,
+        phone: phone ? await this.salonPhone(tenantId, phone, db) : null,
         status: "active",
       },
     });
@@ -467,30 +831,67 @@ export class AppointmentsService {
   }
 
   /** A client's phone in international form, using the salon's country. */
-  private async salonPhone(tenantId: string, phone: string): Promise<string> {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { country: true },
-    });
-    return normalizePhone(phone, tenant?.country ?? "ES");
+  private async salonPhone(tenantId: string, phone: string, db: any = this.prisma): Promise<string> {
+    return normalizeClientPhone(phone, await salonCountry(db, tenantId)) ?? phone;
   }
 
-  /** Validate and insert. No side effects beyond creating the client. */
-  private async insertAppointment(createAppointmentDto: CreateAppointmentDto, tenantId: string) {
+  /**
+   * Validate and insert. No side effects beyond creating the client.
+   *
+   * `visit`: a panel booking passes its transaction (`db`), so the client,
+   * the appointment and its service rows are written together or not at
+   * all; the visit's length when it has several services; and those rows,
+   * already timed. `online`: a public booking, which leaves an existing
+   * client's contact details as they are (findOrCreateClient).
+   */
+  private async insertAppointment(
+    createAppointmentDto: CreateAppointmentDto & { commissionRate?: number },
+    tenantId: string,
+    visit: {
+      db?: any;
+      duration?: number;
+      services?: Array<{
+        serviceId: string;
+        professionalId: string;
+        isParallel: boolean;
+        scheduledStart: Date;
+        scheduledEnd: Date;
+      }>;
+      online?: boolean;
+      /** A deposit the salon asked for (owner/admin only), in cents. */
+      deposit?: { amountCents: number };
+    } = {},
+  ) {
+    const db = visit.db ?? this.prisma;
     if (!createAppointmentDto.professionalId) {
       throw new BadRequestException("Professional ID is required");
     }
 
+    // A salon without an active plan (trial ended, cancelled, suspended) is
+    // read-only: no new appointments from its page, its widget or the
+    // receptionist either. ReadOnlyTenantGuard covers the team's own routes.
+    const tenant = await db.tenant.findUnique({
+      where: { id: tenantId },
+      select: { subscriptionStatus: true, autoConfirmOnlineBookings: true, blockedAt: true },
+    });
+    // Blocked from the console (audit 8 D4): no bookings either.
+    if (isReadOnlyStatus(tenant?.subscriptionStatus) || tenant?.blockedAt) {
+      throw new ForbiddenException({
+        code: "SALON_NOT_ACCEPTING_BOOKINGS",
+        message: "Este salón no acepta reservas en este momento.",
+      });
+    }
+
     // Professional and service first: a booking that fails on them must not
     // leave a new client record behind.
-    const professional = await this.prisma.professional.findFirst({
+    const professional = await db.professional.findFirst({
       where: { id: createAppointmentDto.professionalId, tenantId: tenantId },
     });
     if (!professional) {
       throw new NotFoundException("Profesional no encontrado");
     }
 
-    const service = await this.prisma.service.findFirst({
+    const service = await db.service.findFirst({
       where: { id: createAppointmentDto.serviceId, tenantId: tenantId },
     });
     if (!service) {
@@ -501,7 +902,9 @@ export class AppointmentsService {
 
     // Find or create client if clientInfo provided
     if (!clientId && createAppointmentDto.clientInfo) {
-      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo);
+      clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo, db, {
+        fillMissing: !visit.online,
+      });
     }
 
     if (!clientId) {
@@ -509,25 +912,41 @@ export class AppointmentsService {
     }
 
     // The client must belong to the same salon as the appointment.
-    const client = await this.prisma.client.findFirst({
+    const client = await db.client.findFirst({
       where: { id: clientId, tenantId },
     });
     if (!client) {
       throw new NotFoundException("Cliente no encontrado");
     }
+    // A client the salon blocked cannot book from its page, its widget or
+    // the receptionist; the team can still book her from the panel. The
+    // message does not say why: the reason is the salon's.
+    if (visit.online && client.status === "blocked") {
+      throw new ForbiddenException({
+        code: "ONLINE_BOOKING_NOT_AVAILABLE",
+        message: "No es posible reservar online; contacta con el salón.",
+      });
+    }
 
-    // Calculate end time
-    const endTime = this.calculateEndTime(
-      createAppointmentDto.scheduledTime,
-      service.duration,
-    );
+    // A visit of several services lasts from its first to its last service.
+    const duration = visit.duration ?? service.duration;
+    const endTime = this.calculateEndTime(createAppointmentDto.scheduledTime, duration);
 
-    const tenantRow = await this.prisma.tenant.findUnique({
+    const tenantRow = await db.tenant.findUnique({
       where: { id: tenantId },
       select: { timezone: true },
     });
-    // Which of the salon's locations: the consolidated report reads it.
-    const locationId = await appointmentLocationId(this.prisma, tenantId, professional.id);
+    // Which of the salon's locations: the one booked at, when the booking
+    // names one (every professional of the visit must work there), else the
+    // professional's own. The consolidated report reads it.
+    const bookedAt = (createAppointmentDto as { locationId?: string }).locationId || undefined;
+    if (bookedAt) {
+      await assertProfessionalsAt(db, tenantId, bookedAt, [
+        professional.id,
+        ...(visit.services ?? []).map((r) => r.professionalId),
+      ]);
+    }
+    const locationId = bookedAt ?? (await appointmentLocationId(db, tenantId, professional.id));
 
     // Convert scheduledDate to Date if it's a string
     const scheduledDate =
@@ -535,9 +954,45 @@ export class AppointmentsService {
         ? new Date(createAppointmentDto.scheduledDate)
         : createAppointmentDto.scheduledDate;
 
+    // A visit of several services costs all of them (visit-totals.ts); it
+    // was charged its first service only.
+    let priceCents = Math.round(Number(service.price) * 100);
+    // Each service of the visit as it is now: the rows keep it (snapshot).
+    let priced: Array<{ id: string; name: string; duration: number; price: unknown }> = [];
+    if (visit.services?.length) {
+      priced = await db.service.findMany({
+        where: { tenantId, id: { in: [...new Set(visit.services.map((r) => r.serviceId))] } },
+        select: { id: true, name: true, duration: true, price: true },
+      });
+      priceCents = visitTotals({
+        start: visit.services[0].scheduledStart,
+        professionalId: professional.id,
+        mainService: service,
+        rows: visit.services.map((r, i) => ({
+          id: String(i),
+          serviceId: r.serviceId,
+          professionalId: r.professionalId,
+          scheduledStart: r.scheduledStart,
+          scheduledEnd: r.scheduledEnd,
+          isParallel: r.isParallel,
+          service: priced.find((p) => p.id === r.serviceId) ?? null,
+        })),
+      }).totalCents;
+    }
+
     // Create appointment
     const dto = createAppointmentDto as any;
-    return this.prisma.appointment.create({
+    // A salon that confirms online bookings automatically (its general
+    // settings) gets them confirmed, unless the service still needs consent
+    // forms the client hasn't signed: confirming is where that is checked
+    // (needsConsent), so such a visit starts pending like any other. Nor a
+    // service the salon marked "requires approval": the team confirms those.
+    const autoConfirm =
+      visit.online &&
+      !!tenant?.autoConfirmOnlineBookings &&
+      !service.requiresApproval &&
+      (await this.consentAllowsConfirming(tenantId, clientId, dto.serviceId));
+    const appointment = await db.appointment.create({
       data: {
         tenantId: tenantId,
         clientId: clientId,
@@ -552,12 +1007,15 @@ export class AppointmentsService {
           dto.scheduledTime,
           tenantRow?.timezone || "Europe/Madrid",
         ),
-        duration: service.duration,
+        duration,
         endTime: endTime,
-        status: AppointmentStatus.pending,
-        price: service.price,
-        totalAmount: Math.round(Number(service.price) * 100), // Store in cents
+        status: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
+        price: priceCents / 100,
+        totalAmount: priceCents, // Store in cents
         currency: service.currency,
+        // The service as booked: a later edit of it in the catalog does not
+        // reach this appointment (appointment-snapshot.ts).
+        ...snapshotOf(service),
         paymentStatus: PaymentStatus.pending,
         notes: dto.notes || null,
         source: (dto.source as AppointmentSource) || AppointmentSource.online,
@@ -567,23 +1025,51 @@ export class AppointmentsService {
         ...(dto.commissionRate !== undefined && {
           commissionRate: dto.commissionRate,
         }),
+        // Never from the booking itself: an online booking sends the same
+        // fields, and the deposit is the salon's term.
+        ...(visit.deposit && {
+          depositRequired: true,
+          depositAmount: visit.deposit.amountCents,
+        }),
       },
       include: {
         client: true,
         professional: true,
         service: true,
         tenant: true,
+        // Where it is (multi-local): the public booking's answer names it.
+        salonLocation: { select: { id: true, name: true, street: true, city: true, state: true, postalCode: true } },
       },
     });
+
+    // In the order given: which service comes first is the visit's flow.
+    if (visit.services?.length) {
+      await db.appointmentService.createMany({
+        data: visit.services.map((row, order) => ({
+          appointmentId: appointment.id,
+          serviceId: row.serviceId,
+          professionalId: row.professionalId,
+          isParallel: row.isParallel,
+          order,
+          scheduledStart: row.scheduledStart,
+          scheduledEnd: row.scheduledEnd,
+          ...(priced.find((p) => p.id === row.serviceId)
+            ? snapshotOf(priced.find((p) => p.id === row.serviceId)!)
+            : {}),
+        })),
+      });
+    }
+    return appointment;
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
   private async afterAppointmentCreated(
     appointment: any,
     source?: string,
+    opts: { publicBooking?: boolean } = {},
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
     // Send notifications for appointment creation
-    const notified = await this.sendAppointmentCreatedNotifications(appointment);
+    const notified = await this.sendAppointmentCreatedNotifications(appointment, opts);
 
     // P1.4 — Cancel any pending rebooking reminders for this client/service
     // now that they have a fresh booking.
@@ -604,6 +1090,23 @@ export class AppointmentsService {
         });
     }
 
+    // She booked the service she was waiting for: her wait-list entry for
+    // it closes ("Ha reservado") and she is not offered slots any more.
+    if (this.waitListService && appointment.clientId && appointment.serviceId) {
+      this.waitListService
+        .onAppointmentBooked({
+          tenantId: appointment.tenantId,
+          clientId: appointment.clientId,
+          serviceId: appointment.serviceId,
+          professionalId: appointment.professionalId ?? null,
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `wait-list close failed for appointment ${appointment.id}: ${(err as Error).message}`,
+          );
+        });
+    }
+
     // Third funnel milestone, and the one that matters: the salon has a
     // real booking in the system. Time from tenant_signed_up to this is
     // the activation metric.
@@ -615,42 +1118,214 @@ export class AppointmentsService {
     return notified;
   }
 
-  async createByStaff(
-    createAppointmentDto: CreateAppointmentDto,
-    user: AuthenticatedUser,
-  ) {
-    // Staff users can ALWAYS only create appointments for themselves
+  /**
+   * An appointment booked from the panel by the salon's team.
+   *
+   * - The salon is the caller's, from the token.
+   * - A professional (role staff) books on their own agenda: their
+   *   professional is the one whose userId is theirs (the token carries no
+   *   professional id, and comparing with one that was never set refused
+   *   every booking). A colleague's agenda only when the salon allows
+   *   cross-booking (Configuración → Asignación profesional).
+   * - Owners and managers book for any professional of the salon, and may
+   *   set the commission.
+   * - A visit of several services is one request: the appointment and its
+   *   service rows are written in one transaction, so a failure leaves
+   *   nothing behind and a retry cannot book it twice.
+   * - Under the same per-salon, per-day advisory lock as online bookings,
+   *   every service must fit its professional's agenda (assertCanBook): an
+   *   overlap is always refused; the past and the hours only an owner or
+   *   manager may override, after confirming (allowOutsideHours).
+   */
+  async createByStaff(dto: StaffBookingDto, user: AuthenticatedUser) {
+    const tenantId = user.tenantId;
+    const manager = user.role === "owner" || user.role === "admin";
+    let professionalId = dto.professionalId || undefined;
+    const requested = (dto.services ?? []).map((s) => ({
+      serviceId: s.serviceId,
+      professionalId: s.professionalId || undefined,
+      isParallel: !!s.isParallel,
+    }));
+
     if (user.role === "staff") {
-      if (createAppointmentDto.professionalId !== user.professionalId) {
-        throw new ForbiddenException(
-          "Los profesionales solo pueden crear citas para sí mismos",
-        );
+      const own = await this.ownProfessionalId(user);
+      if (!own) {
+        throw new ForbiddenException("Tu usuario no está vinculado a ningún profesional del salón.");
+      }
+      professionalId = professionalId ?? own;
+      const forColleague = [professionalId, ...requested.map((r) => r.professionalId)].some(
+        (id) => id !== undefined && id !== own,
+      );
+      if (forColleague) {
+        const tenant = await this.prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { allowProfessionalCrossBooking: true },
+        });
+        if (!tenant?.allowProfessionalCrossBooking) {
+          throw new ForbiddenException("Los profesionales solo pueden crear citas para sí mismos");
+        }
       }
     }
+    if (!professionalId) throw new BadRequestException("Elige un profesional");
+    const rows = requested.map((r) => ({ ...r, professionalId: r.professionalId ?? professionalId! }));
 
-    // The staff member's own salon, from the token.
-    return this.create(createAppointmentDto, user.tenantId);
+    // Every id the visit points at is this salon's; durations for the timing.
+    await this.assertSalonRecords(tenantId, {
+      serviceIds: [dto.serviceId, ...rows.map((r) => r.serviceId)],
+      professionalIds: [professionalId, ...rows.map((r) => r.professionalId)],
+      clientIds: [dto.clientId],
+    });
+    const serviceIds = [...new Set([dto.serviceId, ...rows.map((r) => r.serviceId)])];
+    const [tenantRow, catalog] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      this.prisma.service.findMany({
+        where: { tenantId, id: { in: serviceIds } },
+        select: { id: true, duration: true, isActive: true, name: true, bufferTime: true },
+      }),
+    ]);
+    // A deactivated service is off the menu: the pickers no longer offer it,
+    // and a stale form or a direct call must not book it either. Its past
+    // appointments keep it.
+    const inactive = catalog.find((s: { isActive?: boolean }) => s.isActive === false);
+    if (inactive) {
+      throw new BadRequestException(
+        `El servicio "${inactive.name}" está desactivado. Actívalo en Servicios para poder reservarlo.`,
+      );
+    }
+    const timeZone = tenantRow?.timezone || "Europe/Madrid";
+    const minutes = (serviceId: string) => catalog.find((s) => s.id === serviceId)?.duration ?? 0;
+
+    const day = String(dto.scheduledDate).slice(0, 10);
+    const start = salonInstant(day, dto.scheduledTime, timeZone);
+    // Where each service falls, as the calendar draws a visit: serial ones
+    // one after another from the start, parallel ones with the start.
+    const visit: VisitService[] = rows.length
+      ? currentVisitSchedule({
+          appointmentStart: start,
+          appointmentProfessionalId: professionalId,
+          services: rows.map((r, i) => ({
+            id: String(i),
+            professionalId: r.professionalId,
+            scheduledStart: null,
+            scheduledEnd: null,
+            isParallel: r.isParallel,
+            durationMinutes: minutes(r.serviceId),
+          })),
+        })
+      : [{
+          id: "0",
+          professionalId,
+          start,
+          end: new Date(start.getTime() + minutes(dto.serviceId) * 60_000),
+          isParallel: false,
+        }];
+    const span = visitSpan(visit);
+    // The cleanup after the visit, on the service it ends with (visit-totals.ts).
+    const inCatalog = (id: string) => catalog.find((s) => s.id === id) ?? null;
+    const cleanup = rows.length
+      ? plannedCleanup(visit, rows.map((r) => ({ service: inCatalog(r.serviceId) })))
+      : { index: 0, minutes: cleanupMinutesOf(inCatalog(dto.serviceId)) };
+
+    const { services: _rows, allowOutsideHours, commissionRate, depositRequired, depositAmount, ...booking } =
+      dto;
+    const appointment = await this.prisma.$transaction(
+      async (tx: any) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${day}`}))`;
+        for (const [i, s] of visit.entries()) {
+          const at = salonDayAndTime(s.start, timeZone);
+          await assertCanBook(
+            tx,
+            {
+              tenantId,
+              professionalId: s.professionalId,
+              locationId: (booking as { locationId?: string | null }).locationId || null,
+              day: at.day,
+              time: at.time,
+              durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+              cleanupMinutes: i === cleanup.index ? cleanup.minutes : 0,
+            },
+            // A professional's bookings stay inside the hours.
+            { allowOutsideHours: manager && allowOutsideHours === true },
+          );
+        }
+        return this.insertAppointment(
+          {
+            ...booking,
+            professionalId: professionalId!,
+            source: AppointmentSource.staff,
+            // The commission is the salon's term: a professional booking with
+            // `commissionRate: 100` set their own pay. Unset, the
+            // professional's or the service's default applies.
+            commissionRate: manager ? commissionRate : undefined,
+          },
+          tenantId,
+          {
+            db: tx,
+            duration: rows.length
+              ? Math.round((span.end.getTime() - span.start.getTime()) / 60_000)
+              : undefined,
+            services: rows.length
+              ? rows.map((r, i) => ({
+                  ...r,
+                  scheduledStart: visit[i].start,
+                  scheduledEnd: visit[i].end,
+                }))
+              : undefined,
+            // The panel's deposit (cents) was accepted and never written.
+            deposit:
+              manager && depositRequired
+                ? { amountCents: Math.max(0, Math.round(Number(depositAmount ?? 0))) }
+                : undefined,
+          },
+        );
+      },
+      { timeout: 15_000 },
+    );
+
+    // Who booked it, in the appointment's history (cancellations and edits
+    // are recorded there already): a booking made by a professional for a
+    // client is on record.
+    await this.logAppointmentActivity(appointment.id, "appointment_created", user, {
+      source: AppointmentSource.staff,
+      professionalId,
+      clientId: dto.clientId,
+    });
+
+    // After the commit: notifications never run for a booking that rolled back.
+    await this.afterAppointmentCreated(appointment);
+    return appointment;
+  }
+
+  /** The caller's own professional record, or null when the account has none. */
+  private async ownProfessionalId(user: { id: string; tenantId: string }): Promise<string | null> {
+    const own = await this.prisma.professional.findFirst({
+      where: { userId: user.id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+    return own?.id ?? null;
   }
 
   async findAll(user: any, filters?: AppointmentFiltersDto) {
-    const where: any = {};
+    // This salon's only: the tenant filter adds it too, and a tenantId in
+    // the filters is not the caller's to choose.
+    const where: any = { tenantId: user.tenantId };
 
-    // Aplicar filtro automático para usuarios STAFF - solo ven sus propias citas
+    // A professional (staff) sees their own agenda: their appointments and
+    // the colleagues' visits where they do a service (staffAgendaWhere).
+    let own: string | null = null;
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
+      own = await this.ownProfessionalId(user);
 
-      if (professional) {
-        where.professionalId = professional.id;
-        // Ignorar cualquier professionalId enviado por el cliente para evitar bypass
-        filters.professionalId = professional.id;
-      }
+      // A staff account not linked to a professional sees no appointment.
+      // Without this it saw every appointment of the salon: the filter was
+      // only added when the record was found.
+      if (!own) return [];
+      Object.assign(where, staffAgendaWhere(own));
+      // Ignorar cualquier professionalId enviado por el cliente para evitar bypass
+      if (filters) filters.professionalId = own;
     }
 
     if (filters) {
-      if (filters.tenantId) where.tenantId = filters.tenantId;
       // Para STAFF, el professionalId ya fue forzado arriba, ignorar el del cliente
       if (filters.professionalId && user.role !== "staff")
         where.professionalId = filters.professionalId;
@@ -668,7 +1343,7 @@ export class AppointmentsService {
       // Handle clientEmail filter by finding the client first
       if (filters.clientEmail && !filters.clientId) {
         const client = await this.prisma.client.findFirst({
-          where: { email: filters.clientEmail },
+          where: { email: clientEmailFilter(filters.clientEmail), tenantId: user.tenantId },
         });
         if (client) {
           where.clientId = client.id;
@@ -683,6 +1358,7 @@ export class AppointmentsService {
         const searchTerm = filters.searchQuery.trim();
         const clients = await this.prisma.client.findMany({
           where: {
+            tenantId: user.tenantId,
             OR: [
               { firstName: { contains: searchTerm, mode: 'insensitive' } },
               { lastName: { contains: searchTerm, mode: 'insensitive' } },
@@ -702,8 +1378,23 @@ export class AppointmentsService {
       }
     }
 
-    const appointments = await (this.prisma.appointment.findMany as any)({
+    // Bounded. The list asked for every appointment the salon ever had, with
+    // its client, services and salon, on every load. Without a date range or
+    // a client, it covers a year back and a year ahead (the list page pages
+    // months within that); a client's history is whole. Never more than
+    // FIND_ALL_MAX rows: the latest-dated ones, returned oldest first.
+    if (!where.scheduledDate && !where.clientId) {
+      const today = new Date();
+      const yearMs = 366 * 24 * 60 * 60 * 1000;
+      where.scheduledDate = {
+        gte: new Date(today.getTime() - yearMs),
+        lte: new Date(today.getTime() + yearMs),
+      };
+    }
+
+    const newestFirst = await (this.prisma.appointment.findMany as any)({
       where,
+      take: AppointmentsService.FIND_ALL_MAX,
       include: {
         client: true,
         professional: true,
@@ -712,24 +1403,36 @@ export class AppointmentsService {
         services: {
           include: {
             service: true,
-            professional: true,
+            professional: VISIT_LINE_PROFESSIONAL,
           },
           orderBy: {
             order: "asc",
           },
         },
       },
-      orderBy: {
-        scheduledDate: "asc",
-      },
+      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
     });
+    const appointments = (newestFirst as any[]).reverse();
+    const basis = await this.chargeBasisOf(user.tenantId);
 
-    return appointments.map((apt: any) => this.enrichAppointment(apt));
+    return appointments.map((apt: any) => this.enrichAppointment(asSeenBy(apt, own), basis));
   }
 
-  async findOne(user: any, id: string) {
+  /** The most appointments GET /appointments returns. */
+  static readonly FIND_ALL_MAX = 5000;
+
+  /**
+   * One appointment, for the caller.
+   *
+   * A professional (staff) reads their own appointments and the colleagues'
+   * visits where they do a service (`access: "read"`, GET /appointments/:id
+   * and its activity), but acts only on their own: every other caller of
+   * this method (edit, status, move, delete) asks for `"write"`, the
+   * default, and a colleague's visit answers 404 as before.
+   */
+  async findOne(user: any, id: string, access: "read" | "write" = "write") {
     const appointment = await (this.prisma.appointment.findUnique as any)({
-      where: { id },
+      where: { id, tenantId: user.tenantId },
       include: {
         client: true,
         professional: true,
@@ -738,7 +1441,7 @@ export class AppointmentsService {
         services: {
           include: {
             service: true,
-            professional: true,
+            professional: VISIT_LINE_PROFESSIONAL,
           },
           orderBy: {
             order: "asc",
@@ -751,24 +1454,22 @@ export class AppointmentsService {
       throw new NotFoundException("Cita no encontrada");
     }
 
-    // A client sees only their own appointments.
-    if (user.role === "client" && appointment.clientId !== user.id) {
-      throw new NotFoundException("Cita no encontrada");
-    }
-
     // Validar que STAFF solo pueda ver sus propias citas
+    let own: string | null = null;
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
-
-      if (!professional || appointment.professionalId !== professional.id) {
+      own = await this.ownProfessionalId(user);
+      const theirs = !!own && appointment.professionalId === own;
+      const servesIn =
+        !!own && (appointment.services ?? []).some((s: any) => s.professionalId === own);
+      if (!theirs && !(access === "read" && servesIn)) {
         throw new NotFoundException("No tienes permiso para ver esta cita");
       }
     }
 
-    return this.enrichAppointment(appointment);
+    return this.enrichAppointment(
+      asSeenBy(appointment, own),
+      appointment.tenant?.fiscalSettings !== undefined ? salonTaxBasis(appointment.tenant.fiscalSettings) : null,
+    );
   }
 
   async update(
@@ -781,28 +1482,55 @@ export class AppointmentsService {
     // Track old date/time for reschedule notifications
     const oldDate = appointment.scheduledDate;
     const oldTime = appointment.scheduledTime;
-    const oldStatus = appointment.status;
+    const oldStatus = appointment.status as AppointmentStatus;
 
-    // Parse scheduledDate to Date if provided
-    const parsedDto = { ...updateAppointmentDto };
-    if (parsedDto.scheduledDate) {
-      const date = new Date(parsedDto.scheduledDate);
+    // Built field by field from what an edit may change. The body used to be
+    // spread in whole, so a request could set any column (price, payment,
+    // commission, tenantId) or write the salon and its users through nested
+    // relation updates.
+    const dto = updateAppointmentDto;
+    const updateData: any = { updatedAt: new Date() };
+    if (dto.scheduledDate) {
+      const date = new Date(dto.scheduledDate);
       if (isNaN(date.getTime())) {
         throw new BadRequestException("Invalid scheduledDate provided");
       }
-      parsedDto.scheduledDate = date as any;
+      updateData.scheduledDate = date;
     }
-
-    // Build update data including foreign keys
-    const updateData: any = {
-      ...parsedDto,
-      updatedAt: new Date(),
-    };
+    for (const key of [
+      "serviceId",
+      "professionalId",
+      "clientId",
+      "scheduledTime",
+      "notes",
+      "status",
+      "cancellationReason",
+    ] as const) {
+      if (dto[key] !== undefined) updateData[key] = dto[key];
+    }
+    // Commission and deposit are the salon's terms, not the professional's.
+    if (user.role === "owner" || user.role === "admin") {
+      for (const key of ["commissionRate", "depositRequired", "depositAmount"] as const) {
+        if (dto[key] !== undefined) updateData[key] = dto[key];
+      }
+    }
+    await this.assertSalonRecords(user.tenantId, {
+      serviceIds: [
+        dto.serviceId,
+        ...(dto.services ?? []).map((s) => s.serviceId),
+        ...(dto.addons ?? []).map((a) => a.addonId),
+      ],
+      professionalIds: [dto.professionalId, ...(dto.services ?? []).map((s) => s.professionalId)],
+      clientIds: [dto.clientId],
+    });
 
     // Restricciones para usuarios STAFF
     if (user.role === "staff") {
       // STAFF no puede cambiar el profesional asignado
       delete updateData.professionalId;
+      // Nor the client: moving one of their appointments to another client
+      // made that client "theirs" and opened her whole file to them.
+      delete updateData.clientId;
 
       // STAFF solo puede actualizar citas que le pertenecen
       const professional = await this.prisma.professional.findFirst({
@@ -824,87 +1552,335 @@ export class AppointmentsService {
       }
     });
 
-    // Update endTime if scheduledTime is provided
-    if (updateAppointmentDto.scheduledTime) {
-      updateData.endTime = this.calculateEndTime(
-        updateAppointmentDto.scheduledTime,
-        appointment.duration,
+    // A new status takes the same path as the cancel / complete / no-show
+    // endpoints: checked here, before anything is written (services
+    // included), and followed by the same notices and jobs after the write.
+    // The form resends the status it shows, which is not a change.
+    const statusTo =
+      dto.status !== undefined && dto.status !== oldStatus ? dto.status : undefined;
+    delete updateData.status;
+    if (statusTo) {
+      Object.assign(
+        updateData,
+        await this.prepareStatusChange(appointment, statusTo, {
+          reason: dto.cancellationReason,
+        }),
       );
     }
 
-    // Update scheduledTime if provided
-    if (updateAppointmentDto.scheduledTime) {
-      updateData.scheduledTime = updateAppointmentDto.scheduledTime;
+    // A move (new day, time or professional) must land on a free slot of the
+    // professional's hours. Only when something actually changes: a form that
+    // resends the same day and time to save a note is not a move.
+    const timeZone = ((appointment as any).tenant?.timezone as string | undefined) || "Europe/Madrid";
+    const dayOf = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10));
+    const oldClock = clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime;
+    const target = {
+      day: dayOf(updateData.scheduledDate ?? appointment.scheduledDate),
+      time: (updateData.scheduledTime as string | undefined) ?? oldClock,
+      professionalId: (updateData.professionalId as string | undefined) ?? appointment.professionalId,
+    };
+    const moved =
+      target.day !== dayOf(appointment.scheduledDate) ||
+      target.time !== oldClock ||
+      target.professionalId !== appointment.professionalId;
+    // Another professional: the appointment stays at its location when they
+    // work there too (multi-local), else it goes to theirs.
+    if (target.professionalId !== appointment.professionalId) {
+      const at = (appointment as any).locationId as string | null | undefined;
+      const stays = at
+        ? await professionalsAt(this.prisma as any, user.tenantId, at)
+            .then((here) => here.has(target.professionalId))
+            .catch(() => false)
+        : false;
+      if (!stays) {
+        updateData.locationId = await appointmentLocationId(this.prisma as any, user.tenantId, target.professionalId);
+      }
+    }
+    // A location picked in the panel (multi-local): every professional of
+    // the visit must work there. Empty: back to the professional's own.
+    if (dto.locationId !== undefined) {
+      if (dto.locationId) {
+        const rowProfessionals = dto.services
+          ? dto.services.map((s) => s.professionalId)
+          : (((appointment as any).services ?? []) as Array<{ professionalId?: string | null }>).map(
+              (r) => r.professionalId,
+            );
+        await assertProfessionalsAt(this.prisma as any, user.tenantId, dto.locationId, [
+          target.professionalId,
+          ...rowProfessionals,
+        ]);
+        updateData.locationId = dto.locationId;
+      } else {
+        updateData.locationId = await appointmentLocationId(this.prisma as any, user.tenantId, target.professionalId);
+      }
+    }
+    // A cancelled appointment holds no slot, so moving one checks none.
+    const holdsSlot = (statusTo ?? oldStatus) !== AppointmentStatus.cancelled;
+
+    // The visit after this edit: its service rows (diffed, never recreated:
+    // visit-edit.ts), its add-ons, and what they add up to (visit-totals.ts).
+    const rowsBefore = (((appointment as any).services ?? []) as any[]).map((r) => ({
+      ...r,
+      isParallel: !!r.isParallel,
+    }));
+    const rowEdit =
+      dto.services && dto.services.length > 0 ? planRowEdit(rowsBefore, dto.services) : null;
+    const rowsChanged = !!rowEdit && editChangesRows(rowEdit);
+    const done = rowEdit?.remove.find((r) => r.status === "completed");
+    if (done) {
+      throw new ConflictException(
+        `${done.service?.name ?? "Un servicio"} ya está completado: no se puede quitar de la cita.`,
+      );
+    }
+    // A plain list. It was written as {"set": [...]}, which the panel
+    // could not read back. Each line gets its snapshot below, with the catalog.
+    const addonsTo = dto.addons !== undefined ? normalizeAddons(dto.addons) : undefined;
+    const serviceChanged = !!dto.serviceId && dto.serviceId !== appointment.serviceId;
+    const priceChanges = rowsChanged || dto.addons !== undefined || serviceChanged;
+    // A visit with services is always added up again: one saved before this
+    // was fixed holds its first service's length and price only.
+    const needsTotals = priceChanges || rowsBefore.some(isLiveRow);
+
+    // Services the edit brings in (a new main service, new rows, add-ons):
+    // their duration and price, from the salon's catalog.
+    const catalogIds = [
+      ...(serviceChanged ? [dto.serviceId!] : []),
+      ...(rowEdit?.add ?? []).map((a) => a.serviceId),
+      ...(addonsTo ?? normalizeAddons((appointment as any).addons)).map((a) => a.addonId),
+    ];
+    const catalog: Array<{ id: string; name?: string; duration: number; price: unknown; bufferTime?: number }> =
+      needsTotals && catalogIds.length > 0
+        ? await this.prisma.service.findMany({
+            where: { tenantId: user.tenantId, id: { in: [...new Set(catalogIds)] } },
+            select: { id: true, name: true, duration: true, price: true, bufferTime: true },
+          })
+        : [];
+    const fromCatalog = (serviceId: string) => catalog.find((s) => s.id === serviceId) ?? null;
+    // What the visit was booked at stays (appointment-snapshot.ts): an add-on
+    // already on it keeps its price, a new one takes today's; a new main
+    // service is taken as it is now.
+    if (addonsTo !== undefined) {
+      updateData.addons = snapshotAddons(addonsTo, normalizeAddons((appointment as any).addons), catalog);
+    }
+    if (serviceChanged && fromCatalog(dto.serviceId!)) {
+      Object.assign(updateData, snapshotOf(fromCatalog(dto.serviceId!) as any));
+    }
+
+    const oldStart = salonInstant(appointment.scheduledDate, oldClock, timeZone);
+    const newStart = salonInstant(target.day, target.time, timeZone);
+    const shift = (d: Date | null | undefined) =>
+      d ? new Date(new Date(d).getTime() + (newStart.getTime() - oldStart.getTime())) : null;
+
+    // The rows as they will be: kept ones moved with the visit (or laid out
+    // again when their place or mode changed), new ones after them.
+    let rowsAfter: Array<VisitRow & { order: number }> = rowsBefore.map((r, order) => ({
+      ...r,
+      order: r.order ?? order,
+      scheduledStart: shift(r.scheduledStart),
+      scheduledEnd: shift(r.scheduledEnd),
+    }));
+    if (rowEdit) {
+      rowsAfter = [
+        ...rowEdit.keep.map((k) => ({
+          ...k.row,
+          order: k.order,
+          professionalId: k.professionalId,
+          isParallel: k.isParallel,
+          scheduledStart: k.retime ? null : shift(k.row.scheduledStart),
+          scheduledEnd: k.retime ? null : shift(k.row.scheduledEnd),
+        })),
+        ...rowEdit.add.map((a) => ({
+          id: `new:${a.order}`,
+          serviceId: a.serviceId,
+          professionalId: a.professionalId,
+          isParallel: a.isParallel,
+          order: a.order,
+          scheduledStart: null,
+          scheduledEnd: null,
+          type: "active",
+          status: "pending",
+          service: fromCatalog(a.serviceId),
+        })),
+      ].sort((a, b) => a.order - b.order);
+    }
+    const liveAfter = rowsAfter.filter(isLiveRow);
+    const rowsMove = liveAfter.length > 0 && (moved || rowsChanged);
+
+    // A professional changes a visit only when every service in it is
+    // theirs (as for a drag: staffVisitCheck).
+    if (user.role === "staff" && (rowsMove || rowsChanged)) {
+      const mine = appointment.professionalId;
+      const others = [...rowsBefore, ...rowsAfter].some((r) => (r.professionalId ?? mine) !== mine);
+      if (others) {
+        throw new ForbiddenException(
+          "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la cambie.",
+        );
+      }
+    }
+
+    const addons = needsTotals
+      ? normalizeAddons(updateData.addons ?? (appointment as any).addons).map((a) => ({
+          quantity: a.quantity,
+          service: bookedAddon(a, fromCatalog(a.addonId)),
+        }))
+      : [];
+    const totals =
+      needsTotals || liveAfter.length > 0
+        ? visitTotals({
+            start: newStart,
+            professionalId: target.professionalId,
+            mainService: serviceChanged ? fromCatalog(dto.serviceId!) : bookedService(appointment as any),
+            rows: rowsAfter,
+            addons,
+          })
+        : null;
+    // Without a change to what a single-service appointment holds, its length
+    // stays what it is (an imported appointment may have its own).
+    const duration = totals ? totals.durationMinutes : appointment.duration;
+
+    // The slot checks run with the write, under the same per-salon, per-day
+    // lock as online and panel bookings (lockBookingDays): checked first and
+    // written after, a drag to 10:00 and an online booking for 10:00 could
+    // both pass and overlap.
+    const slotChecks: Array<(db: any) => Promise<void>> = [];
+    const lockDays = new Set<string>();
+    if (holdsSlot) {
+      if (liveAfter.length > 0) {
+        if (rowsMove) {
+          const before = visitSchedule(oldStart, appointment.professionalId, rowsBefore);
+          const after = totals!.schedule;
+          const clash = clientDoubleBooked(after);
+          if (clash && !clientDoubleBooked(before)) {
+            const name = (rowId: string) =>
+              (rowsAfter.find((r) => r.id === rowId)?.service as { name?: string } | null)?.name ?? "otro servicio";
+            throw new ConflictException(`La clienta estaría a la vez en ${name(clash[0].id)} y ${name(clash[1].id)}.`);
+          }
+          // The cleanup after the visit, on the service it now ends with.
+          const cleanup = plannedCleanup(after, liveAfter);
+          for (const [i, s] of after.entries()) {
+            const row = liveAfter.find((r) => r.id === s.id);
+            if (row && freesProfessional(row)) continue;
+            const b = before.find((x) => x.id === s.id);
+            if (b && b.start.getTime() === s.start.getTime() && b.end.getTime() === s.end.getTime() && b.professionalId === s.professionalId) {
+              continue;
+            }
+            const at = salonDayAndTime(s.start, timeZone);
+            const check = {
+              tenantId: user.tenantId,
+              appointmentId: appointment.id,
+              professionalId: s.professionalId,
+              day: at.day,
+              time: at.time,
+              durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+              cleanupMinutes: i === cleanup.index ? cleanup.minutes : 0,
+            };
+            lockDays.add(at.day);
+            slotChecks.push((db) => assertCanReschedule(db, check));
+          }
+        }
+      } else {
+        const cleanupBefore = cleanupMinutesOf((appointment as any).service);
+        const cleanupAfter = serviceChanged ? cleanupMinutesOf(fromCatalog(dto.serviceId!)) : cleanupBefore;
+        if (moved || duration > appointment.duration || cleanupAfter > cleanupBefore) {
+          const check = {
+            tenantId: user.tenantId,
+            appointmentId: appointment.id,
+            professionalId: target.professionalId,
+            day: target.day,
+            time: target.time,
+            durationMinutes: duration,
+            cleanupMinutes: cleanupAfter,
+          };
+          lockDays.add(target.day);
+          slotChecks.push((db) => assertCanReschedule(db, check));
+        }
+      }
+    }
+
+    // The appointment's own time: the visit's first service, its length,
+    // its end, its price (unless it is history: visit-sync.ts).
+    if (totals && liveAfter.length > 0 && totals.start.getTime() !== newStart.getTime()) {
+      const at = salonDayAndTime(totals.start, timeZone);
+      updateData.scheduledDate = new Date(`${at.day}T00:00:00.000Z`);
+      updateData.scheduledTime = at.time;
+    }
+    if (duration !== appointment.duration) updateData.duration = duration;
+    if (updateData.scheduledTime || updateData.duration !== undefined) {
+      updateData.endTime = endClock((updateData.scheduledTime as string | undefined) ?? target.time, duration);
+    }
+    if (totals && !priceIsFrozen(appointment)) {
+      updateData.price = totals.price;
+      updateData.totalAmount = totals.totalCents;
     }
 
     // A reschedule moves the instant the reminder jobs select on, and the
     // reminders already sent were for the old time.
-    if (updateAppointmentDto.scheduledDate || updateAppointmentDto.scheduledTime) {
-      const tenant = (appointment as any).tenant as { timezone?: string } | undefined;
-      const newStart = salonInstant(
+    if (updateData.scheduledDate || updateData.scheduledTime) {
+      const start = salonInstant(
         updateData.scheduledDate ?? appointment.scheduledDate,
-        updateData.scheduledTime ?? appointment.scheduledTime,
-        tenant?.timezone || "Europe/Madrid",
+        (updateData.scheduledTime as string | undefined) ?? oldClock,
+        timeZone,
       );
-      const oldStart = (appointment as any).startTime as Date | null | undefined;
+      const before = (appointment as any).startTime as Date | null | undefined;
       // The drawer sends date and time on every full edit, so only a real move
       // re-arms the reminders: resetting on any edit re-sent ones already sent.
-      if (!oldStart || new Date(oldStart).getTime() !== newStart.getTime()) {
-        updateData.startTime = newStart;
+      if (!before || new Date(before).getTime() !== start.getTime()) {
+        updateData.startTime = start;
         updateData.reminder24hSent = false;
         updateData.reminder1hSent = false;
+        updateData.reminder24hAttempts = 0;
+        updateData.reminder1hAttempts = 0;
       }
     }
 
-    // The review request is timed from completionTime; completing through a
-    // plain edit never set it, so those visits were never asked about.
-    if (
-      updateAppointmentDto.status === AppointmentStatus.completed &&
-      appointment.status !== AppointmentStatus.completed
-    ) {
-      updateData.completionTime = new Date();
+    // The rows to write, in the same transaction as the appointment.
+    const rowWrites: Array<(db: any) => Promise<unknown>> = [];
+    if (rowEdit && rowsChanged) {
+      const removeIds = rowEdit.remove.map((r) => r.id);
+      if (removeIds.length > 0) {
+        rowWrites.push((db) => db.appointmentService.deleteMany({
+          where: { id: { in: removeIds }, appointmentId: id, appointment: { tenantId: user.tenantId } },
+        }));
+      }
+      for (const a of rowEdit.add) {
+        rowWrites.push((db) =>
+          db.appointmentService.create({
+            data: {
+              appointmentId: id,
+              serviceId: a.serviceId,
+              professionalId: a.professionalId,
+              isParallel: a.isParallel,
+              order: a.order,
+              ...(fromCatalog(a.serviceId) ? snapshotOf(fromCatalog(a.serviceId) as any) : {}),
+            },
+          }),
+        );
+      }
+    }
+    for (const r of rowsAfter) {
+      if (r.id.startsWith("new:")) continue;
+      const was = rowsBefore.find((x) => x.id === r.id)!;
+      const data: Record<string, unknown> = {};
+      const sameTime = (x: Date | null | undefined, y: Date | null | undefined) =>
+        (x ? new Date(x).getTime() : null) === (y ? new Date(y).getTime() : null);
+      if (!sameTime(was.scheduledStart, r.scheduledStart)) data.scheduledStart = r.scheduledStart;
+      if (!sameTime(was.scheduledEnd, r.scheduledEnd)) data.scheduledEnd = r.scheduledEnd;
+      if ((was.professionalId ?? null) !== (r.professionalId ?? null)) data.professionalId = r.professionalId;
+      if (!!was.isParallel !== !!r.isParallel) data.isParallel = r.isParallel;
+      if (rowEdit && (was.order ?? null) !== r.order) data.order = r.order;
+      if (Object.keys(data).length > 0) {
+        rowWrites.push((db) => db.appointmentService.update({
+          where: { id: r.id, appointmentId: id, appointment: { tenantId: user.tenantId } },
+          data,
+        }));
+      }
     }
 
-    // Handle addons update if provided
-    if (updateAppointmentDto.addons && updateAppointmentDto.addons.length > 0) {
-      updateData.addons = {
-        set: updateAppointmentDto.addons.map((addon) => ({
-          addonId: addon.addonId,
-          quantity: addon.quantity,
-        })),
-      };
-    }
-
-    // Handle services update for multi-service appointments
-    if (
-      updateAppointmentDto.services &&
-      updateAppointmentDto.services.length > 0
-    ) {
-      // First, disconnect all existing services
-      await this.prisma.appointmentService.deleteMany({
-        where: { appointmentId: id },
-      });
-
-      // Then create new service records
-      const serviceRecords = updateAppointmentDto.services.map((svc) => ({
-        appointmentId: id,
-        serviceId: svc.serviceId,
-        professionalId: svc.professionalId || null,
-        isParallel: svc.isParallel || false,
-      }));
-
-      await this.prisma.appointmentService.createMany({
-        data: serviceRecords,
-      });
-
-      // Remove services from updateData as it's handled separately
-      delete updateData.services;
-    }
 
     try {
       // Get current appointment for activity logging
       const currentAppointment = await this.prisma.appointment.findUnique({
-        where: { id },
+        where: { id, tenantId: user.tenantId },
         include: {
           client: true,
           professional: true,
@@ -913,35 +1889,67 @@ export class AppointmentsService {
         },
       });
 
-      const updatedAppointment = await this.prisma.appointment.update({
-        where: { id },
-        data: updateData,
-        include: {
-          client: true,
-          professional: true,
-          service: true,
-          tenant: true,
-          services: {
-            include: {
-              service: true,
-              professional: true,
+      let updatedAppointment: any;
+      const write = async (db: any) => {
+        for (const w of rowWrites) await w(db);
+        return db.appointment.update({
+          // A status change is written only over the status it was checked
+          // against (see changeStatus).
+          where: (statusTo
+            ? { id, tenantId: user.tenantId, status: oldStatus }
+            : { id, tenantId: user.tenantId }) as any,
+          data: updateData,
+          include: {
+            client: true,
+            professional: true,
+            service: true,
+            tenant: true,
+            services: {
+              include: {
+                service: true,
+                professional: VISIT_LINE_PROFESSIONAL,
+              },
+              orderBy: { order: "asc" },
             },
           },
-        },
-      });
+        });
+      };
+      try {
+        // Rows and appointment together, or neither. A move: checked and
+        // written under the booking lock of the days it leaves and lands on.
+        if (slotChecks.length > 0) {
+          lockDays.add(dayOf(appointment.scheduledDate));
+          updatedAppointment = await this.prisma.$transaction(
+            async (tx: any) => {
+              await this.lockBookingDays(tx, user.tenantId, [...lockDays]);
+              for (const check of slotChecks) await check(tx);
+              return write(tx);
+            },
+            { timeout: 15_000 },
+          );
+        } else {
+          updatedAppointment =
+            rowWrites.length > 0 ? await this.prisma.$transaction(write) : await write(this.prisma);
+        }
+      } catch (err) {
+        if (statusTo && isStaleWrite(err)) throw concurrentChange();
+        throw err;
+      }
 
       // Log activity for this update
       await this.logAppointmentActivity(id, "appointment_updated", user, {
         changes: updateData,
       });
 
-      // Check if appointment was rescheduled (date or time changed)
+      // Check if appointment was rescheduled (date or time changed). A
+      // cancellation is told as a cancellation, not as a move.
       const isRescheduled =
-        (updateAppointmentDto.scheduledDate &&
+        statusTo !== AppointmentStatus.cancelled &&
+        ((updateAppointmentDto.scheduledDate &&
           new Date(updateAppointmentDto.scheduledDate).getTime() !==
             new Date(oldDate).getTime()) ||
-        (updateAppointmentDto.scheduledTime &&
-          updateAppointmentDto.scheduledTime !== oldTime);
+          (updateAppointmentDto.scheduledTime &&
+            updateAppointmentDto.scheduledTime !== oldTime));
 
       if (isRescheduled) {
         await this.sendAppointmentRescheduledNotifications(
@@ -951,48 +1959,20 @@ export class AppointmentsService {
         );
       }
 
-      // Check if status changed to confirmed
-      if (
-        updateAppointmentDto.status === AppointmentStatus.confirmed &&
-        oldStatus !== AppointmentStatus.confirmed
-      ) {
-        // P0 — Consent gate: if the tenant has active consent forms bound to
-        // this service, ensure the client has signed them before confirming.
-        if (this.consentService) {
-          const ok = await this.consentService.hasValidConsent(
-            appointment.tenantId,
-            appointment.clientId,
-            appointment.serviceId,
-          );
-          if (!ok) {
-            const required =
-              await this.consentService.getRequiredForms(
-                appointment.tenantId,
-                appointment.serviceId,
-              );
-            throw new ConflictException({
-              code: "CONSENT_REQUIRED",
-              message:
-                "Client must sign required consent forms before confirming",
-              appointmentId: id,
-              requiredConsents: required.map((f) => ({
-                id: f.id,
-                name: f.name,
-                version: f.version,
-              })),
-            });
-          }
-        }
-        await this.sendAppointmentConfirmedNotifications(updatedAppointment);
-      }
-
-      if (updateAppointmentDto.status && updateAppointmentDto.status !== oldStatus) {
-        await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+      if (statusTo) {
+        await this.afterStatusChange(user, updatedAppointment, oldStatus, statusTo, {
+          reason: dto.cancellationReason,
+        });
+      } else {
+        // Its total or its rate may have changed: an unpaid commission follows.
+        await this.commissionAfterChange(user.tenantId, id);
       }
 
       return this.enrichAppointment(updatedAppointment);
     } catch (error) {
       console.error("Error updating appointment:", error);
+      // A refusal (consent missing, forbidden) keeps its status and message.
+      if (error instanceof HttpException) throw error;
       throw new Error("Failed to update appointment");
     }
   }
@@ -1022,225 +2002,573 @@ export class AppointmentsService {
     }
   }
 
+
+  async cancel(user: any, id: string, reason?: string) {
+    return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason });
+  }
+
   /**
-   * The calling client's own appointments, for the salon site's account
-   * page. It used to call GET /appointments, which is staff-only, so a
-   * signed-in client never saw a single appointment.
+   * Cancels an appointment that time off or a closure caught, and tells the
+   * client (the usual cancellation notices, each channel only as she allows)
+   * with a link to book again. Its slot is not offered to the wait list: the
+   * time off blocks it. Only when the salon asks for it: nothing is
+   * cancelled on its own.
    */
-  async findForClient(user: { id: string; tenantId: string }) {
-    return this.prisma.appointment.findMany({
-      where: { clientId: user.id, tenantId: user.tenantId },
-      include: {
-        service: true,
-        professional: {
-          select: { id: true, firstName: true, lastName: true, profileImage: true },
-        },
-      },
-      orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
+  async cancelForTimeOff(user: any, id: string, reason?: string) {
+    return this.changeStatus(user, id, AppointmentStatus.cancelled, {
+      reason: reason?.trim() || TIME_OFF_CANCEL_REASON,
+      blockedSlot: true,
     });
   }
 
-  async cancel(user: any, id: string, reason?: string) {
-    const appointment = await this.findOne(user, id);
+  // ------------------------------------------- "Cancelar mi cita" link
 
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException("La cita ya está cancelada");
+  /**
+   * What the client's "Cancelar mi cita" page shows (public-cancel-link.ts).
+   * Never changes anything: mail scanners and link previews open links.
+   * Null for a token that is not ours. No client data: the salon, the
+   * service, the day and time, and whether she may still cancel online.
+   */
+  async describeCancelLink(token: string, now: Date = new Date()): Promise<CancelLinkInfo | null> {
+    const found = await this.appointmentForCancelLink(token);
+    return found ? this.cancelLinkInfo(found, now) : null;
+  }
+
+  /**
+   * The client cancels her appointment from the link: only while it is live,
+   * still ahead, and outside the salon's minCancelHours. The usual
+   * cancellation path follows (the salon's notices, the freed slot for the
+   * wait list, the audit trail). Inside the window nothing changes: the page
+   * tells her to call the salon.
+   */
+  async cancelFromLink(token: string, now: Date = new Date()): Promise<CancelLinkInfo | null> {
+    const found = await this.appointmentForCancelLink(token);
+    if (!found) return null;
+    const info = this.cancelLinkInfo(found, now);
+    if (!info.canCancel) return info;
+    const actor = { role: "system", tenantId: found.tenantId, via: "client_cancel_link" };
+    try {
+      await this.changeStatus(actor, found.id, AppointmentStatus.cancelled, {
+        reason: CLIENT_LINK_CANCEL_REASON,
+      });
+      // She cancelled herself: the salon's owner and admins hear of it.
+      void this.salonAlerts?.notify("cancelled", found.id);
+    } catch (err) {
+      // Changed meanwhile (the salon cancelled or confirmed it, a second
+      // click): say how it stands now.
+      this.logger.warn(`Cancel from link for appointment ${found.id} not applied: ${(err as Error).message}`);
     }
+    const after = await this.appointmentForCancelLink(token);
+    return after ? this.cancelLinkInfo(after, now) : info;
+  }
 
-    // A client cancelling their own appointment is held to the salon's
-    // minimum notice -- the same rule the virtual receptionist quotes. Staff
-    // are not: the salon may always cancel.
-    if (user.role === "client") {
-      const tenant = (appointment as any).tenant as
-        | { minCancelHours?: number; timezone?: string }
-        | undefined;
-      const minHours = tenant?.minCancelHours ?? 24;
-      const startsAt = salonInstant(
-        appointment.scheduledDate as any,
-        appointment.scheduledTime,
-        tenant?.timezone || "Europe/Madrid",
-      );
-      const hoursAway = (startsAt.getTime() - Date.now()) / 3_600_000;
-      if (hoursAway < minHours) {
-        throw new BadRequestException(
-          `Esta cita solo se puede cancelar con ${minHours} horas de antelación. Contacta con el salón.`,
+  private async appointmentForCancelLink(token: string): Promise<any | null> {
+    const secret = process.env.JWT_SECRET;
+    const id = secret ? parseAppointmentCancelToken(token, secret) : null;
+    if (!id) return null;
+    const appointment: any = await (this.prisma.appointment.findUnique as any)({
+      where: { id },
+      include: {
+        service: { select: { name: true } },
+        professional: { select: { firstName: true } },
+        tenant: { select: { name: true, phone: true, timezone: true, minCancelHours: true, deletedAt: true } },
+      },
+    });
+    if (!appointment || appointment.tenant?.deletedAt || !bookedOnline(appointment)) return null;
+    return appointment;
+  }
+
+  private cancelLinkInfo(appointment: any, now: Date): CancelLinkInfo {
+    const tz = appointment.tenant?.timezone || "Europe/Madrid";
+    const day = new Date(appointment.scheduledDate).toISOString().slice(0, 10);
+    const time = clockOf(appointment.scheduledTime ?? "", tz) ?? appointment.scheduledTime;
+    const startsAt = salonInstant(day, time || "00:00", tz);
+    const minCancelHours = Math.max(0, Number(appointment.tenant?.minCancelHours) || 0);
+    const live = LIVE_APPOINTMENT_STATUSES.includes(appointment.status);
+    const state: CancelLinkInfo["state"] =
+      appointment.status === AppointmentStatus.cancelled
+        ? "cancelled"
+        : !live || startsAt.getTime() <= now.getTime()
+          ? "closed"
+          : startsAt.getTime() - now.getTime() < minCancelHours * 3_600_000
+            ? "too_late"
+            : "cancellable";
+    return {
+      state,
+      canCancel: state === "cancellable",
+      status: appointment.status,
+      salonName: appointment.tenant?.name || "el salón",
+      salonPhone: (appointment.tenant?.phone ?? "").trim() || null,
+      serviceName: appointment.serviceName || appointment.service?.name || null,
+      professionalName: appointment.professional?.firstName || null,
+      date: day,
+      time,
+      minCancelHours,
+    };
+  }
+
+  // ------------------------------------- pending bookings left unattended
+
+  /**
+   * Online bookings (salon page, widget) still pending `hours` after they
+   * were made, and still ahead: cancelled, and the client is told the salon
+   * could not confirm them (pending-booking-expiry.scheduler.ts). Each one
+   * through the usual cancellation path, so the salon sees it, the slot goes
+   * to the wait list and the audit trail says why. Returns how many.
+   */
+  async expireUnconfirmedOnlineBookings(
+    now: Date = new Date(),
+    hours: number = PENDING_BOOKING_MAX_HOURS,
+    batch = 100,
+  ): Promise<number> {
+    const rows: Array<{
+      id: string;
+      tenantId: string;
+      scheduledDate: Date;
+      scheduledTime: string;
+      tenant: { name: string; timezone: string | null } | null;
+    }> = await (
+      this.prisma.appointment.findMany as any
+    )({
+      where: {
+        status: AppointmentStatus.pending,
+        source: { in: ["online", "widget"] },
+        createdAt: { lte: new Date(now.getTime() - hours * 3_600_000) },
+        // Ahead only; a booking already past is the salon's to sort out.
+        scheduledDate: { gte: new Date(now.toISOString().slice(0, 10)) },
+        // Not a deleted or blocked salon: it sends nothing (audit 8 D5).
+        tenant: { deletedAt: null, blockedAt: null },
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        scheduledDate: true,
+        scheduledTime: true,
+        tenant: { select: { name: true, timezone: true } },
+      },
+      orderBy: { createdAt: "asc" },
+      take: batch,
+    });
+    let expired = 0;
+    for (const row of rows) {
+      const tz = row.tenant?.timezone || "Europe/Madrid";
+      const day = new Date(row.scheduledDate).toISOString().slice(0, 10);
+      const time = clockOf(row.scheduledTime ?? "", tz) ?? row.scheduledTime;
+      if (salonInstant(day, time || "00:00", tz).getTime() <= now.getTime()) continue;
+      try {
+        await this.changeStatus(
+          { role: "system", tenantId: row.tenantId, via: "pending_booking_expiry" },
+          row.id,
+          AppointmentStatus.cancelled,
+          {
+            reason: `${row.tenant?.name || "El salón"} no ha podido confirmar tu cita a tiempo.`,
+            notConfirmed: true,
+          },
         );
+        expired += 1;
+      } catch (err) {
+        // Confirmed or cancelled meanwhile: nothing to do.
+        this.logger.warn(`Pending booking ${row.id} not expired: ${(err as Error).message}`);
       }
     }
+    return expired;
+  }
 
-    const cancelledAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.cancelled,
-        cancellationReason: reason || null,
-        updatedAt: new Date(),
-      },
+  /**
+   * Who else could take the appointment as it stands -- the same day, time
+   * and length: active professionals who do its services, work at its
+   * location (multi-local) and pass the same check a move does (their
+   * hours, their time off, the salon's closures, their agenda). For the
+   * "pass it to a free colleague" action on a time off clash; the move
+   * itself is PATCH /appointments/:id with the professionalId, checked again.
+   *
+   * A visit with services on their own professionals is moved from the
+   * agenda instead (reassignable false): one name cannot move them all.
+   */
+  async freeProfessionalsFor(
+    user: any,
+    id: string,
+  ): Promise<{ reassignable: boolean; reason?: string; professionals: Array<{ id: string; name: string }> }> {
+    const appointment: any = await (this.prisma.appointment.findFirst as any)({
+      where: { id, tenantId: user.tenantId },
       include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
+        tenant: { select: { timezone: true } },
+        service: { select: { bufferTime: true } },
+        services: { select: { professionalId: true, serviceId: true, status: true } },
       },
     });
-
-    // Log cancellation activity
-    await this.logAppointmentActivity(id, "appointment_cancelled", user, {
-      reason: reason,
-    });
-
-    // Send cancellation notifications
-    await this.sendAppointmentCancelledNotifications(
-      cancelledAppointment,
-      reason,
-    );
-
-    // The freed slot goes to the wait-list. This used to mark every
-    // matching client "notified" without sending anything; now they are
-    // really told (when the salon switched automatic notices on), or the
-    // team is told who is waiting. Fire-and-forget: a slow email or SMS
-    // provider must not hold up the cancellation.
-    if (
-      this.waitListService &&
-      cancelledAppointment.serviceId &&
-      cancelledAppointment.professionalId
-    ) {
-      this.waitListService
-        .onAppointmentCancelled({
-          tenantId: cancelledAppointment.tenantId,
-          serviceId: cancelledAppointment.serviceId,
-          professionalId: cancelledAppointment.professionalId,
-          date: cancelledAppointment.scheduledDate,
-          time: cancelledAppointment.scheduledTime,
-        })
-        .catch((err) =>
-          this.logger.warn(
-            `wait-list notification failed for cancelled appointment ${cancelledAppointment.id}: ${err.message}`,
-          ),
-        );
+    if (!appointment) throw new NotFoundException("Cita no encontrada");
+    if (!LIVE_APPOINTMENT_STATUSES.includes(appointment.status)) {
+      return { reassignable: false, reason: "La cita ya no está pendiente.", professionals: [] };
     }
-
-    await this.loyaltyAfterStatus(cancelledAppointment.tenantId, id);
-
-    return this.enrichAppointment(cancelledAppointment);
+    const rows = ((appointment.services ?? []) as any[]).filter((r) => r.status !== "cancelled");
+    if (rows.some((r) => r.professionalId)) {
+      return {
+        reassignable: false,
+        reason: "Sus servicios tienen cada uno su profesional: cámbiala desde la agenda.",
+        professionals: [],
+      };
+    }
+    const serviceIds = [...new Set(rows.length ? rows.map((r) => r.serviceId) : [appointment.serviceId])].filter(
+      Boolean,
+    ) as string[];
+    const team: any[] = await (this.prisma.professional.findMany as any)({
+      where: { tenantId: user.tenantId, isActive: true },
+      select: { id: true, firstName: true, lastName: true, services: { select: { serviceId: true } } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+    });
+    // As findFreeProfessional: a service nobody is linked to is everyone's.
+    const doesAll = (p: any) =>
+      serviceIds.every(
+        (sid) =>
+          !team.some((x) => (x.services ?? []).some((s: any) => s.serviceId === sid)) ||
+          (p.services ?? []).some((s: any) => s.serviceId === sid),
+      );
+    const here: Set<string> | null = appointment.locationId
+      ? await professionalsAt(this.prisma as any, user.tenantId, appointment.locationId).catch(() => null)
+      : null;
+    const timeZone = appointment.tenant?.timezone || "Europe/Madrid";
+    const day = new Date(appointment.scheduledDate).toISOString().slice(0, 10);
+    const time = clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime;
+    const free: Array<{ id: string; name: string }> = [];
+    for (const p of team) {
+      if (p.id === appointment.professionalId || !doesAll(p)) continue;
+      if (here && here.size > 0 && !here.has(p.id)) continue;
+      try {
+        await assertCanReschedule(this.prisma as any, {
+          tenantId: user.tenantId,
+          appointmentId: appointment.id,
+          professionalId: p.id,
+          locationId: appointment.locationId ?? null,
+          day,
+          time,
+          durationMinutes: appointment.duration,
+          cleanupMinutes: cleanupMinutesOf(appointment.service),
+        });
+        free.push({ id: p.id, name: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() });
+      } catch (err) {
+        if (!(err instanceof ConflictException)) throw err;
+      }
+    }
+    return { reassignable: true, professionals: free };
   }
 
   async complete(user: any, id: string, notes?: string) {
-    const appointment = await this.findOne(user, id);
-
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException("No se puede completar una cita cancelada");
-    }
-
-    const completedAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.completed,
-        notes: notes || appointment.notes,
-        // The review request is timed from this; it was never set here.
-        completionTime:
-          appointment.status === AppointmentStatus.completed
-            ? (appointment as any).completionTime ?? new Date()
-            : new Date(),
-        updatedAt: new Date(),
-      },
-      include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
-      },
-    });
-
-    // Log completion activity
-    await this.logAppointmentActivity(id, "appointment_completed", user, {
-      notes: notes,
-    });
-
-    // Send notifications for appointment completion
-    await this.sendAppointmentCompletedNotifications(completedAppointment);
-
-    // P1.4 — Recompute cadence for this client after the visit completes.
-    if (this.clientCadenceService) {
-      this.clientCadenceService
-        .computeForClient(completedAppointment.clientId)
-        .catch((err) => {
-          this.logger.warn(
-            `computeForClient failed for client ${completedAppointment.clientId}: ${(err as Error).message}`,
-          );
-        });
-    }
-
-    // P2A — Auto-invoice the appointment if the tenant has opted in.
-    if (this.invoiceService) {
-      this.invoiceService
-        .fromAppointment(completedAppointment.id)
-        .catch((err) => {
-          this.logger.warn(
-            `auto-invoice from appointment failed for ${completedAppointment.id}: ${(err as Error).message}`,
-          );
-        });
-    }
-
-    // Points, if it is also paid (otherwise when the payment comes in).
-    await this.loyaltyAfterStatus(completedAppointment.tenantId, id);
-
-    return this.enrichAppointment(completedAppointment);
+    return this.changeStatus(user, id, AppointmentStatus.completed, { notes });
   }
 
   async markNoShow(user: any, id: string) {
-    const appointment = await this.findOne(user, id);
-
-    if (appointment.status === AppointmentStatus.cancelled) {
-      throw new BadRequestException(
-        "No se puede marcar como no presentado una cita cancelada",
-      );
-    }
-
-    const noShowAppointment = await this.prisma.appointment.update({
-      where: { id },
-      data: {
-        status: AppointmentStatus.no_show,
-        updatedAt: new Date(),
-      },
-      include: {
-        client: true,
-        professional: true,
-        service: true,
-        tenant: true,
-      },
-    });
-
-    // Log no-show activity
-    await this.logAppointmentActivity(id, "appointment_no_show", user, {});
-
-    // Send no-show notifications
-    await this.sendAppointmentNoShowNotifications(noShowAppointment);
-
-    return this.enrichAppointment(noShowAppointment);
+    return this.changeStatus(user, id, AppointmentStatus.no_show);
   }
 
+  /**
+   * The one path a status change takes, whichever route asked for it: the
+   * cancel / complete / no-show endpoints, PATCH with a `status`, the
+   * copilot, a multi-service visit whose services are all done. Checked
+   * first (prepareStatusChange), written only if the status is still the one
+   * we read, then followed by what the new status sets off
+   * (afterStatusChange): the notices, the wait-list, the invoice, the
+   * rebooking cadence, the points.
+   *
+   * `user` is whoever asks: a member of the team or, for the visit that
+   * completes on its own, the system.
+   */
+  async changeStatus(
+    user: any,
+    id: string,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions = {},
+  ) {
+    const appointment = await this.findOne(user, id);
+    const from = appointment.status as AppointmentStatus;
+    const data = await this.prepareStatusChange(appointment, to, opts);
+
+    let updated: any;
+    try {
+      updated = await this.prisma.appointment.update({
+        // Only if nobody changed it since we read it: two "complete" clicks
+        // at once used to both go through and issue two invoices.
+        where: { id, tenantId: user.tenantId, status: from } as any,
+        data: { ...data, updatedAt: new Date() },
+        include: {
+          client: true,
+          professional: true,
+          service: true,
+          tenant: true,
+        },
+      });
+    } catch (err) {
+      if (isStaleWrite(err)) throw concurrentChange();
+      throw err;
+    }
+
+    await this.afterStatusChange(user, updated, from, to, opts);
+    return this.enrichAppointment(updated);
+  }
+
+  /**
+   * Everything that may refuse a status change, before anything is written:
+   * the transition table and the service's consent forms. Returns the
+   * columns to write along with the status.
+   */
+  private async prepareStatusChange(
+    appointment: any,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions,
+  ): Promise<Record<string, unknown>> {
+    const from = appointment.status as AppointmentStatus;
+    assertTransition(from, to);
+
+    // Checked before the write: it used to run after it, so the client got
+    // the 409 while the appointment had already changed.
+    if (needsConsent(from, to)) {
+      await this.assertConsent(appointment);
+    }
+
+    const data: Record<string, unknown> = { status: to };
+    if (to === AppointmentStatus.cancelled) {
+      data.cancellationReason = opts.reason || null;
+    }
+    if (to === AppointmentStatus.completed) {
+      // The review request is timed from this.
+      data.completionTime = new Date();
+      if (opts.notes) data.notes = opts.notes;
+    }
+    return { ...data, ...opts.data };
+  }
+
+  /** Whether the client has signed every consent form the service needs. */
+  private async consentAllowsConfirming(
+    tenantId: string,
+    clientId: string,
+    serviceId: string,
+  ): Promise<boolean> {
+    if (!this.consentService) return true;
+    return this.consentService.hasValidConsent(tenantId, clientId, serviceId);
+  }
+
+  /**
+   * A service may require signed consent forms before the visit goes ahead
+   * (confirmed, started or completed).
+   */
+  private async assertConsent(appointment: any): Promise<void> {
+    if (!this.consentService) return;
+    const ok = await this.consentService.hasValidConsent(
+      appointment.tenantId,
+      appointment.clientId,
+      appointment.serviceId,
+    );
+    if (ok) return;
+    const required = await this.consentService.getRequiredForms(
+      appointment.tenantId,
+      appointment.serviceId,
+    );
+    throw new ConflictException({
+      code: "CONSENT_REQUIRED",
+      message:
+        "El cliente tiene que firmar los consentimientos de este servicio antes de seguir con la cita.",
+      appointmentId: appointment.id,
+      requiredConsents: required.map((f) => ({
+        id: f.id,
+        name: f.name,
+        version: f.version,
+      })),
+    });
+  }
+
+  /**
+   * What a new status sets off. Notices and side jobs never fail the change
+   * itself: each catches its own errors.
+   */
+  private async afterStatusChange(
+    user: any,
+    updated: any,
+    from: AppointmentStatus,
+    to: AppointmentStatus,
+    opts: StatusChangeOptions,
+  ): Promise<void> {
+    const id = updated.id as string;
+    switch (to) {
+      case AppointmentStatus.cancelled:
+        await this.logAppointmentActivity(id, "appointment_cancelled", user, {
+          reason: opts.reason,
+        });
+        await (opts.blockedSlot
+          ? this.sendAppointmentCancelledNotifications(updated, opts.reason, { rebook: true })
+          : opts.notConfirmed
+            ? this.sendAppointmentCancelledNotifications(updated, opts.reason, { notConfirmed: true })
+            : this.sendAppointmentCancelledNotifications(updated, opts.reason));
+        // A slot time off blocks is nobody's to take.
+        if (!opts.blockedSlot) this.offerFreedSlot(updated);
+        break;
+
+      case AppointmentStatus.completed:
+        await this.logAppointmentActivity(id, "appointment_completed", user, {
+          notes: opts.notes,
+        });
+        await this.sendAppointmentCompletedNotifications(updated);
+
+        // P1.4 — Recompute cadence for this client after the visit completes.
+        if (this.clientCadenceService) {
+          this.clientCadenceService
+            .computeForClient(updated.clientId)
+            .catch((err) => {
+              this.logger.warn(
+                `computeForClient failed for client ${updated.clientId}: ${(err as Error).message}`,
+              );
+            });
+        }
+
+        // P2A — Auto-invoice the appointment if the tenant has opted in.
+        // Once: the transition table refuses a second completion.
+        if (this.invoiceService) {
+          this.invoiceService.fromAppointment(id).catch((err) => {
+            this.logger.warn(
+              `auto-invoice from appointment failed for ${id}: ${(err as Error).message}`,
+            );
+          });
+        }
+        break;
+
+      case AppointmentStatus.no_show:
+        await this.logAppointmentActivity(id, "appointment_no_show", user, {});
+        await this.sendAppointmentNoShowNotifications(updated);
+        break;
+
+      case AppointmentStatus.confirmed:
+        await this.logAppointmentActivity(id, "appointment_status_changed", user, { from, to });
+        await this.sendAppointmentConfirmedNotifications(updated);
+        break;
+
+      default:
+        await this.logAppointmentActivity(id, "appointment_status_changed", user, { from, to });
+    }
+
+    // Points: completed and paid earns, cancelled gives them back.
+    await this.loyaltyAfterStatus(updated.tenantId, id);
+    // Completed and paid: its commission is worked out and kept (commissions/appointment-commission.ts).
+    await this.commissionAfterChange(updated.tenantId, id);
+
+    // Her visits (count, first, last, average) follow her completed
+    // appointments (client-stats.ts).
+    if (to === AppointmentStatus.completed || from === AppointmentStatus.completed) {
+      await refreshClientStats(this.prisma, updated.tenantId, [updated.clientId]);
+    }
+  }
+
+  /**
+   * The freed slot goes to the wait-list -- on any cancellation, and only
+   * while the slot is still ahead: nobody can take one that has passed.
+   * This used to mark every matching client "notified" without sending
+   * anything; now they are really told (when the salon switched automatic
+   * notices on), or the team is told who is waiting. Fire-and-forget: a
+   * slow email or SMS provider must not hold up the cancellation.
+   */
+  private offerFreedSlot(cancelled: any): void {
+    if (!this.waitListService || !cancelled.serviceId || !cancelled.professionalId) {
+      return;
+    }
+    // A test booking never held a client's slot: no wait-list offer (O5).
+    if (isTestBooking(cancelled)) return;
+    const startsAt = salonInstant(
+      cancelled.scheduledDate,
+      cancelled.scheduledTime || "23:59",
+      cancelled.tenant?.timezone || "Europe/Madrid",
+    );
+    if (startsAt.getTime() <= Date.now()) return;
+    const time = clockOf(cancelled.scheduledTime ?? "", cancelled.tenant?.timezone || "Europe/Madrid");
+    this.waitListService
+      .onAppointmentCancelled({
+        tenantId: cancelled.tenantId,
+        serviceId: cancelled.serviceId,
+        professionalId: cancelled.professionalId,
+        date: cancelled.scheduledDate,
+        time: cancelled.scheduledTime,
+        // Time off or a closure may be why it was cancelled: then the slot is
+        // not free, and nobody on the wait list is offered it.
+        slotBookable: (professionalId) =>
+          this.freedSlotBookable(
+            cancelled.tenantId,
+            cancelled.scheduledDate,
+            professionalId,
+            cancelled.serviceId,
+            time,
+            Number(cancelled.duration) || 0,
+          ),
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `wait-list notification failed for cancelled appointment ${cancelled.id}: ${err.message}`,
+        ),
+      );
+  }
+
+  /**
+   * Whether a freed slot can be booked again -- by `professionalId`, or with
+   * null by anybody who offers the service -- with the booking pages' own
+   * availability (getAvailableSlots: shifts, the salon's hours, time off,
+   * closures, the rest of the agenda). An appointment that started off the
+   * slot grid (10:10) counts as bookable when a free start falls inside the
+   * time it held.
+   */
+  async freedSlotBookable(
+    tenantId: string,
+    date: Date,
+    professionalId: string | null,
+    serviceId: string,
+    time: string | null,
+    heldMinutes: number,
+  ): Promise<boolean> {
+    const slots: Array<{ time: string; isAvailable: boolean }> = await this.getAvailableSlots(
+      tenantId,
+      date,
+      professionalId ?? undefined,
+      serviceId,
+    );
+    const start = time ? minutesOf(time) : null;
+    if (start === null) return slots.some((s) => s.isAvailable);
+    const exact = slots.find((s) => s.time === time);
+    if (exact) return exact.isAvailable;
+    const end = start + Math.max(heldMinutes, 1);
+    return slots.some((s) => {
+      const m = minutesOf(s.time);
+      return s.isAvailable && m !== null && m >= start && m < end;
+    });
+  }
+
+  /**
+   * Appointments the salon has not been paid for yet: payment pending or
+   * failed, and a visit that is owed (not cancelled, not a no-show), from
+   * today back unless a range is asked for. It used to return every
+   * appointment, paid and future ones included, under "pending payment".
+   */
   async findPendingPayment(
     user: any,
     filters: PendingPaymentFiltersDto,
   ) {
-    const where: any = {};
+    const where: any = {
+      tenantId: user.tenantId,
+      // The wizard's test booking is nothing to collect (D27).
+      isTest: false,
+      paymentStatus: { in: [PaymentStatus.pending, PaymentStatus.failed] },
+      status: { notIn: [AppointmentStatus.cancelled, AppointmentStatus.no_show] },
+    };
 
     // Apply user role filtering
     if (user.role === "staff") {
-      const professional = await this.prisma.professional.findFirst({
-        where: { userId: user.id, tenantId: user.tenantId },
-        select: { id: true },
-      });
+      const own = await this.ownProfessionalId(user);
 
-      if (professional) {
-        where.professionalId = professional.id;
-      }
+      // Unlinked staff account: nothing, not the whole salon (see findAll).
+      if (!own) return [];
+      // Their appointments and the visits where they do a service (findAll).
+      Object.assign(where, staffAgendaWhere(own));
     }
 
     // Apply search query (client name or appointment ID)
     if (filters.searchQuery) {
       const client = await this.prisma.client.findFirst({
         where: {
+          tenantId: user.tenantId,
           OR: [
             { firstName: { contains: filters.searchQuery, mode: "insensitive" } },
             { lastName: { contains: filters.searchQuery, mode: "insensitive" } },
@@ -1255,19 +2583,26 @@ export class AppointmentsService {
       }
     }
 
-    // Apply date range filter
-    if (filters.dateFrom || filters.dateTo) {
-      where.scheduledDate = {};
-      if (filters.dateFrom) {
-        where.scheduledDate.gte = new Date(filters.dateFrom);
-      }
-      if (filters.dateTo) {
-        where.scheduledDate.lte = new Date(filters.dateTo);
-      }
+    // Apply date range filter. Without one: up to the end of today, the
+    // visits that have already happened.
+    where.scheduledDate = {
+      lte: filters.dateTo
+        ? new Date(filters.dateTo)
+        : new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`),
+    };
+    if (filters.dateFrom) {
+      where.scheduledDate.gte = new Date(filters.dateFrom);
     }
 
-    // Apply status filter
+    // Apply status filter: one of the owed ones.
     if (filters.status) {
+      if (
+        !(Object.values(AppointmentStatus) as string[]).includes(filters.status) ||
+        filters.status === AppointmentStatus.cancelled ||
+        filters.status === AppointmentStatus.no_show
+      ) {
+        return [];
+      }
       where.status = filters.status;
     }
 
@@ -1312,24 +2647,53 @@ export class AppointmentsService {
         },
       },
       orderBy: { scheduledDate: "asc" },
+      take: AppointmentsService.FIND_ALL_MAX,
     });
 
-    return appointments.map((apt: any) => this.enrichAppointment(apt));
+    // Nothing left to pay (a free service, or paid in full without the
+    // status being updated) is not pending.
+    const basis = await this.chargeBasisOf(user.tenantId);
+    return appointments
+      .map((apt: any) => this.enrichAppointment(apt, basis))
+      .filter((apt: any) => apt.amountDue > 0);
   }
 
+  /**
+   * `PATCH /appointments/:id/payment`: the owner or a manager correcting how
+   * an appointment stands. The till records real payments itself (POST
+   * /pos/checkout); this writes no payment, so it earns no points either --
+   * LoyaltyService.settleAppointment counts payments, not this flag.
+   */
   async updatePaymentStatus(
     user: any,
     id: string,
-    data: { status: string; amountPaid: number; paymentMethod: string },
+    data: UpdateAppointmentPaymentDto,
   ) {
+    // The controller already says so; checked here too, since a staff
+    // member used this to mark their own appointments paid for any amount.
+    if (user?.role !== "owner" && user?.role !== "admin") {
+      throw new ForbiddenException("Solo la dueña o un encargado pueden corregir el pago de una cita.");
+    }
     const appointment = await this.findOne(user, id);
 
+    // amountPaid is in cents of money (tax included), the unit of the
+    // column. There is no tip field: nothing above what the visit costs
+    // (its money total, appointment-charge.ts) is accepted.
+    const total = appointment.chargeTotal ?? appointmentTotalCents(appointment);
+    if (data.amountPaid > total) {
+      const euros = (c: number) => `${(c / 100).toFixed(2).replace(".", ",")} €`;
+      throw new BadRequestException(
+        `El importe pagado (${euros(data.amountPaid)}) no puede superar el total de la cita (${euros(total)}).`,
+      );
+    }
+    if (data.status === PaymentStatus.paid) assertVisitChargeable(appointment);
+
     const updatedAppointment = await this.prisma.appointment.update({
-      where: { id },
+      where: { id, tenantId: user.tenantId },
       data: {
-        paymentStatus: data.status as PaymentStatus,
+        paymentStatus: data.status,
         amountPaid: data.amountPaid,
-        paymentMethod: data.paymentMethod,
+        ...(data.paymentMethod ? { paymentMethod: data.paymentMethod } : {}),
         updatedAt: new Date(),
       },
       include: {
@@ -1340,17 +2704,371 @@ export class AppointmentsService {
       },
     });
 
-    // Paid: points once the visit is also completed. Refunded: back they go.
+    // Refunded: the points go back. Paid: points only from recorded
+    // payments, once the visit is also completed.
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
+    await this.commissionAfterChange(updatedAppointment.tenantId, id);
 
     return this.enrichAppointment(updatedAppointment);
   }
 
+  /**
+   * Drag one service of a multi-service appointment in the calendar. See
+   * visit-move.ts: by default the whole visit moves; owners and managers may
+   * move just this service (a wait agreed with the client). Every service
+   * that moves must fit its professional's agenda and hours, the client is
+   * never in two services at once, and the appointment's own time,
+   * reminders and notice to the client follow.
+   */
+  async moveVisitService(
+    user: any,
+    serviceRowId: string,
+    input: { scope: MoveScope; minutesDelta: number; professionalId?: string },
+  ) {
+    const visit = await this.loadVisit(user, serviceRowId);
+    const staffOwn = await this.staffVisitCheck(user, visit);
+    if (staffOwn) {
+      if (input.scope !== "visit") {
+        throw new ForbiddenException("Mover solo un servicio de la visita es cosa de la dueña o del encargado.");
+      }
+      if (input.professionalId && input.professionalId !== staffOwn) {
+        throw new ForbiddenException("Solo puedes mover tus citas dentro de tu agenda.");
+      }
+    }
+    const dragged = visit.services.find((s) => s.id === serviceRowId);
+    if (!dragged) throw new NotFoundException("Servicio no encontrado en esta cita");
+    const newStart = new Date(dragged.start.getTime() + input.minutesDelta * 60_000);
+    const after = planVisitMove(visit.services, serviceRowId, newStart, input.scope, input.professionalId);
+    return this.applyVisit(user, visit, after);
+  }
+
+  /**
+   * The timing editor in the appointment card: one service gets a new start
+   * and end, the serial ones after it follow. Same checks as a move. It used
+   * to save the appointment's time as an ISO date ("2026-11-02T09:00:00Z")
+   * instead of the salon's clock, and checked nothing.
+   */
+  async retimeVisitService(user: any, serviceRowId: string, start: Date, end: Date) {
+    if (!(end > start)) throw new BadRequestException("El final tiene que ser después del inicio.");
+    const visit = await this.loadVisit(user, serviceRowId);
+    await this.staffVisitCheck(user, visit);
+    return this.applyVisit(user, visit, planRetime(visit.services, serviceRowId, start, end));
+  }
+
+  private async loadVisit(user: any, serviceRowId: string) {
+    const row = await this.prisma.appointmentService.findUnique({
+      where: { id: serviceRowId, appointment: { tenantId: user.tenantId } },
+      select: { appointmentId: true },
+    });
+    if (!row) throw new NotFoundException("Servicio no encontrado");
+    return this.loadVisitOf(user, row.appointmentId);
+  }
+
+  /**
+   * A visit as visit-move.ts models it: where each of its live services sits
+   * (cancelled ones are no longer part of it). `rows` are all its rows, in
+   * order; `processing` the ones during which nobody is busy.
+   */
+  private async loadVisitOf(user: any, appointmentId: string) {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId: user.tenantId },
+      include: {
+        tenant: { select: { timezone: true } },
+        services: {
+          orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          include: { service: { select: { name: true, duration: true, price: true, bufferTime: true } } },
+        },
+      },
+    });
+    if (!appointment) throw new NotFoundException("Cita no encontrada");
+    const timeZone = (appointment as any).tenant?.timezone || "Europe/Madrid";
+    const rows = (appointment as any).services as any[];
+    // Each service's cleanup time, for the one the visit ends with (applyVisit).
+    const cleanup = new Map<string, number>(rows.map((r) => [r.id, cleanupMinutesOf(r.service)]));
+    const start = salonInstant(
+      appointment.scheduledDate,
+      clockOf(appointment.scheduledTime, timeZone) ?? appointment.scheduledTime,
+      timeZone,
+    );
+    const services = visitSchedule(start, appointment.professionalId, rows);
+    const names = new Map<string, string>(rows.map((r) => [r.id, r.service?.name ?? "otro servicio"]));
+    const processing = new Set<string>(rows.filter((r) => freesProfessional(r)).map((r) => r.id));
+    return { appointment, timeZone, start, services, rows, names, processing, cleanup };
+  }
+
+  /**
+   * A professional changes a visit only when every service in it is theirs:
+   * otherwise they would move colleagues' agendas. Returns their professional
+   * id (null for owners and managers, who may).
+   */
+  private async staffVisitCheck(user: any, visit: { services: VisitService[] }): Promise<string | null> {
+    if (user.role !== "staff") return null;
+    const own = await this.prisma.professional.findFirst({
+      where: { userId: user.id, tenantId: user.tenantId },
+      select: { id: true },
+    });
+    if (!own) throw new NotFoundException("No tienes permiso para modificar esta cita");
+    if (!visit.services.every((s) => s.professionalId === own.id)) {
+      throw new ForbiddenException(
+        "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la mueva.",
+      );
+    }
+    return own.id;
+  }
+
+  /**
+   * Reorder the services of a visit (the drawer's drag-and-drop). The visit
+   * is laid out again from its start in the new order (layoutVisit) and goes
+   * through the same checks and writes as a move. It used to write the
+   * first row's ISO instant into the appointment's "HH:MM" time, and checked
+   * nothing.
+   *
+   * Each item names a row by its id or, as the drawer sends it, by its
+   * service; rows of the same service are taken in their current order.
+   */
+  async reorderVisitServices(
+    user: any,
+    appointmentId: string,
+    serviceOrders: Array<{ serviceId: string; order: number }>,
+  ) {
+    if (!Array.isArray(serviceOrders)) throw new BadRequestException("Lista de servicios no válida");
+    const visit = await this.loadVisitOf(user, appointmentId);
+    await this.staffVisitCheck(user, visit);
+    if (visit.rows.length === 0) throw new BadRequestException("Esta cita no tiene servicios que ordenar");
+
+    const taken = new Set<string>();
+    const ordered: any[] = [];
+    for (const item of [...serviceOrders].sort((a, b) => Number(a?.order) - Number(b?.order))) {
+      const row =
+        visit.rows.find((r) => !taken.has(r.id) && r.id === item?.serviceId) ??
+        visit.rows.find((r) => !taken.has(r.id) && r.serviceId === item?.serviceId);
+      if (!row) throw new BadRequestException(`El servicio ${item?.serviceId} no está en esta cita`);
+      taken.add(row.id);
+      ordered.push(row);
+    }
+    if (ordered.length !== visit.rows.length) {
+      throw new BadRequestException("Faltan servicios de la cita en el nuevo orden");
+    }
+
+    const byId = new Map(visit.services.map((s) => [s.id, s]));
+    const live = ordered.map((r) => byId.get(r.id)).filter((s): s is VisitService => !!s);
+    const after = layoutVisit(visitSpan(visit.services).start, live);
+    const rowData = new Map<string, Record<string, unknown>>();
+    ordered.forEach((r, order) => {
+      if (r.order !== order) rowData.set(r.id, { order });
+    });
+    return this.applyVisit(user, visit, after, rowData);
+  }
+
+  /**
+   * Switch one service of a visit between serial and parallel. The visit is
+   * laid out again from its start (serial services one after another,
+   * parallel ones alongside), through the same checks as a move. It used to
+   * write an ISO instant into the appointment's "HH:MM" time.
+   */
+  async setVisitServiceMode(user: any, serviceRowId: string, isParallel: boolean) {
+    if (typeof isParallel !== "boolean") throw new BadRequestException("isParallel tiene que ser true o false");
+    const visit = await this.loadVisit(user, serviceRowId);
+    await this.staffVisitCheck(user, visit);
+    const row = visit.rows.find((r) => r.id === serviceRowId);
+    if (!row) throw new NotFoundException("Servicio no encontrado en esta cita");
+    if (!!row.isParallel === isParallel) return { appointmentId: visit.appointment.id, moved: 0 };
+    const toggled = visit.services.map((s) => (s.id === serviceRowId ? { ...s, isParallel } : s));
+    const after = layoutVisit(visitSpan(visit.services).start, toggled);
+    return this.applyVisit(user, visit, after, new Map([[serviceRowId, { isParallel }]]));
+  }
+
+  /**
+   * Move a whole appointment to a new day and time on the salon's clock,
+   * through the panel's own checks: who may (findOne, staffVisitCheck),
+   * whether its status allows it, and the reschedule check for every
+   * professional in it. For callers that are not the drag or the form (the
+   * copilot's reschedule_appointment, which wrote the date and time
+   * straight into the row and checked nothing).
+   */
+  async rescheduleVisit(user: any, appointmentId: string, day: string, time: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || minutesOf(time) === null) {
+      throw new BadRequestException("Fecha u hora no válida");
+    }
+    const appointment = await this.findOne(user, appointmentId);
+    this.assertMovable(appointment.status, false);
+    const visit = await this.loadVisitOf(user, appointmentId);
+    if (visit.services.length === 0) {
+      return this.update(user, appointmentId, { scheduledDate: day, scheduledTime: time } as UpdateAppointmentDto);
+    }
+    await this.staffVisitCheck(user, visit);
+    const delta = salonInstant(day, time, visit.timeZone).getTime() - visitSpan(visit.services).start.getTime();
+    const after = visit.services.map((s) => ({
+      ...s,
+      start: new Date(s.start.getTime() + delta),
+      end: new Date(s.end.getTime() + delta),
+    }));
+    return this.applyVisit(user, visit, after);
+  }
+
+  /**
+   * Only a visit still to happen is moved: not one done, cancelled or
+   * missed. One under way may have its services adjusted (the timing
+   * editor), but is not moved to another time as a whole.
+   */
+  private assertMovable(status: string, startedMayChange = true) {
+    if (
+      status === AppointmentStatus.completed ||
+      status === AppointmentStatus.cancelled ||
+      status === AppointmentStatus.no_show ||
+      (!startedMayChange && status === AppointmentStatus.in_progress)
+    ) {
+      const word: Record<string, string> = {
+        completed: "completada",
+        cancelled: "cancelada",
+        no_show: "marcada como no presentada",
+        in_progress: "en curso",
+      };
+      throw new ConflictException(`Una cita ${word[status]} no se puede mover.`);
+    }
+  }
+
+  private async applyVisit(
+    user: any,
+    visit: {
+      appointment: any;
+      timeZone: string;
+      services: VisitService[];
+      names: Map<string, string>;
+      processing?: Set<string>;
+      /** Each row's cleanup time (loadVisitOf). */
+      cleanup?: Map<string, number>;
+    },
+    after: VisitService[],
+    /** Further columns per row (order, mode), written with the times. */
+    rowData: Map<string, Record<string, unknown>> = new Map(),
+  ) {
+    const { appointment, timeZone } = visit;
+    const changed = changedServices(visit.services, after);
+    if (changed.length === 0 && rowData.size === 0) return { appointmentId: appointment.id, moved: 0 };
+    this.assertMovable(appointment.status);
+
+    // She may wait between services if the salon chose to; she cannot be in two.
+    const clash = clientDoubleBooked(after);
+    if (clash && !clientDoubleBooked(visit.services)) {
+      throw new ConflictException(
+        `La clienta estaría a la vez en ${visit.names.get(clash[0].id)} y ${visit.names.get(clash[1].id)}.`,
+      );
+    }
+    // The cleanup after the visit, on the service it now ends with.
+    const cleanup = plannedCleanup(
+      after,
+      after.map((s) => ({
+        type: visit.processing?.has(s.id) ? "processing" : null,
+        service: { bufferTime: visit.cleanup?.get(s.id) ?? 0 },
+      })),
+    );
+    const cleanupId = cleanup.index === -1 ? null : after[cleanup.index].id;
+    // Checked inside the write's transaction, under the booking lock of each
+    // day involved (lockBookingDays), as online bookings are: checked first
+    // and written after, a drag and an online booking could both pass.
+    const checks = changed
+      // While a colour sets, its professional is free: nothing to check.
+      .filter((s) => !visit.processing?.has(s.id))
+      .map((s) => {
+        const { day, time } = salonDayAndTime(s.start, timeZone);
+        return {
+          tenantId: user.tenantId,
+          appointmentId: appointment.id,
+          professionalId: s.professionalId,
+          day,
+          time,
+          durationMinutes: Math.round((s.end.getTime() - s.start.getTime()) / 60_000),
+          cleanupMinutes: s.id === cleanupId ? cleanup.minutes : 0,
+        };
+      });
+
+    // The appointment's own time and length: from its first to its last
+    // service, plus what it held beyond them (add-ons).
+    const span = visitSpan(after);
+    const before = visitSpan(visit.services);
+    const beyond = Math.max(
+      0,
+      (Number(appointment.duration) || 0) - Math.round((before.end.getTime() - before.start.getTime()) / 60_000),
+    );
+    const { day, time } = salonDayAndTime(span.start, timeZone);
+    const duration = Math.round((span.end.getTime() - span.start.getTime()) / 60_000) + beyond;
+    const oldDate = appointment.scheduledDate;
+    const oldTime = appointment.scheduledTime;
+    const startChanged = !appointment.startTime || new Date(appointment.startTime).getTime() !== span.start.getTime();
+
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      if (checks.length > 0) {
+        await this.lockBookingDays(tx, user.tenantId, [
+          new Date(oldDate).toISOString().slice(0, 10),
+          ...checks.map((c) => c.day),
+        ]);
+        for (const check of checks) await assertCanReschedule(tx, check);
+      }
+      const changedIds = new Set(changed.map((s) => s.id));
+      for (const s of after) {
+        const extra = rowData.get(s.id);
+        if (!changedIds.has(s.id) && !extra) continue;
+        await tx.appointmentService.update({
+          where: { id: s.id, appointmentId: appointment.id, appointment: { tenantId: user.tenantId } },
+          data: {
+            ...(changedIds.has(s.id)
+              ? { scheduledStart: s.start, scheduledEnd: s.end, professionalId: s.professionalId }
+              : {}),
+            ...(extra ?? {}),
+          },
+        });
+      }
+      // Rows outside the schedule (cancelled ones) may still take a new order.
+      for (const [id, extra] of rowData) {
+        if (after.some((s) => s.id === id)) continue;
+        await tx.appointmentService.update({
+          where: { id, appointmentId: appointment.id, appointment: { tenantId: user.tenantId } },
+          data: extra,
+        });
+      }
+      return tx.appointment.update({
+        where: { id: appointment.id, tenantId: user.tenantId },
+        data: {
+          scheduledDate: new Date(`${day}T00:00:00.000Z`),
+          scheduledTime: time,
+          duration,
+          endTime: this.calculateEndTime(time, duration),
+          ...(startChanged
+            ? { startTime: span.start, reminder24hSent: false, reminder1hSent: false, reminder24hAttempts: 0, reminder1hAttempts: 0 }
+            : {}),
+        },
+        include: { client: true, professional: true, service: true, tenant: true },
+      });
+    });
+
+    const dayOf = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : new Date(d).toISOString().slice(0, 10));
+    if (dayOf(oldDate) !== day || oldTime !== time) {
+      await this.sendAppointmentRescheduledNotifications(updated, oldDate, oldTime);
+    }
+    return { appointmentId: appointment.id, moved: changed.length, scheduledDate: day, scheduledTime: time, duration };
+  }
+
+  /**
+   * Hard delete, only for an appointment that is not history yet: completed,
+   * paid or invoiced ones are refused with a 409 that says to cancel instead.
+   * See appointment-delete.ts.
+   */
   async remove(user: any, id: string) {
     const appointment = await this.findOne(user, id);
-    await this.prisma.appointment.delete({
-      where: { id },
-    });
+    const blocker = await appointmentDeleteBlocker(this.prisma, appointment);
+    if (blocker) throw new ConflictException(blocker);
+    try {
+      await deleteAppointmentRow(this.prisma, id);
+    } catch (error) {
+      // A payment recorded between the check and the delete.
+      if (isForeignKeyViolation(error)) {
+        throw new ConflictException(
+          "No se puede eliminar una cita con pagos registrados: forma parte de la contabilidad. Cancélala en su lugar.",
+        );
+      }
+      throw error;
+    }
   }
 
   async getAppointmentActivity(user: any, appointmentId: string) {
@@ -1358,23 +3076,45 @@ export class AppointmentsService {
     await this.findOne(user, appointmentId);
 
     return this.prisma.appointmentActivity.findMany({
-      where: { appointmentId },
+      where: { appointmentId, appointment: { tenantId: user.tenantId } },
       orderBy: { createdAt: "desc" },
     });
   }
 
+  /**
+   * Every service, professional and client an edit points at is this
+   * salon's. The tenant filter guards queries, not the ids written into a
+   * row, so an id from another salon would link its record to this
+   * appointment (and return it in the response).
+   */
+  async assertSalonRecords(
+    tenantId: string,
+    refs: {
+      serviceIds?: Array<string | null | undefined>;
+      professionalIds?: Array<string | null | undefined>;
+      clientIds?: Array<string | null | undefined>;
+    },
+  ): Promise<void> {
+    const unique = (ids?: Array<string | null | undefined>) =>
+      [...new Set((ids ?? []).filter((id): id is string => !!id))];
+    const checks: Array<[string[], (ids: string[]) => Promise<number>]> = [
+      [unique(refs.serviceIds), (ids) => this.prisma.service.count({ where: { tenantId, id: { in: ids } } })],
+      [unique(refs.professionalIds), (ids) => this.prisma.professional.count({ where: { tenantId, id: { in: ids } } })],
+      [unique(refs.clientIds), (ids) => this.prisma.client.count({ where: { tenantId, id: { in: ids } } })],
+    ];
+    for (const [ids, count] of checks) {
+      if (ids.length > 0 && (await count(ids)) !== ids.length) {
+        throw new NotFoundException("Servicio, profesional o cliente no encontrado en este salón");
+      }
+    }
+  }
+
+  /**
+   * "HH:MM" plus minutes, saturating at 23:59 (see endClock). It used to go
+   * through the server's local clock and wrap: 23:30 + 60 min gave 00:30.
+   */
   private calculateEndTime(startTime: string, durationMinutes: number): string {
-    const [hoursStr, minutesStr] = startTime.split(":");
-    const hours = parseInt(hoursStr);
-    const minutes = parseInt(minutesStr);
-
-    const startDateTime = new Date();
-    startDateTime.setHours(hours, minutes, 0, 0);
-
-    const endDateTime = new Date(
-      startDateTime.getTime() + durationMinutes * 60000,
-    );
-    return endDateTime.toTimeString().slice(0, 5); // HH:MM format
+    return endClock(startTime, durationMinutes);
   }
 
   async getAvailableSlots(
@@ -1390,7 +3130,23 @@ export class AppointmentsService {
      * Applied here, with the tenant and service rows this method already
      * loads, rather than by a second pass that read them again.
      */
-    opts: { onlineWindow?: boolean } = {},
+    opts: {
+      onlineWindow?: boolean;
+      /**
+       * One of the salon's locations (multi-local): only the professionals
+       * who work there. A named professional who does not has no slots there.
+       * Their agenda is still checked across every location: one person is
+       * never booked twice at once.
+       */
+      locationId?: string;
+      /**
+       * The booking widget's "any professional" (no professional named): only
+       * the professionals the widget offers, the same candidates the booking
+       * then picks from (findFreeProfessional). Without it a colleague who is
+       * not on the widget made a time look free, and the booking refused it.
+       */
+      widgetInstanceId?: string;
+    } = {},
   ) {
     // Get the tenant's working hours and timezone
     const tenant = await this.prisma.tenant.findUnique({
@@ -1427,6 +3183,20 @@ export class AppointmentsService {
       throw new NotFoundException("One or more professionals not found");
     }
 
+    const here = opts.locationId ? await professionalsAt(this.prisma as any, tenantId, opts.locationId) : null;
+    if (here && professionalsToCheck.some((id) => !here.has(id))) return [];
+    // The widget's professionals (none listed: the whole team), only for
+    // "any professional". Never another salon's widget.
+    let widgetOnly: Set<string> | null = null;
+    if (opts.widgetInstanceId && professionalsToCheck.length === 0) {
+      const widget = await this.prisma.widgetInstance.findFirst({
+        where: { id: opts.widgetInstanceId, tenantId },
+        select: { professionals: true },
+      });
+      if (!widget) throw new NotFoundException("Widget no encontrado");
+      if ((widget.professionals ?? []).length > 0) widgetOnly = new Set(widget.professionals);
+    }
+
     // "Any professional" still has to obey somebody's shift.
     //
     // The first version of this check only ran when a professional was named,
@@ -1449,11 +3219,32 @@ export class AppointmentsService {
     const offeringRows = serviceId
       ? activeRows.filter((p: any) => (p.services ?? []).some((s: any) => s.serviceId === serviceId))
       : [];
-    const anyProfessionalRows = offeringRows.length > 0 ? offeringRows : activeRows;
+    // Who offers the service is decided salon-wide; a location then narrows
+    // it to who works there -- and nobody there means nothing to offer, not
+    // "no professionals recorded".
+    // The widget's list narrows it the same way.
+    const anyProfessionalRows = (offeringRows.length > 0 ? offeringRows : activeRows).filter(
+      (p: { id: string }) => (!here || here.has(p.id)) && (!widgetOnly || widgetOnly.has(p.id)),
+    );
+    // Nobody active (a new salon between its first service and its first
+    // professional, or a team all switched off), or nobody at that location
+    // or on that widget: no slot, rather than a day of free times every
+    // booking then refuses (audit 7 N11).
+    if (professionalsToCheck.length === 0 && anyProfessionalRows.length === 0) return [];
 
     // Get the service duration if specified
     let serviceDuration = duration;
-    let serviceRow: { isActive: boolean; minAdvanceBooking: number | null; maxAdvanceBooking: number | null } | null = null;
+    // The cleanup after it ("tiempo de limpieza", Service.bufferTime): the
+    // professional stays busy that long after the service, so it may not run
+    // into their next appointment. Not part of the hours: the service has to
+    // end by closing time, the cleanup may run past it.
+    let serviceCleanup = 0;
+    let serviceRow: {
+      isActive: boolean;
+      isOnlineBookable: boolean;
+      minAdvanceBooking: number | null;
+      maxAdvanceBooking: number | null;
+    } | null = null;
     if (serviceId) {
       const service = await this.prisma.service.findFirst({
         where: { id: serviceId, tenantId },
@@ -1464,27 +3255,74 @@ export class AppointmentsService {
       }
 
       serviceDuration = service.duration;
+      serviceCleanup = cleanupMinutesOf(service);
       serviceRow = service as any;
     }
 
-    // Generate time slots for the day using the tenant's configured
-    // working hours. Previously this was hardcoded 9:00–18:00, which
-    // made the suggestion engine miss every appointment past 17:30
-    // regardless of the salon's actual closing time.
-    const openingHours = (tenant.openingHours as { open?: string; close?: string }) ?? {};
-    const timeSlots = this.generateTimeSlots(
-      openingHours.open ?? "09:00",
-      openingHours.close ?? "20:00",
-      30,
+    const dateString = date.toISOString().split('T')[0];
+
+    // Time off and closures (time-off-rules.ts). A day the whole salon is
+    // closed has nothing to offer, whoever is asked for; otherwise each
+    // professional's shifts lose their own blocks and the salon's partial
+    // closures, and a professional away all day has no shifts left.
+    // At a location: its own closures and the general ones (multi-local).
+    const timeOff = await timeOffBetween(this.prisma as any, tenantId, dateString, dateString, {
+      locationId: opts.locationId,
+    });
+    if (salonClosedOn(timeOff, dateString)) return [];
+    // The salon's own hours that weekday (working-hours.ts salonWindowsFor):
+    // none recorded imposes nothing, a weekday without hours is closed --
+    // whoever has a shift then -- and otherwise a professional is bookable
+    // only where their shifts and the salon's hours meet (bookableWindows).
+    // An owner can still book outside them from the panel (assertCanBook).
+    const salonHours = salonWindowsFor(tenant.openingHours, date);
+    if (salonHours && salonHours.length === 0) return [];
+    const salonBlocked = dayBlocks(timeOff, dateString, null);
+    const windowsOf = (p: { id: string; workingHours?: unknown }) =>
+      availableWindows(
+        bookableWindows(workingWindowsFor(p.workingHours, date), salonHours),
+        dayBlocks(timeOff, dateString, p.id),
+      );
+    const relevantRows: Array<{ id: string; workingHours?: unknown }> =
+      professionalsToCheck.length > 0 ? professionalRows : anyProfessionalRows;
+    const windowsById = new Map(relevantRows.map((p) => [p.id, windowsOf(p)]));
+
+    // Candidate slots: the salon's hours that day, from its first opening to
+    // its last closing (09:00–20:00 when it set none) every
+    // Tenant.bookingSlotMinutes (half an hour unless the salon chose another
+    // step in its general settings) --
+    // previously hardcoded 9:00–18:00, which made the suggestion engine miss
+    // every appointment past 17:30 -- plus every stretch the professionals
+    // asked about can be booked in: a shift from 20:00 to 22:00, or the 10:15
+    // start of one, is a candidate too (candidateStarts).
+    const base: ShiftWindow = salonHours
+      ? { startMinutes: salonHours[0].startMinutes, endMinutes: salonHours[salonHours.length - 1].endMinutes }
+      : DEFAULT_SLOT_GRID;
+    const salonOpen = salonHours ?? [base];
+    const stretches: ShiftWindow[] = relevantRows.length
+      ? relevantRows.flatMap((p) => {
+          // No schedule recorded at all (neither theirs nor the salon's):
+          // the default hours bound the grid, and a block ending inside them
+          // starts a slot.
+          if (bookableWindows(workingWindowsFor(p.workingHours, date), salonHours) === undefined) {
+            return subtractWindows([base], dayBlocks(timeOff, dateString, p.id).windows);
+          }
+          return windowsById.get(p.id) ?? [];
+        })
+      : subtractWindows(salonOpen, salonBlocked.windows);
+    const timeSlots = candidateStarts(base, stretches, bookingSlotStep(tenant.bookingSlotMinutes)).map(
+      (m) => ({ time: clockOfMinutes(m) }),
     );
 
     // Get existing appointments for the date and professionals
     // Use date range to avoid timezone issues with date comparison
-    const dateString = date.toISOString().split('T')[0];
     const startOfDay = new Date(dateString + 'T00:00:00.000Z');
     const endOfDay = new Date(dateString + 'T23:59:59.999Z');
 
-    const existingAppointments = await this.prisma.appointment.findMany({
+    // With their service rows: a multi-service visit keeps each of its
+    // professionals busy during their own services, not its main one for
+    // its first service (visit-totals.ts).
+    const existingAppointments = await (this.prisma.appointment.findMany as any)({
       where: {
         tenantId,
         scheduledDate: {
@@ -1492,11 +3330,26 @@ export class AppointmentsService {
           lte: endOfDay,
         },
         ...(professionalsToCheck.length > 0
-          ? { professionalId: { in: professionalsToCheck } }
+          ? {
+              OR: [
+                { professionalId: { in: professionalsToCheck } },
+                { services: { some: { professionalId: { in: professionalsToCheck } } } },
+              ],
+            }
           : {}),
         status: { not: AppointmentStatus.cancelled },
       },
+      // The service's cleanup time too: the agenda is busy for it after each
+      // visit (appointmentBusyBlocks).
+      include: {
+        service: { select: { bufferTime: true } },
+        services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER },
+      },
     });
+    const salonTimeZone = (tenant as any).timezone || "Europe/Madrid";
+    const busy: BusyBlock[] = (existingAppointments as any[]).flatMap((apt) =>
+      appointmentBusyBlocks(apt, salonTimeZone, dateString),
+    );
 
     // Filter out unavailable slots
     const availableSlots = timeSlots.map((slot) => {
@@ -1509,43 +3362,33 @@ export class AppointmentsService {
           // Outside this professional's shift the slot is not bookable, no
           // matter how empty the calendar looks. A missing schedule imposes no
           // limit, so salons that never filled it in keep working.
-          const row = professionalRows.find((p) => p.id === profId);
-          const window = workingWindowFor(row?.workingHours, date);
+          // With a split day the service has to fit inside one shift: 13:30
+          // for an hour runs into the lunch gap of a 10:00–14:00 morning.
+          // Time off is already out of these windows (windowsOf).
+          const shifts = windowsById.get(profId);
           const slotMinutes = minutesOf(slot.time);
 
-          if (window === null) {
-            // Has a schedule and does not work this weekday.
+          if (shifts && shifts.length === 0) {
+            // Has a schedule and does not work this weekday, or is away all day.
             isAvailable = false;
             break;
           }
           if (
-            window &&
+            shifts &&
             slotMinutes !== null &&
-            !fitsInWindow(slotMinutes, serviceDuration, window)
+            !fitsInShifts(slotMinutes, serviceDuration, shifts)
           ) {
             isAvailable = false;
             break;
           }
 
-          const profAppointments = existingAppointments.filter(
-            (apt) => apt.professionalId === profId,
-          );
-
-          const hasConflict = profAppointments.some((appointment) => {
-            const [appointmentHour, appointmentMinute] =
-              appointment.scheduledTime.split(":").map(Number);
-            const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-
-            const appointmentStart = appointmentHour * 60 + appointmentMinute;
-            const appointmentEnd = appointmentStart + appointment.duration;
-            const slotStart = slotHour * 60 + slotMinute;
-            const slotEnd = slotStart + serviceDuration;
-
-            // Check if the slot overlaps with this professional's appointment
-            return !(
-              appointmentEnd <= slotStart || appointmentStart >= slotEnd
+          const hasConflict =
+            slotMinutes !== null &&
+            busy.some(
+              (block) =>
+                block.professionalId === profId &&
+                clashesWithBlock(block, slotMinutes, serviceDuration, serviceCleanup),
             );
-          });
 
           if (hasConflict) {
             isAvailable = false;
@@ -1558,39 +3401,31 @@ export class AppointmentsService {
         // only "is anybody busy" answered a different question, and answered
         // it wrongly — it offered hours nobody works.
         const slotMinutes = minutesOf(slot.time);
-        const overlaps = (appointment: { scheduledTime: string; duration: number }) => {
-          const [appointmentHour, appointmentMinute] = appointment.scheduledTime
-            .split(":")
-            .map(Number);
-          const [slotHour, slotMinute] = slot.time.split(":").map(Number);
-          const appointmentStart = appointmentHour * 60 + appointmentMinute;
-          const appointmentEnd = appointmentStart + appointment.duration;
-          const slotStart = slotHour * 60 + slotMinute;
-          const slotEnd = slotStart + serviceDuration;
-          return !(appointmentEnd <= slotStart || appointmentStart >= slotEnd);
-        };
+        const overlaps = (block: BusyBlock) =>
+          slotMinutes !== null && clashesWithBlock(block, slotMinutes, serviceDuration, serviceCleanup);
 
         if (anyProfessionalRows.length === 0) {
           // No professionals recorded at all: impose no shift limit, and the
-          // salon is free when nothing overlaps.
-          isAvailable = !existingAppointments.some(overlaps);
+          // salon is free when nothing overlaps -- inside its hours when it
+          // set them, and not while it is closed.
+          const open = availableWindows(salonHours, salonBlocked);
+          isAvailable =
+            (!open || (slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, open))) &&
+            !busy.some(overlaps);
         } else {
           // Somebody who is on shift for the whole slot AND has nothing of
           // their own overlapping it. This used to ask "is anyone on shift"
           // and then "does ANY appointment overlap" -- so one stylist's 11:00
           // took 10:30 away from the four who were free.
           isAvailable = anyProfessionalRows.some((p) => {
-            const window = workingWindowFor(p.workingHours, date);
-            if (window === null) return false;
+            const shifts = windowsById.get(p.id);
             if (
-              window &&
-              !(slotMinutes !== null && fitsInWindow(slotMinutes, serviceDuration, window))
+              shifts &&
+              !(slotMinutes !== null && fitsInShifts(slotMinutes, serviceDuration, shifts))
             ) {
               return false;
             }
-            return !existingAppointments.some(
-              (appointment) => appointment.professionalId === p.id && overlaps(appointment),
-            );
+            return !busy.some((block) => block.professionalId === p.id && overlaps(block));
           });
         }
       }
@@ -1611,7 +3446,16 @@ export class AppointmentsService {
     const free = availableSlots.filter((slot) => slot.isAvailable);
     if (!opts.onlineWindow) return free;
 
-    if (serviceRow && serviceRow.isActive === false) return [];
+    // Nothing a booking from outside the salon would refuse
+    // (assertBookableOnline): a service it does not offer online, or a named
+    // professional who no longer works there.
+    if (serviceRow && (serviceRow.isActive === false || serviceRow.isOnlineBookable === false)) return [];
+    if (professionalRows.some((p: any) => p.isActive === false)) return [];
+    // Nor a named professional who does not perform the service: the
+    // booking would be refused (assertBookableOnline).
+    if (professionalId && serviceId && !(await this.offersService(tenantId, professionalId, serviceId))) {
+      return [];
+    }
     const window = {
       timeZone: (tenant as any).timezone || "Europe/Madrid",
       minHours: serviceRow?.minAdvanceBooking ?? 0,
@@ -1622,48 +3466,126 @@ export class AppointmentsService {
   }
 
   /**
-   * Generate candidate half-hour slots from `open` to `close` for a
-   * given salon. Defaults to 09:00–20:00, 30-minute increments.
-   *
-   * The previous version was hardcoded to 09:00–18:00, which made the
-   * suggestion engine return nothing past 17:30 regardless of the
-   * tenant's configured `openingHours` (or the dashboard's
-   * `salonHours.close`).
+   * The locations the panel books at and filters the agenda by
+   * (multi-local; client-locations.ts): none unless the salon has two or
+   * more with someone to book, and where each active professional works.
    */
-  private generateTimeSlots(
-    open: string = "09:00",
-    close: string = "20:00",
-    incrementMinutes: number = 30,
-  ): { time: string }[] {
-    const slots: { time: string }[] = [];
-    let startMinutes = this.parseHhmmToMinutes(open);
-    let endMinutes = this.parseHhmmToMinutes(close);
-    if (!Number.isFinite(startMinutes) || startMinutes < 0) startMinutes = 9 * 60;
-    if (!Number.isFinite(endMinutes) || endMinutes <= startMinutes) {
-      endMinutes = startMinutes + 11 * 60; // 11h window fallback
-    }
-
-    // Inclusive of the last slot that still has room for a 30-min
-    // appointment so the user never sees a suggestion that would be
-    // pruned by duration-overlap downstream.
-    const lastStartMinute = endMinutes - incrementMinutes;
-
-    for (let minute = startMinutes; minute <= lastStartMinute; minute += incrementMinutes) {
-      const hh = Math.floor(minute / 60).toString().padStart(2, "0");
-      const mm = (minute % 60).toString().padStart(2, "0");
-      slots.push({ time: `${hh}:${mm}` });
-    }
-
-    return slots;
+  async bookingLocations(tenantId: string): Promise<{
+    locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
+    professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
+  }> {
+    const { locations, links } = await clientLocations(this.prisma as any, tenantId, this.featureFlags);
+    if (locations.length === 0) return { locations: [], professionals: [] };
+    const ids = [...new Set(links.map((l) => l.professionalId))];
+    return {
+      locations: locations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        slug: l.slug,
+        address: formatLocationAddress(l),
+        phone: l.phone,
+      })),
+      professionals: ids.map((id) => ({ id, ...professionalLocationsOf(id, locations, links) })),
+    };
   }
 
-  private parseHhmmToMinutes(value: string): number {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-    if (!m) return Number.NaN;
-    const hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (hh < 0 || hh > 24 || mm < 0 || mm >= 60) return Number.NaN;
-    return hh * 60 + mm;
+  /**
+   * Where the appointment is, for the client's emails: its location's name
+   * and address (and phone) when the salon has two or more open locations
+   * (client-locations.ts, bookingPlace). Otherwise -- almost every salon --
+   * the salon's own address and phone: the email used to give neither, and
+   * told her "avísanos cuanto antes" with no number to call. A location
+   * without them falls back to the salon's too. Never fails an email.
+   */
+  private async emailPlace(
+    appointment: any,
+  ): Promise<{ locationName?: string; salonAddress?: string; salonPhone?: string; salonEmail?: string }> {
+    // Replies to the email go to the salon (email.service salonSender).
+    const salonEmail = (await this.salonEmailSettings(appointment)).email;
+    const withEmail = <T extends object>(o: T) => (salonEmail ? { ...o, salonEmail } : o);
+    try {
+      const place = await bookingPlace(this.prisma as any, appointment?.tenantId, appointment?.locationId);
+      // Only what the location lacks is asked of the salon.
+      const salon =
+        place?.address && place?.phone ? { address: "", phone: "" } : await this.salonContactOrNone(appointment);
+      const address = place?.address || salon.address;
+      const phone = place?.phone || salon.phone;
+      return withEmail({
+        ...(place ? { locationName: place.name } : {}),
+        ...(address ? { salonAddress: address } : {}),
+        ...(phone ? { salonPhone: phone } : {}),
+      });
+    } catch (err) {
+      this.logger.warn(`Location for the email not read: ${(err as Error).message}`);
+      return withEmail({});
+    }
+  }
+
+  /**
+   * The salon's contact email and its online cancellation rule, from the
+   * appointment's tenant row or the database. Never fails an email.
+   */
+  private async salonEmailSettings(
+    appointment: any,
+  ): Promise<{ email: string; minCancelHours: number | null; cancellationPolicy: string }> {
+    const none = { email: "", minCancelHours: null, cancellationPolicy: "" };
+    try {
+      const t = appointment?.tenant;
+      const tenant =
+        t && "email" in t && "minCancelHours" in t
+          ? t
+          : appointment?.tenantId
+            ? await this.prisma.tenant.findUnique({
+                where: { id: appointment.tenantId },
+                select: { email: true, minCancelHours: true, cancellationPolicy: true },
+              })
+            : null;
+      if (!tenant) return none;
+      return {
+        email: (tenant.email ?? "").trim(),
+        minCancelHours: typeof tenant.minCancelHours === "number" ? tenant.minCancelHours : null,
+        cancellationPolicy: (tenant.cancellationPolicy ?? "").trim(),
+      };
+    } catch (err) {
+      this.logger.warn(`Salon email settings not read: ${(err as Error).message}`);
+      return none;
+    }
+  }
+
+  /**
+   * The confirmation tells a client who can cancel online until when, if the
+   * salon wrote no policy of its own (audit 7 N15).
+   */
+  private async cancelDeadlineForEmail(appointment: any): Promise<{ minCancelHours?: number }> {
+    const settings = await this.salonEmailSettings(appointment);
+    return !settings.cancellationPolicy && settings.minCancelHours !== null
+      ? { minCancelHours: settings.minCancelHours }
+      : {};
+  }
+
+  /** The salon's own address ("Calle Mayor 1, 28013 Madrid") and phone, from the appointment's tenant row or the database. */
+  private async salonContact(appointment: any): Promise<{ address: string; phone: string }> {
+    const has = (t: any) => t && ("street" in t || "phone" in t);
+    const tenant = has(appointment?.tenant)
+      ? appointment.tenant
+      : appointment?.tenantId
+        ? await this.prisma.tenant.findUnique({
+            where: { id: appointment.tenantId },
+            select: { street: true, city: true, state: true, postalCode: true, phone: true },
+          })
+        : null;
+    if (!tenant) return { address: "", phone: "" };
+    return { address: formatLocationAddress(tenant), phone: (tenant.phone ?? "").trim() };
+  }
+
+  /** salonContact, or nothing when it cannot be read: never fails an email. */
+  private async salonContactOrNone(appointment: any): Promise<{ address: string; phone: string }> {
+    try {
+      return await this.salonContact(appointment);
+    } catch (err) {
+      this.logger.warn(`Salon address for the email not read: ${(err as Error).message}`);
+      return { address: "", phone: "" };
+    }
   }
 
   /**
@@ -1672,7 +3594,12 @@ export class AppointmentsService {
    */
   private async sendAppointmentCreatedNotifications(
     appointment: any,
+    opts: { publicBooking?: boolean } = {},
   ): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return { emailSent: false, smsSent: false };
     // Whether the client's confirmation email and SMS actually went out. The
     // chat receptionist said "te hemos enviado la confirmación" either way.
     let emailSent = false;
@@ -1708,6 +3635,13 @@ export class AppointmentsService {
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
       const salonName = appointment.tenant?.name || "KiraRoom";
+      // Waiting for the salon: the email and SMS say the request was
+      // received and the salon will confirm it; "confirmada" goes when it
+      // does (sendAppointmentConfirmedNotifications), and only then.
+      const pending = appointment.status === AppointmentStatus.pending;
+      // Booked online by the client: her notices carry "Cancelar mi cita".
+      const cancelUrl = (bookedOnline(appointment) && appointmentCancelUrl(appointment.id)) || undefined;
+      const extra = { ...(pending ? { pending: true } : {}), ...(cancelUrl ? { cancelUrl } : {}) };
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -1723,7 +3657,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
       const canSendWhatsapp =
         appointment.clientId &&
         (await this.notificationsService.shouldSendNotification(
@@ -1745,6 +3681,11 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...extra,
+            // Which location and its address, when the salon has several.
+            ...(await this.emailPlace(appointment)),
+            // No policy text: "Puedes cancelar online hasta N h antes".
+            ...(await this.cancelDeadlineForEmail(appointment)),
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -1767,8 +3708,26 @@ export class AppointmentsService {
         );
       }
 
+      // A booking from outside the salon: within the daily caps per salon
+      // and per number, or the SMS is held back (and logged without the
+      // number); the booking stands either way.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && opts.publicBooking && this.smsService.isConfigured?.() !== false) &&
+        !(
+          await reservePublicBookingSms(this.prisma as any, {
+            tenantId: appointment.tenantId,
+            appointmentId: appointment.id,
+            phone: appointment.client.phone,
+          })
+        ).allowed;
+      if (smsHeld) {
+        this.logger.warn(
+          `Confirmation SMS for public booking ${appointment.id} (salon ${appointment.tenantId}) held back: daily SMS cap or country`,
+        );
+      }
+
       // Send confirmation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (appointment.client?.phone && canSendSms && !smsHeld) {
         try {
           // Like the email: failure comes back in the result, not as a throw.
           const sent: any = await this.smsService.sendAppointmentConfirmation({
@@ -1779,6 +3738,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...extra,
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -1800,22 +3760,21 @@ export class AppointmentsService {
       }
 
       // Send confirmation WhatsApp to client: the salon's template first.
-      if (appointment.client?.phone && canSendWhatsapp) {
+      // Its texts say "confirmada": a pending booking gets it when the salon
+      // confirms it (sendAppointmentConfirmedNotifications).
+      if (appointment.client?.phone && canSendWhatsapp && pending) {
+        this.logger.log(`Confirmation WhatsApp for appointment ${appointment.id} waits for the salon to confirm it`);
+      } else if (appointment.client?.phone && canSendWhatsapp) {
         try {
-          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
-            await this.whatsappService.sendAppointmentConfirmation({
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            });
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("confirmed", appointment)) {
+            this.logger.log(`Sent confirmation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No confirmation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
+            );
           }
-          this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation WhatsApp: ${error.message}`,
@@ -1896,23 +3855,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins (users with admin role in the tenant)
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CREATED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        // Skip if this admin is also the professional (avoid duplicate)
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -1962,6 +3915,10 @@ export class AppointmentsService {
    * Notifies: Client, Professional, Admin
    */
   private async sendAppointmentCompletedNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       const dateStr = new Date(appointment.scheduledDate).toLocaleDateString(
         "es-ES",
@@ -2013,23 +3970,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_COMPLETED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        // Skip if this admin is also the professional (avoid duplicate)
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -2070,7 +4021,22 @@ export class AppointmentsService {
   private async sendAppointmentCancelledNotifications(
     appointment: any,
     reason?: string,
+    extra: { rebook?: boolean; notConfirmed?: boolean } = {},
   ) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
+    // The salon's booking page, to book again (cancelForTimeOff, and a
+    // booking the salon did not confirm in time).
+    const bookingUrl =
+      (extra.rebook || extra.notConfirmed) && appointment.tenant?.slug
+        ? rebookUrl(appointment.tenant.slug, appointment.serviceId)
+        : undefined;
+    // SMS and WhatsApp carry the link in the text.
+    const reasonWithLink = bookingUrl
+      ? `${reason ? `${reason} ` : ""}Reserva otra cita: ${bookingUrl}`
+      : reason;
     try {
       this.logger.log(
         `Sending appointment cancelled notifications for appointment ${appointment.id}`,
@@ -2109,7 +4075,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_cancelled",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
       const canSendWhatsapp =
         appointment.clientId &&
         (await this.notificationsService.shouldSendNotification(
@@ -2118,21 +4086,28 @@ export class AppointmentsService {
           "whatsapp",
         ));
 
+      // An online booking whose SMS were held back is not texted now either.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && bookedOnline(appointment)) &&
+        (await publicBookingSmsHeld(this.prisma as any, appointment.id));
+
       // Send cancellation email to client
       if (appointment.client?.email && canSendEmail) {
         try {
-          await this.emailService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientEmail: appointment.client.email,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            reason,
-          );
+          const data = {
+            clientName,
+            clientEmail: appointment.client.email,
+            serviceName,
+            professionalName,
+            date: dateStr,
+            time: appointment.scheduledTime,
+            salonName,
+            ...(await this.emailPlace(appointment)),
+            ...(bookingUrl ? { bookingUrl } : {}),
+          };
+          await (extra.notConfirmed
+            ? this.emailService.sendBookingNotConfirmed(data)
+            : this.emailService.sendAppointmentCancellation(data, reason));
           this.logger.log(
             `Sent cancellation email to client ${appointment.clientId}`,
           );
@@ -2148,20 +4123,22 @@ export class AppointmentsService {
       }
 
       // Send cancellation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (smsHeld) {
+        this.logger.warn(`Cancellation SMS for appointment ${appointment.id} held back at booking: not sent`);
+      } else if (appointment.client?.phone && canSendSms) {
         try {
-          await this.smsService.sendAppointmentCancellation(
-            {
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            },
-            reason,
-          );
+          const smsData = {
+            clientName,
+            clientPhone: appointment.client.phone,
+            serviceName,
+            professionalName,
+            date: dateStr,
+            time: appointment.scheduledTime,
+            salonName,
+          };
+          await (extra.notConfirmed
+            ? this.smsService.sendBookingNotConfirmed(smsData)
+            : this.smsService.sendAppointmentCancellation(smsData, reasonWithLink));
           this.logger.log(
             `Sent cancellation SMS to client ${appointment.clientId}`,
           );
@@ -2181,23 +4158,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("cancelled", appointment))) {
-            await this.whatsappService.sendAppointmentCancellation(
-              {
-                clientName,
-                clientPhone: appointment.client.phone,
-                serviceName,
-                professionalName,
-                date: dateStr,
-                time: appointment.scheduledTime,
-                salonName,
-              },
-              reason,
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("cancelled", appointment)) {
+            this.logger.log(`Sent cancellation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No cancellation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
             );
           }
-          this.logger.log(
-            `Sent cancellation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send cancellation WhatsApp: ${error.message}`,
@@ -2255,22 +4224,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CANCELLED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         const message = reason
           ? `La cita de ${clientName} con ${professionalName} el ${dateStr} ha sido cancelada. Motivo: ${reason}`
           : `La cita de ${clientName} con ${professionalName} el ${dateStr} ha sido cancelada.`;
@@ -2313,6 +4277,10 @@ export class AppointmentsService {
     oldDate: Date,
     oldTime: string,
   ) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment rescheduled notifications for appointment ${appointment.id}`,
@@ -2358,7 +4326,9 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
 
       // Send rescheduled email to client
       if (appointment.client?.email && canSendEmail) {
@@ -2372,6 +4342,7 @@ export class AppointmentsService {
               date: newDateStr,
               time: appointment.scheduledTime,
               salonName,
+              ...(await this.emailPlace(appointment)),
             },
             oldDateStr,
             oldTime,
@@ -2430,24 +4401,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("rescheduled", appointment))) {
-            await this.whatsappService.sendAppointmentRescheduled(
-              {
-                clientName,
-                clientPhone: appointment.client.phone,
-                serviceName,
-                professionalName,
-                date: newDateStr,
-                time: appointment.scheduledTime,
-                salonName,
-              },
-              oldDateStr,
-              oldTime,
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("rescheduled", appointment)) {
+            this.logger.log(`Sent rescheduled WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No rescheduled WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
             );
           }
-          this.logger.log(
-            `Sent rescheduled WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send rescheduled WhatsApp: ${error.message}`,
@@ -2503,22 +4465,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_RESCHEDULED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -2556,6 +4513,10 @@ export class AppointmentsService {
    * Notifies: Professional, Admin
    */
   private async sendAppointmentNoShowNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment no-show notifications for appointment ${appointment.id}`,
@@ -2599,22 +4560,17 @@ export class AppointmentsService {
         });
       }
 
-      // 2. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 2. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_NO_SHOW,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,
@@ -2650,6 +4606,10 @@ export class AppointmentsService {
    * Notifies: Client, Professional, Admin
    */
   private async sendAppointmentConfirmedNotifications(appointment: any) {
+    // The service as booked, not as the catalog has it today.
+    appointment = withBookedService(appointment);
+    // The onboarding test booking tells nobody anything (O5, D27).
+    if (isTestBooking(appointment)) return;
     try {
       this.logger.log(
         `Sending appointment confirmed notifications for appointment ${appointment.id}`,
@@ -2673,6 +4633,8 @@ export class AppointmentsService {
         : "Profesional";
       const serviceName = appointment.service?.name || "Servicio";
       const salonName = appointment.tenant?.name || "KiraRoom";
+      // Booked online by the client: "Cancelar mi cita" again.
+      const cancelUrl = (bookedOnline(appointment) && appointmentCancelUrl(appointment.id)) || undefined;
 
       // Check client notification preferences before sending
       const canSendEmail =
@@ -2688,7 +4650,14 @@ export class AppointmentsService {
           appointment.clientId,
           "appointment_confirmed",
           "sms",
-        ));
+        )) &&
+        // Only on a plan with SMS notices (audit 7 N8); the email still goes.
+        (await salonHasSmsNotices(this.featureFlags, appointment.tenantId, this.logger));
+      // An online booking whose SMS were held back (daily caps, a number
+      // outside the EU/EEA) is not texted now either.
+      const smsHeld =
+        !!(appointment.client?.phone && canSendSms && bookedOnline(appointment)) &&
+        (await publicBookingSmsHeld(this.prisma as any, appointment.id));
 
       // Send confirmation email to client
       if (appointment.client?.email && canSendEmail) {
@@ -2701,6 +4670,11 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...(cancelUrl ? { cancelUrl } : {}),
+            // Which location and its address, when the salon has several.
+            ...(await this.emailPlace(appointment)),
+            // No policy text: "Puedes cancelar online hasta N h antes".
+            ...(await this.cancelDeadlineForEmail(appointment)),
           });
           this.logger.log(
             `Sent confirmation email to client ${appointment.clientId}`,
@@ -2717,7 +4691,9 @@ export class AppointmentsService {
       }
 
       // Send confirmation SMS to client
-      if (appointment.client?.phone && canSendSms) {
+      if (smsHeld) {
+        this.logger.warn(`Confirmation SMS for appointment ${appointment.id} held back at booking: not sent`);
+      } else if (appointment.client?.phone && canSendSms) {
         try {
           // Like the email: failure comes back in the result, not as a throw.
           const sent: any = await this.smsService.sendAppointmentConfirmation({
@@ -2728,6 +4704,7 @@ export class AppointmentsService {
             date: dateStr,
             time: appointment.scheduledTime,
             salonName,
+            ...(cancelUrl ? { cancelUrl } : {}),
           });
           if (sent?.success === false) {
             this.logger.warn(
@@ -2759,20 +4736,15 @@ export class AppointmentsService {
         try {
           // The salon's template first (the free text is refused outside
           // WhatsApp's 24-hour window).
-          if (!(await this.sendWhatsAppViaSalon("confirmed", appointment))) {
-            await this.whatsappService.sendAppointmentConfirmation({
-              clientName,
-              clientPhone: appointment.client.phone,
-              serviceName,
-              professionalName,
-              date: dateStr,
-              time: appointment.scheduledTime,
-              salonName,
-            });
+          // Only from the salon's own number with its approved template: the
+          // platform's Twilio WhatsApp sender is gone (channels audit M7).
+          if (await this.sendWhatsAppViaSalon("confirmed", appointment)) {
+            this.logger.log(`Sent confirmation WhatsApp to client ${appointment.clientId}`);
+          } else {
+            this.logger.log(
+              `No confirmation WhatsApp for client ${appointment.clientId}: the salon has no WhatsApp connected or the template is not approved`,
+            );
           }
-          this.logger.log(
-            `Sent confirmation WhatsApp to client ${appointment.clientId}`,
-          );
         } catch (error) {
           this.logger.error(
             `Failed to send confirmation WhatsApp: ${error.message}`,
@@ -2824,22 +4796,17 @@ export class AppointmentsService {
         });
       }
 
-      // 3. Notify admins
-      const admins = await this.prisma.user.findMany({
-        where: {
-          tenantId: appointment.tenantId,
-          role: "admin",
-        },
-      });
+      // 3. Notify the owner and the admins (not the professional again;
+      // per-user in-app preferences respected): salon-team-recipients.ts
+      const admins = await salonTeamRecipients(
+        this.prisma as any,
+        this.notificationsService,
+        appointment.tenantId,
+        NotificationType.APPOINTMENT_CONFIRMED,
+        appointment.professional?.userId,
+      );
 
       for (const admin of admins) {
-        if (
-          appointment.professional &&
-          admin.id === appointment.professional.userId
-        ) {
-          continue;
-        }
-
         await this.notificationsService.create({
           tenantId: appointment.tenantId,
           userId: admin.id,

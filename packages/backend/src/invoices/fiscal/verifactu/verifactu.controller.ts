@@ -1,5 +1,5 @@
-import { Controller, Get, Req } from "@nestjs/common";
-import { VerifactuRecordStatus } from "@prisma/client";
+import { Controller, ForbiddenException, Get, Req } from "@nestjs/common";
+import { UserRole, VerifactuRecordStatus } from "@prisma/client";
 import { Public } from "../../../auth/decorators/public.decorator";
 import { Roles, SALON_TEAM } from "../../../auth/decorators/roles.decorator";
 import { PrismaService } from "../../../common/prisma/prisma.service";
@@ -20,7 +20,8 @@ export class VerifactuController {
   @Get("status")
   @Roles(...SALON_TEAM)
   async status(@Req() req: any) {
-    const tenantId: string = req.user.tenantId;
+    const tenantId: string | undefined = req.user?.tenantId;
+    if (!tenantId) throw new ForbiddenException();
     const [tenant, chain, counts, certificate] = await Promise.all([
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { fiscalMode: true } }),
       this.prisma.verifactuChain.findUnique({ where: { tenantId } }),
@@ -43,7 +44,9 @@ export class VerifactuController {
       incidentSince: chain?.incidentSince ?? null,
       lastError: chain?.lastError ?? null,
       nextSendAt: chain?.nextSendAt ?? null,
-      certificate: certificate ?? null,
+      // Its subject names a person and their NIF: the owner's, like the
+      // certificates list. The team only needs the queue (art. 16.4).
+      certificate: req.user.role === UserRole.owner ? (certificate ?? null) : null,
       platformCertificate: !!process.env.VERIFACTU_PLATFORM_P12,
     };
   }

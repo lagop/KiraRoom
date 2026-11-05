@@ -4,6 +4,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/use-toast";
 import apiClient, { ChannelsConfig, ReceptionistStats } from "@/lib/api";
 import {
   AlertCircle,
@@ -70,7 +72,17 @@ const META_RESULT_KEYS: Record<string, string> = {
   no_pages: "billing.channels.metaResultNoPages",
   denied: "billing.channels.metaResultDenied",
   error: "billing.channels.metaResultError",
+  // Channels audit M14: a failed login says why.
+  connected_no_instagram_permission: "billing.channels.metaResultNoInstagramPermission",
+  instagram_taken: "billing.channels.metaResultInstagramTaken",
+  page_taken: "billing.channels.metaResultPageTaken",
+  subscribe_failed: "billing.channels.metaResultSubscribeFailed",
+  missing_permissions: "billing.channels.metaResultMissingPermissions",
+  session: "billing.channels.metaResultSession",
 };
+
+/** Outcomes where something was connected (shown in green). */
+const META_RESULT_OK = new Set(["connected", "connected_no_instagram_permission", "instagram_taken"]);
 
 // useSearchParams() needs a Suspense boundary for the page to prerender.
 export default function ChannelsSettingsPage() {
@@ -83,6 +95,7 @@ export default function ChannelsSettingsPage() {
 
 function ChannelsSettingsContent() {
   const t = useTranslations();
+  const { toast } = useToast();
   const searchParams = useSearchParams();
   const metaResult = searchParams?.get("meta") ?? null;
   const [saving, setSaving] = useState(false);
@@ -93,6 +106,8 @@ function ChannelsSettingsContent() {
   const [whatsappConnected, setWhatsappConnected] = useState(false);
   const [metaRedirecting, setMetaRedirecting] = useState(false);
   const [pickerDismissed, setPickerDismissed] = useState(false);
+  // The channel about to be disconnected, confirmed in the panel's dialog.
+  const [pendingDisconnect, setPendingDisconnect] = useState<"meta" | "telegram" | null>(null);
 
   const tRef = useRef(t);
   tRef.current = t;
@@ -170,8 +185,9 @@ function ChannelsSettingsContent() {
     }
   };
 
-  const disconnect = async (which: "meta" | "telegram") => {
-    if (!window.confirm(t("billing.channels.disconnectConfirm"))) return;
+  const performDisconnect = async () => {
+    const which = pendingDisconnect;
+    if (!which) return;
     setSaving(true);
     setError(null);
     try {
@@ -182,6 +198,7 @@ function ChannelsSettingsContent() {
       setError(err?.message ?? t("billing.channels.errorSaving"));
     } finally {
       setSaving(false);
+      setPendingDisconnect(null);
     }
   };
 
@@ -215,7 +232,7 @@ function ChannelsSettingsContent() {
         <div
           className={
             "rounded-md border p-3 text-sm inline-flex items-start gap-2 " +
-            (metaResult === "connected"
+            (META_RESULT_OK.has(metaResult ?? "")
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-amber-200 bg-amber-50 text-amber-800")
           }
@@ -303,8 +320,12 @@ function ChannelsSettingsContent() {
                 {metaConnected && !meta?.instagramBusinessAccountId && (
                   <p className="text-xs text-gray-500">{t("billing.channels.metaNoInstagram")}</p>
                 )}
-                {meta?.needsReconnect && (
-                  <p className="text-xs text-amber-700">{t("billing.channels.reconnectNeeded")}</p>
+                {meta?.accessLost ? (
+                  <p className="text-xs text-red-700">{t("billing.channels.metaAccessLost")}</p>
+                ) : (
+                  meta?.needsReconnect && (
+                    <p className="text-xs text-amber-700">{t("billing.channels.reconnectNeeded")}</p>
+                  )
                 )}
                 {!metaConnected && metaAvailable && (
                   <p className="text-xs text-gray-500">{t("billing.channels.metaHowTo")}</p>
@@ -317,7 +338,7 @@ function ChannelsSettingsContent() {
             action={
               metaConnected ? (
                 <button
-                  onClick={() => disconnect("meta")}
+                  onClick={() => setPendingDisconnect("meta")}
                   disabled={saving}
                   className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
@@ -356,8 +377,12 @@ function ChannelsSettingsContent() {
                     {t("billing.channels.telegramConnectedAs", { username: telegram.botUsername })}
                   </p>
                 )}
-                {telegram?.needsReconnect && (
-                  <p className="text-xs text-amber-700">{t("billing.channels.reconnectNeeded")}</p>
+                {telegram?.accessLost ? (
+                  <p className="text-xs text-red-700">{t("billing.channels.telegramAccessLost")}</p>
+                ) : (
+                  telegram?.needsReconnect && (
+                    <p className="text-xs text-amber-700">{t("billing.channels.reconnectNeeded")}</p>
+                  )
                 )}
                 {!telegramAvailable && (
                   <p className="text-xs text-amber-700">{t("billing.channels.telegramUnavailable")}</p>
@@ -367,7 +392,7 @@ function ChannelsSettingsContent() {
             action={
               telegramConnected ? (
                 <button
-                  onClick={() => disconnect("telegram")}
+                  onClick={() => setPendingDisconnect("telegram")}
                   disabled={saving}
                   className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
@@ -403,7 +428,11 @@ function ChannelsSettingsContent() {
       {state.kind === "ready" && config.metaPagesPending && !pickerDismissed && (
         <MetaPagePicker
           onClose={() => setPickerDismissed(true)}
-          onDone={() => load()}
+          onDone={(notice) => {
+            // Messenger connected, but the Page's Instagram belongs to another salon.
+            if (notice) toast({ title: t("billing.channels.metaResultInstagramTaken"), description: notice });
+            load();
+          }}
         />
       )}
 
@@ -416,6 +445,17 @@ function ChannelsSettingsContent() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!pendingDisconnect}
+        title={t("billing.channels.disconnectConfirm")}
+        confirmLabel={t("billing.channels.disconnect")}
+        cancelLabel={t("billing.channels.cancel")}
+        destructive
+        loading={saving}
+        onCancel={() => setPendingDisconnect(null)}
+        onConfirm={performDisconnect}
+      />
     </div>
   );
 }
@@ -505,7 +545,7 @@ function ChannelCard({
 // MetaPagePicker — choose the salon's Page when Facebook Login returned several.
 // ============================================================================
 
-function MetaPagePicker({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+function MetaPagePicker({ onClose, onDone }: { onClose: () => void; onDone: (notice?: string) => void }) {
   const t = useTranslations();
   const [pages, setPages] = useState<Array<{ id: string; name: string; instagramUsername?: string }> | null>(null);
   const [selected, setSelected] = useState<string>("");
@@ -526,8 +566,8 @@ function MetaPagePicker({ onClose, onDone }: { onClose: () => void; onDone: () =
     setSaving(true);
     setError(null);
     try {
-      await apiClient.selectMetaChannelPage(selected);
-      onDone();
+      const res = await apiClient.selectMetaChannelPage(selected);
+      onDone(res?.instagramTaken ? res.message : undefined);
     } catch (err: any) {
       setError(err?.message ?? t("billing.channels.metaResultError"));
     } finally {

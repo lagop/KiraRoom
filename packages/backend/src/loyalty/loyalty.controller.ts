@@ -11,7 +11,6 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles, SALON_MANAGERS, SALON_TEAM } from "../auth/decorators/roles.decorator";
@@ -25,6 +24,7 @@ import {
   LoyaltyRewardDto,
   LoyaltyTierDto,
   UpdateLoyaltyRewardDto,
+  UpdateLoyaltyTierDto,
 } from "./loyalty.dto";
 
 /**
@@ -78,14 +78,29 @@ export class LoyaltyController {
     return this.loyalty.createTier(req.user.tenantId, dto);
   }
 
+  /** Members move up to what the level now reaches; levels never go down. */
+  @Put("tiers/:id")
+  @Roles(...SALON_MANAGERS)
+  updateTier(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLoyaltyTierDto,
+  ) {
+    return this.loyalty.updateTier(req.user.tenantId, id, dto);
+  }
+
   @Delete("tiers/:id")
   @Roles(...SALON_MANAGERS)
   deleteTier(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
     return this.loyalty.deleteTier(req.user.tenantId, id);
   }
 
+  /**
+   * The whole membership list, with email and phone: the Fidelización
+   * screen (managers). For staff it was the salon's client base in one call.
+   */
   @Get("members")
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   listMembers(@Req() req: any, @Query("search") search?: string) {
     return this.loyalty.listMembers(req.user.tenantId, search);
   }
@@ -112,28 +127,5 @@ export class LoyaltyController {
   @Roles(...SALON_TEAM)
   clientSummary(@Req() req: any, @Param("clientId", ParseUUIDPipe) clientId: string) {
     return this.loyalty.clientSummary(req.user.tenantId, clientId);
-  }
-}
-
-/**
- * The client's side, from the client portal. Not behind @Feature: a salon
- * without the programme answers { enabled: false } instead of a 403 the
- * portal would have to interpret.
- */
-@Controller("loyalty/me")
-@UseGuards(JwtAuthGuard, RolesGuard)
-export class LoyaltyPortalController {
-  constructor(private readonly loyalty: LoyaltyService) {}
-
-  @Get()
-  @Roles(UserRole.client)
-  mine(@Req() req: any) {
-    return this.loyalty.portalView(req.user.tenantId, req.user.id);
-  }
-
-  @Post("join")
-  @Roles(UserRole.client)
-  join(@Req() req: any) {
-    return this.loyalty.portalJoin(req.user.tenantId, req.user.id);
   }
 }

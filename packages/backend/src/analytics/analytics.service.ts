@@ -1,30 +1,45 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import {
   AnalyticsAppointment,
+  AppointmentRates,
   Occupancy,
+  ProfessionalRef,
   ProfessionalRow,
   STATUS_DISPLAY,
   STATUS_ORDER,
   SalonPeriod,
+  TillServiceLine,
   addDays,
-  appointmentDay,
   clientRetention,
+  closedRates,
   dailyMetrics,
   instantRange,
   lastMonthsPeriod,
+  monthlyClosedRates,
   monthlyRevenue,
   monthlyStatusCounts,
+  newClientCount,
   occupancy,
   percentChange,
-  previousPeriod,
+  PeriodWindow,
   salonToday,
   scheduledDateRange,
   servicePopularity,
   summarize,
   topProfessionals,
   topServices,
+  windowPeriods,
 } from "./analytics-metrics";
+import {
+  LocationScope,
+  appointmentLocationWhere,
+  locationScopeOf,
+  tillLocationWhere,
+} from "./analytics-location";
+import { timeOffBetween } from "../time-off/time-off-query";
+import { VISIT_ROW_ORDER, VISIT_ROW_SELECT } from "../appointments/visit-totals";
+import { REFUNDABLE_KINDS, centsLeft } from "../payments/refund-lines";
 
 /**
  * Every figure here is computed from the salon's own rows; the definitions
@@ -34,19 +49,29 @@ import {
  */
 
 export interface DashboardStats {
-  /** Paid, non-cancelled appointments in the period, in cents. */
+  /**
+   * What the period's appointments brought in, in cents, VAT included
+   * (revenueCents: paid visits less loyalty rewards, plus money kept on
+   * cancelled ones). Till sales without an appointment are `tillSales`.
+   */
   totalRevenue: number;
+  /** totalRevenue + tillSales.totalCents: appointments and till sales together, cents. */
+  totalRevenueWithTill: number;
   /** Appointments booked in the period, cancelled ones excluded. */
   totalAppointments: number;
   paidAppointments: number;
+  /** Clients whose first completed visit is in the period (newClientCount), not records created in it. */
   newClients: number;
-  /** totalRevenue / paidAppointments, in cents. */
+  /** Revenue of the paid visits / paidAppointments (money kept on cancelled ones aside), in cents. */
   avgOrderValue: number;
-  /** Changes against the previous comparable period, in percent. */
-  revenueChange: number;
-  appointmentsChange: number;
-  clientsChange: number;
-  orderValueChange: number;
+  /**
+   * Changes against the previous comparable period, in percent; null when
+   * the previous figure is 0 (nothing to compare with, see percentChange).
+   */
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
 }
 
 export interface RevenueDataPoint {
@@ -71,9 +96,20 @@ export interface AppointmentStatusData {
 export interface AnalyticsOverview {
   period: SalonPeriod;
   previousPeriod: SalonPeriod;
+  /** The named range asked for (`range`), null when asked by `months`. */
+  range: string | null;
+  /**
+   * The location the figures are cut to (Empresa, `locationId`), null for the
+   * whole salon. With one, tillSales holds only the services its
+   * professionals did (products have no location).
+   */
+  location: { id: string; name: string } | null;
   timezone: string;
   currencyUnit: "cents";
   stats: DashboardStats;
+  /** Completion, cancellation and no-show rates of the period up to yesterday (closedRates). */
+  rates: AppointmentRates;
+  tillSales: TillSalesSummary;
   occupancy: Occupancy;
   revenueData: RevenueDataPoint[];
   servicePopularity: ServicePopularity[];
@@ -83,8 +119,25 @@ export interface AnalyticsOverview {
   dailyMetrics: { date: string; appointments: number; revenue: number }[];
 }
 
+/**
+ * What the till sold without an appointment in the period (S6): products
+ * and services, money cents with VAT included, net of what was given back.
+ * Visits charged at the till are the appointments' revenue, and gift cards
+ * sold are not revenue until they pay for something.
+ */
+export interface TillSalesSummary {
+  totalCents: number;
+  servicesCents: number;
+  productsCents: number;
+  /** Till sales with at least one such line left after refunds. */
+  sales: number;
+  /** Given back of those lines so far, cents. */
+  refundedCents: number;
+}
+
 export interface ClientInsights {
   period: SalonPeriod;
+  /** Clients whose first completed visit is in the period (newClientCount). */
   newClients: number;
   /** Distinct clients with at least one completed appointment in the period. */
   clientsServed: number;
@@ -106,22 +159,35 @@ const STATUS_COLORS: Record<string, string> = {
 
 const DEFAULT_TIMEZONE = "Europe/Madrid";
 
-const APPOINTMENT_FIELDS = {
+const PROFESSIONAL_REF_SELECT = { id: true, firstName: true, lastName: true, profileImage: true } as const;
+
+/**
+ * What every metric needs of an appointment (AnalyticsAppointment). Shared
+ * with the multi-location report, so both read the same definitions off the
+ * same columns.
+ */
+export const ANALYTICS_APPOINTMENT_SELECT = {
   status: true,
   paymentStatus: true,
   amountPaid: true,
-  totalAmount: true,
-  price: true,
+  // Its loyalty reward (discount.loyalty.moneyCents) is not revenue.
+  discount: true,
   scheduledDate: true,
+  scheduledTime: true,
   duration: true,
+  // A multi-service visit's rows: revenue and time per service and professional.
+  services: {
+    select: { ...VISIT_ROW_SELECT, professional: { select: PROFESSIONAL_REF_SELECT } },
+    orderBy: VISIT_ROW_ORDER as any,
+  },
   clientId: true,
   professionalId: true,
   serviceId: true,
   locationId: true,
+  // The name it was booked under (appointment-snapshot.ts).
+  serviceName: true,
   service: { select: { name: true } },
-  professional: {
-    select: { id: true, firstName: true, lastName: true, profileImage: true },
-  },
+  professional: { select: PROFESSIONAL_REF_SELECT },
 } as const;
 
 @Injectable()
@@ -142,79 +208,198 @@ export class AnalyticsService {
     return { today: salonToday(timezone), timezone };
   }
 
-  /** Appointments scheduled in the period, with what every metric needs. */
-  async loadAppointments(
-    tenantId: string,
-    period: SalonPeriod,
-    professionalId?: string | null,
-  ): Promise<AnalyticsAppointment[]> {
+  /**
+   * The scope of one of the salon's locations (Empresa's location filter):
+   * 404 when the location is not this salon's.
+   */
+  async locationScope(tenantId: string, locationId: string): Promise<LocationScope> {
+    const [location, active, links] = await Promise.all([
+      this.prisma.location.findFirst({ where: { id: locationId, tenantId }, select: { id: true, name: true } }),
+      this.prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true } }),
+      this.prisma.professionalLocation.findMany({
+        where: { location: { tenantId } },
+        select: { professionalId: true, locationId: true, isPrimary: true },
+      }),
+    ]);
+    if (!location) throw new NotFoundException("Local no encontrado");
+    return locationScopeOf(location, links, active.map((l) => l.id));
+  }
+
+  /** Appointments scheduled in the period (of the location, with a scope), with what every metric needs. */
+  async loadAppointments(tenantId: string, period: SalonPeriod, scope?: LocationScope): Promise<AnalyticsAppointment[]> {
     const rows = await this.prisma.appointment.findMany({
-      where: {
-        tenantId,
-        scheduledDate: scheduledDateRange(period),
-        ...(professionalId ? { professionalId } : {}),
-      },
-      select: APPOINTMENT_FIELDS,
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
+      select: ANALYTICS_APPOINTMENT_SELECT,
     });
     return rows as unknown as AnalyticsAppointment[];
   }
 
-  private async countNewClients(
-    tenantId: string,
-    period: SalonPeriod,
-    timezone: string,
-    professionalId?: string | null,
-  ): Promise<number> {
-    return this.prisma.client.count({
+  /** Of these clients, those with a completed appointment before `day`. */
+  private async servedBefore(tenantId: string, clientIds: string[], day: string): Promise<Set<string>> {
+    if (clientIds.length === 0) return new Set();
+    const rows = await this.prisma.appointment.findMany({
       where: {
         tenantId,
-        createdAt: instantRange(period, timezone),
-        // For Staff: only clients who have booked with them.
-        ...(professionalId ? { appointments: { some: { professionalId } } } : {}),
+        isTest: false,
+        status: "completed",
+        clientId: { in: clientIds },
+        scheduledDate: { lt: scheduledDateRange({ start: day, end: day }).gte },
       },
+      select: { clientId: true },
+      distinct: ["clientId"],
     });
+    return new Set(rows.map((r) => r.clientId));
   }
 
-  private async activeProfessionals(tenantId: string, professionalId?: string | null) {
+  /** New clients of the period (newClientCount): first completed visit in it. */
+  private async countNewClients(
+    tenantId: string,
+    rows: ReadonlyArray<AnalyticsAppointment>,
+    period: SalonPeriod,
+  ): Promise<number> {
+    const served = [
+      ...new Set(rows.filter((a) => a.status === "completed" && a.clientId).map((a) => a.clientId as string)),
+    ];
+    return newClientCount(served, await this.servedBefore(tenantId, served, period.start));
+  }
+
+  /** Active professionals (those working at the location, with a scope): occupancy's working time. */
+  private async activeProfessionals(tenantId: string, scope?: LocationScope) {
     return this.prisma.professional.findMany({
-      where: { tenantId, isActive: true, ...(professionalId ? { id: professionalId } : {}) },
+      where: { tenantId, isActive: true, ...(scope ? { id: { in: scope.professionalIds } } : {}) },
       select: { id: true, workingHours: true },
     });
   }
 
   /**
+   * "Ocupación de hoy" on Inicio (D30): the overview's occupancy over the
+   * salon's today alone -- booked time of today's appointments over the
+   * professionals' working time today, less approved time off. With a
+   * scope, that location's appointments and professionals.
+   */
+  async getTodayOccupancy(tenantId: string, scope?: LocationScope): Promise<Occupancy> {
+    const { today, timezone } = await this.todayFor(tenantId);
+    const period = { start: today, end: today };
+    const [rows, professionals, timeOff] = await Promise.all([
+      this.loadAppointments(tenantId, period, scope),
+      this.activeProfessionals(tenantId, scope),
+      timeOffBetween(this.prisma as any, tenantId, today, today),
+    ]);
+    return occupancy(professionals, rows, period, timeOff, timezone);
+  }
+
+  /**
+   * The lines the till sold without an appointment in the period (salon
+   * days, by when they were sold): products and services
+   * (REFUNDABLE_KINDS, what the till itself sells), each with what is left
+   * of it after refunds (centsLeft). A visit charged at the till is a line
+   * of kind "appointment" and is the appointment's revenue; gift cards sold
+   * are counted when they pay for something. With a location, only the
+   * services its professionals did (tillLocationWhere).
+   */
+  private async tillLines(tenantId: string, period: SalonPeriod, timezone: string, scope?: LocationScope) {
+    const lines = await this.prisma.posSaleLine.findMany({
+      where: {
+        tenantId,
+        ...tillLocationWhere(scope, REFUNDABLE_KINDS),
+        appointmentId: null,
+        createdAt: instantRange(period, timezone),
+      },
+      select: {
+        id: true,
+        saleId: true,
+        kind: true,
+        professionalId: true,
+        description: true,
+        quantity: true,
+        totalCents: true,
+        refundedQuantity: true,
+        refundedCents: true,
+      },
+    });
+    return lines.map((l) => ({ ...l, keptCents: centsLeft(l) }));
+  }
+
+  private tillSummary(lines: Array<{ saleId: string; kind: string; keptCents: number; refundedCents: number }>): TillSalesSummary {
+    const summary: TillSalesSummary = { totalCents: 0, servicesCents: 0, productsCents: 0, sales: 0, refundedCents: 0 };
+    const sales = new Set<string>();
+    for (const l of lines) {
+      summary.refundedCents += l.refundedCents;
+      if (l.keptCents <= 0) continue;
+      sales.add(l.saleId);
+      summary.totalCents += l.keptCents;
+      if (l.kind === "service") summary.servicesCents += l.keptCents;
+      else summary.productsCents += l.keptCents;
+    }
+    summary.sales = sales.size;
+    return summary;
+  }
+
+  /** Professionals named on till lines, for those with no appointment in the period. */
+  private async directory(tenantId: string, ids: string[]): Promise<Map<string, ProfessionalRef>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.prisma.professional.findMany({
+      where: { tenantId, id: { in: ids } },
+      select: PROFESSIONAL_REF_SELECT,
+    });
+    return new Map(rows.map((p) => [p.id, p]));
+  }
+
+  /** Per-professional figures (topProfessionals) with the till's services added (D6). */
+  private async professionalRows(
+    tenantId: string,
+    rows: ReadonlyArray<AnalyticsAppointment>,
+    tillServices: TillServiceLine[],
+    today: string,
+    limit: number,
+  ): Promise<ProfessionalRow[]> {
+    const ids = [
+      ...new Set(tillServices.filter((l) => l.keptCents > 0).map((l) => l.professionalId).filter((id): id is string => !!id)),
+    ];
+    const directory = await this.directory(tenantId, ids);
+    return topProfessionals(rows, limit, { today, tillServices, directory });
+  }
+
+  /**
    * The overview for the last `months` calendar months of the salon (this
    * month so far included), compared with the same days `months` months
-   * earlier.
+   * earlier; or for a named range (`{ range, maxMonths }`, compared as
+   * comparisonPeriod says). With a scope, only that location's appointments,
+   * professionals and till services.
    */
-  async getOverview(
-    tenantId: string,
-    months: number = 6,
-    professionalId?: string | null,
-  ): Promise<AnalyticsOverview> {
+  async getOverview(tenantId: string, window: PeriodWindow = 6, scope?: LocationScope): Promise<AnalyticsOverview> {
     const { today, timezone } = await this.todayFor(tenantId);
-    const period = lastMonthsPeriod(today, months);
-    const previous = previousPeriod(period, months);
+    const { period, previous } = windowPeriods(window, today);
 
-    const [current, before, newClients, previousNewClients, professionals] =
-      await Promise.all([
-        this.loadAppointments(tenantId, period, professionalId),
-        this.loadAppointments(tenantId, previous, professionalId),
-        this.countNewClients(tenantId, period, timezone, professionalId),
-        this.countNewClients(tenantId, previous, timezone, professionalId),
-        this.activeProfessionals(tenantId, professionalId),
-      ]);
+    const [current, before, professionals, timeOff, till] = await Promise.all([
+      this.loadAppointments(tenantId, period, scope),
+      this.loadAppointments(tenantId, previous, scope),
+      this.activeProfessionals(tenantId, scope),
+      // Closures and absences come out of working time (see occupancy).
+      timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
+      this.tillLines(tenantId, period, timezone, scope),
+    ]);
+    const tillServices = till.filter((l) => l.kind === "service");
+    const [newClients, previousNewClients, professionalRows] = await Promise.all([
+      this.countNewClients(tenantId, current, period),
+      this.countNewClients(tenantId, before, previous),
+      this.professionalRows(tenantId, current, tillServices, today, 5),
+    ]);
 
     const now = summarize(current);
     const then = summarize(before);
+    const tillSales = this.tillSummary(till);
 
     return {
       period,
       previousPeriod: previous,
+      range: typeof window === "number" ? null : window.range,
+      location: scope ? { id: scope.locationId, name: scope.name } : null,
       timezone,
       currencyUnit: "cents",
       stats: {
         totalRevenue: now.revenue,
+        totalRevenueWithTill: now.revenue + tillSales.totalCents,
         totalAppointments: now.appointments,
         paidAppointments: now.paidAppointments,
         newClients,
@@ -224,12 +409,14 @@ export class AnalyticsService {
         clientsChange: percentChange(newClients, previousNewClients),
         orderValueChange: percentChange(now.avgTicket, then.avgTicket),
       },
-      occupancy: occupancy(professionals, current, period),
+      rates: closedRates(current, today),
+      tillSales,
+      occupancy: occupancy(professionals, current, period, timeOff, timezone),
       revenueData: monthlyRevenue(current, period),
       servicePopularity: servicePopularity(current, 10),
       appointmentStatus: this.statusBreakdown(current),
       topServices: topServices(current, 5),
-      topProfessionals: topProfessionals(current, 5),
+      topProfessionals: professionalRows,
       dailyMetrics: dailyMetrics(current, period),
     };
   }
@@ -248,168 +435,131 @@ export class AnalyticsService {
   }
 
   /** Status breakdown of the last `days` salon days, today included. */
-  async getAppointmentStatusByDays(
-    tenantId: string,
-    days: number,
-  ): Promise<AppointmentStatusData[]> {
+  async getAppointmentStatusByDays(tenantId: string, days: number, scope?: LocationScope): Promise<AppointmentStatusData[]> {
     const { today } = await this.todayFor(tenantId);
     const n = Math.max(1, Math.min(366, Math.floor(days) || 7));
     const period = { start: addDays(today, -(n - 1)), end: today };
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true },
     });
     return this.statusBreakdown(rows);
   }
 
-  /** One status, month by month, over the last `months` salon months. */
-  async getAppointmentStatusEvolution(
+  /**
+   * The completion, cancellation and no-show rates (closedRates: closed
+   * appointments up to yesterday), the one definition the page uses. Over
+   * the last `days` salon days, or the last `months` salon months with one
+   * entry per month as well.
+   */
+  async getAppointmentRates(
     tenantId: string,
-    status: string,
-    months: number = 6,
-  ): Promise<{ period: string; count: number }[]> {
-    const display =
-      STATUS_DISPLAY[status] ??
-      Object.values(STATUS_DISPLAY).find((d) => d === status) ??
-      status;
-    const evolution = await this.getAppointmentStatusesEvolution(tenantId, months);
-    return evolution.map((m) => ({
-      period: m.period,
-      count: Number(m[display] ?? 0),
-    }));
+    window: { days?: number; months?: number },
+    scope?: LocationScope,
+  ): Promise<{ period: SalonPeriod } & AppointmentRates & { byMonth?: Array<{ month: string } & AppointmentRates> }> {
+    const { today } = await this.todayFor(tenantId);
+    let period: SalonPeriod;
+    if (window.months) {
+      period = lastMonthsPeriod(today, window.months);
+    } else {
+      const n = Math.max(1, Math.min(366, Math.floor(window.days ?? 7) || 7));
+      period = { start: addDays(today, -(n - 1)), end: today };
+    }
+    const rows = await this.prisma.appointment.findMany({
+      where: {
+        tenantId,
+        isTest: false,
+        scheduledDate: scheduledDateRange(period),
+        status: { in: ["completed", "cancelled", "no_show"] },
+        ...appointmentLocationWhere(scope),
+      },
+      select: { status: true, scheduledDate: true },
+    });
+    // `period` is the window asked for; `through` (yesterday) is the last day counted.
+    return {
+      period,
+      ...closedRates(rows, today),
+      ...(window.months ? { byMonth: monthlyClosedRates(rows, period, today) } : {}),
+    };
   }
 
   /** Every status, month by month (stacked chart data), months as "YYYY-MM". */
   async getAppointmentStatusesEvolution(
     tenantId: string,
     months: number = 6,
+    scope?: LocationScope,
   ): Promise<Array<{ period: string } & Record<string, number | string>>> {
     const { today } = await this.todayFor(tenantId);
     const period = lastMonthsPeriod(today, months);
     const rows = await this.prisma.appointment.findMany({
-      where: { tenantId, scheduledDate: scheduledDateRange(period) },
+      where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period), ...appointmentLocationWhere(scope) },
       select: { status: true, scheduledDate: true },
     });
     return monthlyStatusCounts(rows, period);
   }
 
+  /**
+   * Per-professional performance over the period (topProfessionals): their
+   * share of the appointments' revenue plus the services they did that the
+   * till sold without an appointment, and how their appointments closed.
+   */
   async getTopProfessionals(
     tenantId: string,
     period: SalonPeriod,
     limit: number,
-    professionalId?: string | null,
+    scope?: LocationScope,
   ): Promise<ProfessionalRow[]> {
-    const rows = await this.loadAppointments(tenantId, period, professionalId);
-    return topProfessionals(rows, limit);
-  }
-
-  /** Revenue report for explicit salon days (both inclusive). Cents. */
-  async getRevenueReport(
-    tenantId: string,
-    period: SalonPeriod,
-  ): Promise<{
-    period: SalonPeriod;
-    total: number;
-    byDay: { date: string; revenue: number }[];
-    byService: { service: string; revenue: number }[];
-    byProfessional: { professional: string; revenue: number }[];
-  }> {
-    const rows = await this.loadAppointments(tenantId, period);
-    return {
-      period,
-      total: summarize(rows).revenue,
-      byDay: dailyMetrics(rows, period).map((d) => ({ date: d.date, revenue: d.revenue })),
-      byService: topServices(rows, 100).map((s) => ({ service: s.name, revenue: s.revenue })),
-      byProfessional: topProfessionals(rows, 100).map((p) => ({
-        professional: p.name,
-        revenue: p.revenue,
-      })),
-    };
-  }
-
-  async getAppointmentsReport(
-    tenantId: string,
-    period: SalonPeriod,
-  ): Promise<{
-    period: SalonPeriod;
-    total: number;
-    completed: number;
-    cancelled: number;
-    noShow: number;
-    byDay: { date: string; count: number }[];
-    byProfessional: { professional: string; count: number }[];
-  }> {
-    const rows = await this.loadAppointments(tenantId, period);
-    const byProfMap = new Map<string, number>();
-    for (const a of rows) {
-      const name = a.professional
-        ? `${a.professional.firstName} ${a.professional.lastName}`.trim()
-        : "Sin profesional";
-      byProfMap.set(name, (byProfMap.get(name) ?? 0) + 1);
-    }
-    const byDayMap = new Map<string, number>();
-    for (const a of rows) {
-      const day = appointmentDay(a.scheduledDate);
-      byDayMap.set(day, (byDayMap.get(day) ?? 0) + 1);
-    }
-    return {
-      period,
-      total: rows.length,
-      completed: rows.filter((a) => a.status === "completed").length,
-      cancelled: rows.filter((a) => a.status === "cancelled").length,
-      noShow: rows.filter((a) => a.status === "no_show").length,
-      byDay: [...byDayMap.entries()]
-        .map(([date, count]) => ({ date, count }))
-        .sort((a, b) => a.date.localeCompare(b.date)),
-      byProfessional: [...byProfMap.entries()]
-        .map(([professional, count]) => ({ professional, count }))
-        .sort((a, b) => b.count - a.count),
-    };
+    const { today, timezone } = await this.todayFor(tenantId);
+    const [rows, till] = await Promise.all([
+      this.loadAppointments(tenantId, period, scope),
+      this.tillLines(tenantId, period, timezone, scope),
+    ]);
+    return this.professionalRows(
+      tenantId,
+      rows,
+      till.filter((l) => l.kind === "service"),
+      today,
+      limit,
+    );
   }
 
   /**
-   * New, served and recurring clients over the last `months` salon months.
-   * "Recurring" is defined in clientRetention(); it replaces an estimate of
-   * 40 % of the appointment count that the panel showed as a measurement.
+   * New, served and recurring clients over the last `months` salon months
+   * (or a named range). "Recurring" is defined in clientRetention(); it
+   * replaces an estimate of 40 % of the appointment count that the panel
+   * showed as a measurement. With a scope, the clients served at that
+   * location; whether they had come before (new, recurring) is still asked of
+   * the whole salon: a client new to this location who had been served at
+   * another is not a new client.
    */
-  async getClientInsights(tenantId: string, months: number): Promise<ClientInsights> {
-    const { today, timezone } = await this.todayFor(tenantId);
-    const period = lastMonthsPeriod(today, months);
+  async getClientInsights(tenantId: string, window: PeriodWindow, scope?: LocationScope): Promise<ClientInsights> {
+    const { today } = await this.todayFor(tenantId);
+    const { period } = windowPeriods(window, today);
     const range = scheduledDateRange(period);
+    const where = appointmentLocationWhere(scope);
 
-    const [newClients, completed, totalAppointments] = await Promise.all([
-      this.countNewClients(tenantId, period, timezone),
+    const [completed, totalAppointments] = await Promise.all([
       this.prisma.appointment.findMany({
-        where: { tenantId, status: "completed", scheduledDate: range },
+        where: { tenantId, isTest: false, status: "completed", scheduledDate: range, ...where },
         select: { clientId: true },
       }),
       this.prisma.appointment.count({
-        where: { tenantId, scheduledDate: range, status: { not: "cancelled" } },
+        where: { tenantId, isTest: false, scheduledDate: range, status: { not: "cancelled" }, ...where },
       }),
     ]);
 
     const servedIds = [...new Set(completed.map((a) => a.clientId))];
-    const earlier = servedIds.length
-      ? await this.prisma.appointment.findMany({
-          where: {
-            tenantId,
-            status: "completed",
-            clientId: { in: servedIds },
-            scheduledDate: { lt: range.gte },
-          },
-          select: { clientId: true },
-          distinct: ["clientId"],
-        })
-      : [];
+    const earlier = await this.servedBefore(tenantId, servedIds, period.start);
 
     const retention = clientRetention(
       completed.map((a) => a.clientId),
-      new Set(earlier.map((a) => a.clientId)),
+      earlier,
     );
 
     return {
       period,
-      newClients,
+      // First completed visit in the period (newClientCount), like the overview.
+      newClients: newClientCount(servedIds, earlier),
       clientsServed: retention.clientsServed,
       returningClients: retention.returningClients,
       totalAppointments,

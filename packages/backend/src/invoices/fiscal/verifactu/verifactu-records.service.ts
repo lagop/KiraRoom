@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, Injectable } from "@nestjs/comm
 import { Invoice, InvoiceLine, Prisma, VerifactuRecordKind, VerifactuRecordStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { PrismaService } from "../../../common/prisma/prisma.service";
+import { DEFAULT_SALON_TIMEZONE, taxRegimeOf } from "@kira/shared";
+import { dayOfIssueDate, SIMPLIFIED_SERIES } from "../../invoice-numbering";
 import { producer } from "./config";
 import * as format from "./format";
 import { altaHash, anulacionHash } from "./hash";
@@ -40,6 +42,26 @@ export interface RecordedInvoice {
 export class VerifactuRecordsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Waits for the salon's turn in `tx`, until it commits: one generator at a
+   * time per salon, so the chain stays strictly sequential. Re-entrant.
+   * Advisory: nothing else in the salon waits for it, only its invoices.
+   */
+  async lockSalon(tx: Tx, tenantId: string): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`verifactu-chain:${tenantId}`}))`;
+  }
+
+  /**
+   * Whether the salon went through activation: its chain row is created
+   * there (InvoicesController.checkFiscalModeChange), with the certificate
+   * and NIF checked. A salon whose fiscalMode says verifactu without it
+   * (set by hand, or under the old stubs) invoices as if it were off,
+   * instead of failing every invoice.
+   */
+  async isActivated(tx: Tx, tenantId: string): Promise<boolean> {
+    return (await tx.verifactuChain.count({ where: { tenantId } })) > 0;
+  }
+
   /** The alta for an invoice just created in `tx`. */
   async recordInvoice(tx: Tx, invoiceId: string): Promise<RecordedInvoice> {
     const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId }, include: { lines: true } });
@@ -63,14 +85,15 @@ export class VerifactuRecordsService {
 
   /**
    * The anulación of an invoice that should never have existed. Returns
-   * false when the invoice was issued before the salon switched VERI*FACTU
-   * on, so there is nothing to annul at the AEAT.
+   * false when the invoice has no record (issued before the salon switched
+   * VERI*FACTU on, or the salon never did): nothing to annul at the AEAT,
+   * and nothing here is read or locked for it beyond this count.
    */
   async recordAnulacion(tx: Tx, invoiceId: string): Promise<boolean> {
+    if ((await tx.verifactuRecord.count({ where: { invoiceId } })) === 0) return false;
     const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
     const ctx = await this.lockChain(tx, invoice.tenantId);
     const records = await tx.verifactuRecord.findMany({ where: { invoiceId }, orderBy: { sequence: "desc" } });
-    if (records.length === 0) return false;
     if (records[0].kind === VerifactuRecordKind.anulacion) {
       throw new ConflictException("Esta factura ya está anulada");
     }
@@ -151,9 +174,13 @@ export class VerifactuRecordsService {
     opts: { subsanacion?: boolean; rechazoPrevio?: "N" | "X"; fecha?: string },
   ) {
     const numSerie = format.invoiceNumber(invoice.series, invoice.number);
-    const fecha = opts.fecha ?? format.salonDate(invoice.issueDate, ctx.timeZone);
+    // The issue date is the salon's day stored at 00:00 UTC (invoice-numbering.ts).
+    const fecha = opts.fecha ?? recordDate(invoice.issueDate, ctx.timeZone);
     const recipientNif = format.nif(invoice.recipientTaxId);
-    if (invoice.recipientTaxId?.trim() && !recipientNif) {
+    // A ticket is valid without the client's NIF: one that does not parse
+    // leaves it as a plain simplificada, and never stops a sale at the till.
+    const ticket = invoice.series === SIMPLIFIED_SERIES;
+    if (invoice.recipientTaxId?.trim() && !recipientNif && !ticket) {
       throw new BadRequestException(`El NIF del cliente "${invoice.recipientTaxId}" no es válido`);
     }
 
@@ -164,10 +191,24 @@ export class VerifactuRecordsService {
         where: { invoiceId: invoice.rectifiesInvoiceId, kind: VerifactuRecordKind.alta },
         orderBy: { sequence: "desc" },
       });
-      if (!original) throw new BadRequestException("La factura que se rectifica no tiene registro Verifactu");
-      // A simplified invoice is corrected with R5; any other with R1.
-      tipoFactura = original.tipoFactura === "F2" || original.tipoFactura === "R5" ? "R5" : "R1";
-      rectified = [{ nif: original.nif, numSerie: original.numSerie, fecha: original.fecha }];
+      if (original) {
+        // A simplified invoice is corrected with R5; any other with R1.
+        tipoFactura = original.tipoFactura === "F2" || original.tipoFactura === "R5" ? "R5" : "R1";
+        rectified = [{ nif: original.nif, numSerie: original.numSerie, fecha: original.fecha }];
+      } else {
+        // Issued before the salon switched VERI*FACTU on: it has no record,
+        // and the AEAT only needs its identification. The rectificativa is
+        // an ordinary new record of the chain.
+        const old = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.rectifiesInvoiceId } });
+        tipoFactura = recipientNif ? "R1" : "R5";
+        rectified = [
+          {
+            nif: format.nif(old.issuerTaxIdAtIssue) ?? ctx.nif,
+            numSerie: format.invoiceNumber(old.series, old.number),
+            fecha: recordDate(old.issueDate, ctx.timeZone),
+          },
+        ];
+      }
     } else {
       tipoFactura = recipientNif ? "F1" : "F2";
       if (tipoFactura === "F2" && Math.abs(invoice.totalCents) > SIMPLIFIED_LIMIT_CENTS) {
@@ -175,6 +216,8 @@ export class VerifactuRecordsService {
       }
     }
     const withRecipient = tipoFactura === "F1" || tipoFactura === "R1";
+    // A ticket naming the client with her NIF (RD 1619/2012 art. 7.2) goes as F1, flagged.
+    const simplifiedWithRecipient = ticket && tipoFactura === "F1";
     if (withRecipient && !recipientNif) throw new BadRequestException("Esta factura necesita el NIF del cliente");
 
     const breakdown = (invoice.taxBreakdown as Array<{ rate: number; baseCents: number; taxCents: number }>) ?? [];
@@ -182,7 +225,7 @@ export class VerifactuRecordsService {
       throw new BadRequestException("Una factura Verifactu lleva entre 1 y 12 tipos de impuesto");
     }
     const desglose: TaxLine[] = breakdown.map((t) => ({
-      impuesto: ctx.taxRegime === "igic" ? "03" : ctx.taxRegime === "ipsi" ? "02" : "01",
+      impuesto: TAX_CODE[ctx.taxRegime],
       rate: format.rate(t.rate),
       base: format.amount(t.baseCents),
       cuota: format.amount(t.taxCents),
@@ -215,6 +258,7 @@ export class VerifactuRecordsService {
       tipoRectificativa: tipoFactura.startsWith("R") ? "I" : undefined,
       rectified,
       descripcion,
+      simplifiedWithRecipient,
       recipient: withRecipient ? { name: format.text(invoice.recipientName, 120), nif: recipientNif! } : undefined,
       desglose,
       cuotaTotal,
@@ -247,22 +291,19 @@ export class VerifactuRecordsService {
   // ---- Chain -----------------------------------------------------------------
 
   private async lockChain(tx: Tx, tenantId: string) {
-    // One generator at a time per salon: the chain must stay strictly sequential.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`verifactu-chain:${tenantId}`}))`;
+    await this.lockSalon(tx, tenantId);
     const tenant = await tx.tenant.findUniqueOrThrow({
       where: { id: tenantId },
       select: { id: true, name: true, legalName: true, taxId: true, timezone: true, fiscalSettings: true },
     });
     const nif = format.nif(tenant.taxId);
     if (!nif) throw new BadRequestException("Configura el NIF del salón en los ajustes fiscales antes de facturar con Verifactu");
-    const prod = producer();
-    if (!prod) throw new BadRequestException("Verifactu no está configurado en KiraRoom (falta el productor del software)");
     const chain =
       (await tx.verifactuChain.findUnique({ where: { tenantId } })) ??
       (await tx.verifactuChain.create({ data: { tenantId, installationNumber: installationNumberFor(tenantId) } }));
     const settings = (tenant.fiscalSettings as Record<string, unknown>) ?? {};
     const system: SystemInstallation = {
-      producer: prod,
+      producer: producer(),
       installationNumber: chain.installationNumber,
       userHasSeveralTaxpayers: false,
     };
@@ -270,8 +311,8 @@ export class VerifactuRecordsService {
       tenantId,
       nif,
       issuerName: format.text(tenant.legalName || tenant.name, 120),
-      timeZone: tenant.timezone || "Europe/Madrid",
-      taxRegime: settings.taxRegime === "igic" || settings.taxRegime === "ipsi" ? settings.taxRegime : "iva",
+      timeZone: tenant.timezone || DEFAULT_SALON_TIMEZONE,
+      taxRegime: taxRegimeOf(settings),
       chain,
       system,
     };
@@ -341,6 +382,15 @@ export class VerifactuRecordsService {
       },
     });
   }
+}
+
+/** The Impuesto of the record per the salon's regime: 01 IVA, 02 IPSI, 03 IGIC. */
+const TAX_CODE = { iva: "01", ipsi: "02", igic: "03" } as const;
+
+/** An invoice's date for a record: "dd-mm-yyyy" of its day (older invoices stored an instant of it). */
+function recordDate(issueDate: Date, timeZone: string): string {
+  const [y, m, d] = dayOfIssueDate(issueDate, timeZone).split("-");
+  return `${d}-${m}-${y}`;
 }
 
 /** NumeroInstalacion: one per salon, never reused (FAQ desarrolladores §4). */

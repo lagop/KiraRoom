@@ -8,13 +8,40 @@ import { EmailService } from '../notifications/services/email.service';
 import { AddOnsService, addOnStatusFromStripe } from './services/addons.service';
 import { MessageBundlesService } from '../message-bundles/message-bundles.service';
 import { Public } from '../auth/decorators/public.decorator';
-import { activationFromCheckout, activationFromSubscription, PlanActivation } from './plan-activation';
+import { activationFromCheckout, activationFromSubscription, liveStatusFor, PlanActivation } from './plan-activation';
+import { ReadOnlyNoticeService } from './read-only-notice.service';
+import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
+import { creditEmailPackFromCheckout, isEmailPackSession } from '../email-campaigns/email-packs.service';
+import { appBaseUrl } from '../common/app-base-url';
+import { livemodeOf, webhookSecretsFor } from '../platform/stripe-settings';
+
+/**
+ * The event's `livemode` read from the payload before it is verified: only
+ * to choose which webhook secret to try first. Null when it cannot be read.
+ */
+export function unverifiedLivemode(rawBody: string, body: unknown): boolean | null {
+  try {
+    const parsed = JSON.parse(rawBody);
+    if (typeof parsed?.livemode === 'boolean') return parsed.livemode;
+  } catch {
+    // fall through to the parsed body
+  }
+  const fromBody = (body as { livemode?: unknown } | null)?.livemode;
+  return typeof fromBody === 'boolean' ? fromBody : null;
+}
 
 @Controller('webhooks')
 export class WebhooksController {
-  private stripe: Stripe;
-  private webhookSecret: string;
   private readonly logger = new Logger(WebhooksController.name);
+
+  /** KiraRoom's Stripe account and webhook secret: the console's, else .env. */
+  private get stripe(): Stripe | null {
+    return this.platformStripe.client();
+  }
+
+  private get webhookSecret(): string {
+    return this.platformStripe.current().webhookSecret ?? '';
+  }
 
   constructor(
     private readonly configService: ConfigService,
@@ -23,14 +50,9 @@ export class WebhooksController {
     private readonly email: EmailService,
     private readonly addonsService: AddOnsService,
     private readonly messageBundles: MessageBundlesService,
-  ) {
-    const apiKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    if (apiKey && apiKey.startsWith('sk_')) {
-      this.stripe = new Stripe(apiKey, {
-        apiVersion: '2024-12-18.acacia' as any });
-    }
-    this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET', '');
-  }
+    private readonly readOnlyNotices: ReadOnlyNoticeService,
+    private readonly platformStripe: PlatformStripeConfigService,
+  ) {}
 
   // Public: Stripe never has a session. It required one, so every event got
   // a 401 and no payment ever activated an account. The signature checked
@@ -57,7 +79,7 @@ export class WebhooksController {
     if (!this.webhookSecret || !this.stripe) {
       if (isProd && !allowUnverified) {
         this.logger.error(
-          'Stripe webhook called but STRIPE_WEBHOOK_SECRET is not configured; refusing to process unsigned event in production.',
+          'Stripe webhook called but no webhook secret is set (console or STRIPE_WEBHOOK_SECRET); refusing to process unsigned event in production.',
         );
         throw new HttpException(
           'Stripe webhook not configured',
@@ -89,21 +111,27 @@ export class WebhooksController {
       return this.processStripeEvent(body);
     }
 
-    // Verify webhook signature
+    // Verify webhook signature: with the secret of the event's mode first
+    // (test and live events are signed with different secrets; the other
+    // mode's is optional, see PlatformStripeConfigService).
     const rawBody = req.rawBody?.toString() || JSON.stringify(body);
-    
-    let event: Stripe.Event;
-    try {
-      event = this.stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        this.webhookSecret,
-      );
-    } catch (err) {
+    const secrets = webhookSecretsFor(this.platformStripe.current(), unverifiedLivemode(rawBody, body));
+
+    let event: Stripe.Event | null = null;
+    let lastError: Error | null = null;
+    for (const secret of secrets) {
+      try {
+        event = this.stripe.webhooks.constructEvent(rawBody, signature, secret);
+        break;
+      } catch (err) {
+        lastError = err as Error;
+      }
+    }
+    if (!event) {
       // 400, not 200: a forged event is refused, and a real one signed with
       // another secret shows up as failing in the Stripe dashboard, which
       // retries it, instead of being acknowledged and lost.
-      this.logger.warn(`Stripe webhook signature verification failed: ${(err as Error).message}`);
+      this.logger.warn(`Stripe webhook signature verification failed: ${lastError?.message ?? 'no webhook secret'}`);
       throw new BadRequestException('Invalid Stripe signature');
     }
 
@@ -111,25 +139,91 @@ export class WebhooksController {
     return this.processStripeEvent(event);
   }
 
+  /**
+   * An event of the other mode than the secret key in force (test events
+   * while charging for real, or the other way round) is acknowledged and not
+   * applied: a test payment must never activate a plan while live keys are
+   * in force, and a live one is not KiraRoom's while it runs on test keys.
+   * 200, so Stripe stops retrying it. Null when the event is to be applied.
+   */
+  private otherModeEvent(event: Stripe.Event): { received: true; ignored: 'other_mode' } | null {
+    const mode = this.platformStripe?.mode?.() ?? 'none';
+    if (mode === 'none' || typeof event?.livemode !== 'boolean') return null;
+    if (event.livemode === (mode === 'live')) return null;
+    this.logger.warn(
+      `Ignoring Stripe event ${event.id} (${event.type}): it is ${event.livemode ? 'live' : 'test'} mode and the platform's keys are ${mode} mode`,
+    );
+    return { received: true, ignored: 'other_mode' };
+  }
+
   private async processStripeEvent(event: Stripe.Event) {
     console.log(`[WebhooksController] Processing Stripe event: ${event.type}`);
+    const ignored = this.otherModeEvent(event);
+    if (ignored) return ignored;
 
+    // Stripe delivers each event at least once and retries it for days, so
+    // the same event can arrive again long after it was applied (an old
+    // "subscription active" replayed after the salon cancelled reactivated
+    // it). Each event id is handled once; if handling fails, the claim is
+    // released so Stripe's retry gets another go.
+    const claimed = await this.claimEvent(event);
+    if (claimed === 'duplicate') {
+      this.logger.log(`Stripe event ${event.id} (${event.type}) already handled; skipping`);
+      return { received: true, duplicate: true };
+    }
+    try {
+      await this.routeStripeEvent(event);
+    } catch (err) {
+      if (claimed === 'claimed') await this.releaseEvent(event.id);
+      throw err;
+    }
+    return { received: true };
+  }
+
+  /**
+   * Records the event id before handling it. 'unclaimed' when the event has
+   * no id (the unsigned dev/test path).
+   */
+  private async claimEvent(event: Stripe.Event): Promise<'claimed' | 'duplicate' | 'unclaimed'> {
+    if (!event?.id) return 'unclaimed';
+    try {
+      await this.prisma.stripeWebhookEvent.create({
+        data: { id: event.id, type: String(event.type ?? '') },
+      });
+      return 'claimed';
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'P2002') return 'duplicate';
+      throw err;
+    }
+  }
+
+  private async releaseEvent(id: string) {
+    try {
+      await this.prisma.stripeWebhookEvent.delete({ where: { id } });
+    } catch (err) {
+      this.logger.error(`Could not release Stripe event ${id} for a retry: ${(err as Error).message}`);
+    }
+  }
+
+  private async routeStripeEvent(event: Stripe.Event) {
     switch (event.type) {
-      case 'checkout.session.completed':
-        await this.activatePlan(activationFromCheckout(event.data.object as Stripe.Checkout.Session));
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        // A bono de emails (one-off payment): its emails go to the salon's
+        // wallet, once per session; paused campaigns go on by themselves.
+        if (isEmailPackSession(session)) {
+          const result = await creditEmailPackFromCheckout(this.prisma, session);
+          this.logger.log(`Bono de emails checkout ${session.id}: ${result}`);
+          break;
+        }
+        await this.activatePlan(activationFromCheckout(session));
         break;
-      case 'payment_intent.succeeded':
-        await this.handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-        break;
-
-      case 'payment_intent.payment_failed':
-        await this.handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
-        break;
-
-      case 'charge.refunded':
-        await this.handleChargeRefunded(event.data.object as Stripe.Charge);
-        break;
-
+      }
+      // payment_intent.succeeded / payment_failed and charge.refunded used to
+      // mark a salon payment paid or failed by its Stripe id. These are
+      // KiraRoom's own account's events (plan billing), never a salon's
+      // client payments, and no salon payment has a PaymentIntent: they are
+      // left unhandled (default) until online client payments exist.
       case 'customer.subscription.created':
         await this.handleSubscriptionLifecycle(
           event.data.object as Stripe.Subscription,
@@ -161,63 +255,6 @@ export class WebhooksController {
 
       default:
         console.log(`[WebhooksController] Unhandled event type: ${event.type}`);
-    }
-
-    return { received: true };
-  }
-
-  private async handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent) {
-    console.log(`[WebhooksController] PaymentIntent succeeded: ${paymentIntent.id}`);
-    
-    const tenantId = paymentIntent.metadata?.tenantId;
-    const appointmentId = paymentIntent.metadata?.appointmentId;
-
-    if (tenantId && appointmentId) {
-      // Find payment by Stripe ID and update status
-      try {
-        // First find the payment by stripePaymentId
-        const payment = await this.paymentsService.getPaymentByStripeId(paymentIntent.id, tenantId);
-        if (payment) {
-          await this.paymentsService.updatePaymentStatus(
-            tenantId,
-            payment.id,
-            'paid',
-          );
-        }
-      } catch (e) {
-        console.log('[WebhooksController] Payment update error (may not exist yet):', e.message);
-      }
-    }
-  }
-
-  private async handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
-    console.log(`[WebhooksController] PaymentIntent failed: ${paymentIntent.id}`);
-    
-    const tenantId = paymentIntent.metadata?.tenantId;
-    
-    if (tenantId) {
-      try {
-        // First find the payment by stripePaymentId
-        const payment = await this.paymentsService.getPaymentByStripeId(paymentIntent.id, tenantId);
-        if (payment) {
-          await this.paymentsService.updatePaymentStatus(
-            tenantId,
-            payment.id,
-            'failed',
-          );
-        }
-      } catch (e) {
-        console.log('[WebhooksController] Payment update error (may not exist yet):', e.message);
-      }
-    }
-  }
-
-  private async handleChargeRefunded(charge: Stripe.Charge) {
-    console.log(`[WebhooksController] Charge refunded: ${charge.id}`);
-    
-    const paymentIntentId = charge.payment_intent as string;
-    if (paymentIntentId) {
-      console.log(`[WebhooksController] Processing refund for payment: ${paymentIntentId}`);
     }
   }
 
@@ -325,73 +362,162 @@ export class WebhooksController {
       `[WebhooksController] Subscription status for tenant ${tenantId}: ${subscription.status}`,
     );
 
-    try {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { id: true, subscriptionStatus: true } });
-      if (!tenant) return;
+    // No catch: a database error fails the event, so processStripeEvent
+    // releases it and Stripe retries (B4). The read-only email swallows
+    // its own errors.
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true } });
+    if (!tenant) return;
 
-      if (subscription.status === 'active') {
-        if (
-          tenant.subscriptionStatus === 'past_due' ||
-          tenant.subscriptionStatus === 'suspended'
-        ) {
-          await this.prisma.tenant.update({
-            where: { id: tenantId },
-            data: {
-              subscriptionStatus: 'active',
-              paymentFailedAt: null,
-              gracePeriodEndsAt: null,
-              readOnlyUntil: null } });
-          this.logger.log(
-            `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
-          );
-        }
-      } else if (subscription.status === 'canceled') {
-        if (tenant.subscriptionStatus !== 'cancelled') {
-          await this.prisma.tenant.update({
-            where: { id: tenantId },
-            data: {
-              subscriptionStatus: 'cancelled',
-              cancelledAt: new Date(),
-              readOnlyUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
-          this.logger.log(
-            `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
-          );
-        }
+    if (subscription.status === 'active') {
+      if (
+        tenant.subscriptionStatus === 'past_due' ||
+        tenant.subscriptionStatus === 'suspended'
+      ) {
+        await this.prisma.tenant.update({
+          where: { id: tenantId },
+          data: {
+            subscriptionStatus: 'active',
+            paymentFailedAt: null,
+            gracePeriodEndsAt: null,
+            readOnlyUntil: null } });
+        this.logger.log(
+          `Recovered tenant ${tenantId} via subscription update: ${tenant.subscriptionStatus} -> active`,
+        );
       }
-    } catch (err) {
-      this.logger.error(
-        `Failed to apply subscription update for tenant ${tenantId}: ${(err as Error).message}`,
-      );
+    } else if (subscription.status === 'canceled') {
+      // An older subscription ending (the salon has since paid for
+      // another one) must not lock the account or email the owner.
+      if (tenant.stripeSubscriptionId && tenant.stripeSubscriptionId !== subscription.id) {
+        this.logger.log(
+          `Ignoring cancellation of ${subscription.id} for tenant ${tenantId}: its current subscription is ${tenant.stripeSubscriptionId}`,
+        );
+        return;
+      }
+      // The end of a subscription the owner cancelled at the end of its
+      // period (cancel_at_period_end) arrives here too: the salon kept
+      // full access until now, and its 30 days of read-only start now.
+      // Conditional, so a cancellation already applied here (an
+      // immediate one) is neither re-stamped nor emailed twice.
+      const readOnlyUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const { count } = await this.prisma.tenant.updateMany({
+        where: { id: tenantId, subscriptionStatus: { not: 'cancelled' } },
+        data: {
+          subscriptionStatus: 'cancelled',
+          cancelledAt: new Date(),
+          subscriptionCancelAt: null,
+          readOnlyUntil } });
+      if (count === 1) {
+        this.logger.log(
+          `Tenant ${tenantId} marked cancelled via Stripe subscription update`,
+        );
+        await this.readOnlyNotices.notify(tenantId, 'cancelled', readOnlyUntil);
+      }
     }
   }
 
   /**
-   * Moves a tenant onto the plan it paid for: status active, the plan and
+   * Moves a tenant onto the plan it paid for: status active (trialing while
+   * its free trial runs, see liveStatusFor), the plan and
    * number of locations from the checkout, and the Stripe ids that later
    * events (invoice.paid / payment_failed) look it up by. Idempotent:
    * checkout.session.completed and customer.subscription.created both
    * arrive for the same purchase.
+   *
+   * Only for the salon's own, live subscription. An event's object is a
+   * snapshot from when it was sent, and Stripe neither orders events nor
+   * stops retrying them, so the subscription is read again from Stripe and
+   * the decision is made on what it is now:
+   * - not active/trialing any more (cancelled, replaced), or another
+   *   tenant's: stale, ignored;
+   * - the salon's stored subscription, but the salon cancelled it: ignored
+   *   (a cancelled Stripe subscription never comes back; reactivating goes
+   *   through a new checkout, which is a new subscription);
+   * - another subscription while the stored one still bills: a duplicate
+   *   (two checkouts opened side by side). The stored one is kept (plan
+   *   changes and add-on items live on it) and the newcomer is cancelled in
+   *   Stripe so it stops charging; its first invoice is logged for a manual
+   *   refund;
+   * - otherwise (the same subscription, no stored one, or the stored one is
+   *   dead): applied.
+   * Without a Stripe client (the unsigned dev/test path) the event's own
+   * snapshot is used, with the same rules.
    */
+  /** Stripe's livemode for the keys in force; null without keys. */
+  private livemode(): boolean | null {
+    return livemodeOf(this.platformStripe?.mode?.() ?? 'none');
+  }
+
   private async activatePlan(activation: PlanActivation | null) {
     if (!activation) return;
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: activation.tenantId },
-      select: { id: true, subscriptionStatus: true },
+      select: { id: true, subscriptionStatus: true, stripeSubscriptionId: true, trialEnd: true },
     });
     if (!tenant) {
       this.logger.warn(`Plan activation for unknown tenant ${activation.tenantId}`);
       return;
     }
+
+    const stripe = this.platformStripe?.client() ?? null;
+    let current: PlanActivation = activation;
+    if (stripe && activation.subscriptionId) {
+      const live = await this.retrieveSubscription(stripe, activation.subscriptionId);
+      const fromLive = live ? activationFromSubscription(live) : null;
+      if (!fromLive || fromLive.tenantId !== tenant.id) {
+        this.logger.log(
+          `Ignoring stale activation of ${activation.subscriptionId} for tenant ${tenant.id}: it is ${live?.status ?? 'gone'} in Stripe`,
+        );
+        return;
+      }
+      current = {
+        ...fromLive,
+        plan: fromLive.plan ?? activation.plan,
+        locations: fromLive.locations ?? activation.locations,
+        customerId: fromLive.customerId ?? activation.customerId,
+      };
+    }
+
+    const subscriptionId = current.subscriptionId;
+    const stored = tenant.stripeSubscriptionId;
+    if (subscriptionId && stored === subscriptionId) {
+      if (tenant.subscriptionStatus === 'cancelled') {
+        this.logger.error(
+          `Not reactivating tenant ${tenant.id}: the salon cancelled subscription ${subscriptionId}, which ${stripe ? 'Stripe still reports as live' : 'this event reports as active'}; check it in the Stripe dashboard`,
+        );
+        return;
+      }
+    } else if (subscriptionId && stored && tenant.subscriptionStatus !== 'cancelled') {
+      const storedSubscription = stripe ? await this.retrieveSubscription(stripe, stored) : null;
+      const storedLive = stripe
+        ? !!storedSubscription && activationFromSubscription(storedSubscription) !== null
+        : true;
+      if (storedLive) {
+        await this.cancelDuplicate(stripe, tenant.id, subscriptionId, stored);
+        return;
+      }
+    }
+
+    // Subscribed during the free trial: it stays in the trial (Pro) until
+    // the trial ends, and only then becomes active (B6).
+    const status = liveStatusFor(tenant, current, new Date());
     await this.prisma.tenant.update({
       where: { id: tenant.id },
       data: {
-        subscriptionStatus: 'active',
-        ...(activation.plan ? { plan: activation.plan as any } : {}),
-        ...(activation.locations ? { maxLocations: activation.locations } : {}),
-        ...(activation.customerId ? { stripeCustomerId: activation.customerId } : {}),
-        ...(activation.subscriptionId ? { stripeSubscriptionId: activation.subscriptionId } : {}),
+        subscriptionStatus: status,
+        ...(status === 'trialing' && current.trialEnd ? { trialEnd: current.trialEnd } : {}),
+        ...(current.periodStart ? { currentPeriodStart: current.periodStart } : {}),
+        ...(current.periodEnd ? { currentPeriodEnd: current.periodEnd } : {}),
+        // Cancelled at the end of the period (or the cancellation undone).
+        ...(current.cancelAt !== undefined ? { subscriptionCancelAt: current.cancelAt } : {}),
+        ...(current.plan ? { plan: current.plan as any } : {}),
+        ...(current.locations ? { maxLocations: current.locations } : {}),
+        // With the mode they belong to (that of the keys in force: events of
+        // the other mode are not applied), so a switch of modes creates new
+        // ones instead of reusing these (P2).
+        ...(current.customerId ? { stripeCustomerId: current.customerId, stripeCustomerLivemode: this.livemode() } : {}),
+        ...(subscriptionId ? { stripeSubscriptionId: subscriptionId, stripeSubscriptionLivemode: this.livemode() } : {}),
         paymentFailedAt: null,
         gracePeriodEndsAt: null,
         readOnlyUntil: null,
@@ -399,10 +525,49 @@ export class WebhooksController {
       },
     });
     this.logger.log(
-      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> active on plan ${activation.plan ?? '(unchanged)'}`,
+      `Tenant ${tenant.id}: ${tenant.subscriptionStatus} -> ${status} on plan ${current.plan ?? '(unchanged)'}`,
     );
   }
 
+  /** The subscription as Stripe has it now; null when Stripe has no such subscription. */
+  private async retrieveSubscription(stripe: Stripe, id: string): Promise<Stripe.Subscription | null> {
+    try {
+      return await stripe.subscriptions.retrieve(id);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'resource_missing') return null;
+      // Anything else (Stripe unreachable): fail the event so Stripe retries it.
+      throw err;
+    }
+  }
+
+  /** A second plan subscription for a salon whose stored one still bills. */
+  private async cancelDuplicate(
+    stripe: Stripe | null,
+    tenantId: string,
+    duplicateId: string,
+    keptId: string,
+  ) {
+    if (!stripe) {
+      this.logger.error(
+        `Tenant ${tenantId} has a second plan subscription ${duplicateId} besides ${keptId}; not applied (no Stripe client here: cancel it by hand)`,
+      );
+      return;
+    }
+    try {
+      await stripe.subscriptions.cancel(duplicateId);
+      this.logger.error(
+        `Tenant ${tenantId} paid a second plan subscription ${duplicateId} besides ${keptId}: cancelled it in Stripe; refund its first invoice by hand`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Tenant ${tenantId} has a second plan subscription ${duplicateId} besides ${keptId} and cancelling it failed: ${(err as Error).message}; cancel and refund it by hand`,
+      );
+    }
+  }
+
+  // Database errors in the two invoice handlers are not caught: they fail
+  // the event, processStripeEvent releases it and Stripe retries it (B4).
+  // Only the email to the owner is allowed to fail quietly.
   private async handleInvoicePaid(invoice: Stripe.Invoice) {
     console.log(`[WebhooksController] Invoice paid: ${invoice.id}`);
 
@@ -417,73 +582,69 @@ export class WebhooksController {
       return;
     }
 
-    try {
-      const tenant = await this.prisma.tenant.findFirst({
-        where: { stripeCustomerId: customerId },
-        select: { id: true, name: true, subscriptionStatus: true } });
-      if (!tenant) {
-        this.logger.warn(
-          `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
-        );
-        return;
-      }
-
-      // Sprint 2 / 2.2 — a successful payment after past_due /
-      // suspended clears the grace state and reactivates the tenant.
-      // Skip if the tenant is in a different terminal state (cancelled,
-      // trialing) so we never overwrite an intentional SaaS-admin
-      // suspension or a fresh trial.
-      // P2A-receptionist-v2 — handle metered `message_bundles` top-ups.
-      // The Stripe invoice's line items include a per-bundle quantity;
-      // we only credit the wallet for items that map to the
-      // `message_bundles` add-on key. Multiplied by 100 to convert
-      // cents -> credit units (1 credit = €1 of WhatsApp marketing
-      // cost approximately; the SaaS-admin can configure this later
-      // via the catalog).
-      try {
-        const lines = invoice.lines?.data ?? [];
-        for (const line of lines) {
-          if (line.metadata?.kind !== 'addon') continue;
-          if (line.metadata?.addOnKey !== 'message_bundles') continue;
-          // The metered quantity is the *units* of credit the customer
-          // bought. We round to the nearest integer.
-          const qty = line.quantity ?? 0;
-          if (qty > 0) {
-            await this.messageBundles.creditTopUp({
-              tenantId: tenant.id,
-              credits: Math.floor(qty),
-              source: 'stripe',
-              stripeInvoiceId: invoice.id });
-            this.logger.log(
-              `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
-            );
-          }
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed to credit message-bundles wallet for invoice ${invoice.id}: ${(err as Error).message}`,
-        );
-      }
-
-      if (
-        tenant.subscriptionStatus === "past_due" ||
-        tenant.subscriptionStatus === "suspended"
-      ) {
-        await this.prisma.tenant.update({
-          where: { id: tenant.id },
-          data: {
-            subscriptionStatus: "active",
-            paymentFailedAt: null,
-            gracePeriodEndsAt: null,
-            readOnlyUntil: null } });
-        this.logger.log(
-          `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
-        );
-      }
-    } catch (err) {
-      this.logger.error(
-        `Failed to clear grace state for invoice ${invoice.id}: ${(err as Error).message}`,
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { stripeCustomerId: customerId },
+      select: { id: true, name: true, subscriptionStatus: true } });
+    if (!tenant) {
+      this.logger.warn(
+        `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
       );
+      return;
+    }
+
+    // D2: the first invoice with money in it marks the salon as one that
+    // has paid (its trial-only email cap no longer applies).
+    if ((invoice.amount_paid ?? 0) > 0) {
+      await this.prisma.tenant.updateMany({
+        where: { id: tenant.id, firstPaidAt: null },
+        data: { firstPaidAt: new Date() },
+      });
+    }
+
+    // Sprint 2 / 2.2 — a successful payment after past_due /
+    // suspended clears the grace state and reactivates the tenant.
+    // Skip if the tenant is in a different terminal state (cancelled,
+    // trialing) so we never overwrite an intentional SaaS-admin
+    // suspension or a fresh trial. Done before the wallet credit below:
+    // it is idempotent, so a retry after a failed credit repeats it
+    // harmlessly, while the credit is not repeated once it succeeded.
+    if (
+      tenant.subscriptionStatus === "past_due" ||
+      tenant.subscriptionStatus === "suspended"
+    ) {
+      await this.prisma.tenant.update({
+        where: { id: tenant.id },
+        data: {
+          subscriptionStatus: "active",
+          paymentFailedAt: null,
+          gracePeriodEndsAt: null,
+          readOnlyUntil: null } });
+      this.logger.log(
+        `Recovered tenant ${tenant.name} (${tenant.id}) from ${tenant.subscriptionStatus} → active after invoice ${invoice.id}`,
+      );
+    }
+
+    // P2A-receptionist-v2 — handle metered `message_bundles` top-ups.
+    // The Stripe invoice's line items include a per-bundle quantity;
+    // we only credit the wallet for items that map to the
+    // `message_bundles` add-on key.
+    const lines = invoice.lines?.data ?? [];
+    for (const line of lines) {
+      if (line.metadata?.kind !== 'addon') continue;
+      if (line.metadata?.addOnKey !== 'message_bundles') continue;
+      // The metered quantity is the *units* of credit the customer
+      // bought. We round to the nearest integer.
+      const qty = line.quantity ?? 0;
+      if (qty > 0) {
+        await this.messageBundles.creditTopUp({
+          tenantId: tenant.id,
+          credits: Math.floor(qty),
+          source: 'stripe',
+          stripeInvoiceId: invoice.id });
+        this.logger.log(
+          `message_bundles topup tenant=${tenant.id} credits=${Math.floor(qty)} invoice=${invoice.id}`,
+        );
+      }
     }
   }
 
@@ -501,88 +662,86 @@ export class WebhooksController {
       return;
     }
 
-    try {
-      const tenant = await this.prisma.tenant.findFirst({
-        where: { stripeCustomerId: customerId },
-        select: {
-          id: true,
-          name: true,
-          currency: true,
-          subscriptionStatus: true,
-          paymentFailedAt: true } });
-      if (!tenant) {
-        this.logger.warn(
-          `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
-        );
-        return;
-      }
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { stripeCustomerId: customerId },
+      select: {
+        id: true,
+        name: true,
+        subscriptionStatus: true,
+        paymentFailedAt: true } });
+    if (!tenant) {
+      this.logger.warn(
+        `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
+      );
+      return;
+    }
 
-      // Idempotency: only stamp the grace state on the FIRST
-      // payment_failed for a given failure window. Subsequent retries
-      // from Stripe (typically over 3-5 days) must not push the
-      // gracePeriodEndsAt forward — that would let a tenant keep
-      // dodging suspension indefinitely.
-      const isFirstFailureForWindow = tenant.subscriptionStatus !== "past_due";
+    // A grace window opens only from a working account (active or in its
+    // trial). Stripe keeps retrying a failed invoice for weeks: a retry
+    // that fails after the grace ran out (suspended) or after the account
+    // ended (cancelled) only emails the owner again; it used to put the
+    // salon back in past_due with 7 fresh days of full access (B3).
+    // Inside an open window (past_due) the original window is kept, so
+    // retries never push the suspension forward.
+    const status = tenant.subscriptionStatus;
+    if (status === "active" || status === "trialing") {
       const now = new Date();
       const gracePeriodEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
       await this.prisma.tenant.update({
         where: { id: tenant.id },
         data: {
           subscriptionStatus: "past_due",
-          paymentFailedAt: isFirstFailureForWindow ? now : tenant.paymentFailedAt,
-          gracePeriodEndsAt: isFirstFailureForWindow
-            ? gracePeriodEndsAt
-            : undefined, // keep the original window if we're inside it
-        } });
+          paymentFailedAt: now,
+          gracePeriodEndsAt } });
+      this.logger.log(
+        `Started 7-day grace for tenant ${tenant.name} (${tenant.id}); gracePeriodEndsAt=${gracePeriodEndsAt.toISOString()}`,
+      );
+    } else {
+      this.logger.log(
+        `Payment failed again for tenant ${tenant.name} (${tenant.id}) while ${status}; status unchanged`,
+      );
+    }
 
-      if (isFirstFailureForWindow) {
-        this.logger.log(
-          `Started 7-day grace for tenant ${tenant.name} (${tenant.id}); gracePeriodEndsAt=${gracePeriodEndsAt.toISOString()}`,
-        );
-      }
+    // Notify the tenant owner on every failure so they're
+    // repeatedly reminded, not just on the first.
+    const owner =
+      (await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, role: "owner" },
+        select: { email: true, firstName: true } })) ??
+      (await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { email: true, firstName: true } }));
 
-      // Notify the tenant owner on every failure so they're
-      // repeatedly reminded, not just on the first.
-      const owner =
-        (await this.prisma.user.findFirst({
-          where: { tenantId: tenant.id, role: "owner" },
-          select: { email: true, firstName: true } })) ??
-        (await this.prisma.user.findFirst({
-          where: { tenantId: tenant.id, isActive: true },
-          orderBy: { createdAt: "asc" },
-          select: { email: true, firstName: true } }));
+    if (!owner?.email) {
+      this.logger.warn(
+        `Tenant ${tenant.id} (${tenant.name}) has no owner email; skipping payment-failed notification.`,
+      );
+      return;
+    }
 
-      if (!owner?.email) {
-        this.logger.warn(
-          `Tenant ${tenant.id} (${tenant.name}) has no owner email; skipping payment-failed notification.`,
-        );
-        return;
-      }
+    const baseUrl = appBaseUrl((k) => this.configService.get<string>(k));
 
-      const baseUrl =
-        this.configService.get<string>("APP_BASE_URL") ||
-        this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kiraroom.com";
+    const amountDue =
+      typeof invoice.amount_due === "number"
+        ? invoice.amount_due / 100
+        : 0;
+    const retryDate = invoice.next_payment_attempt
+      ? new Date(invoice.next_payment_attempt * 1000)
+      : undefined;
 
-      const amountDue =
-        typeof invoice.amount_due === "number"
-          ? invoice.amount_due / 100
-          : 0;
-      const retryDate = invoice.next_payment_attempt
-        ? new Date(invoice.next_payment_attempt * 1000)
-        : undefined;
-
+    try {
       await this.email.sendPaymentFailed({
         to: owner.email,
         tenantName: tenant.name,
         amount: amountDue,
-        currency: tenant.currency || invoice.currency || "EUR",
+        // The Stripe invoice's own currency, not the salon's old Moneda setting.
+        currency: (invoice.currency || "eur").toUpperCase(),
         retryDate,
         updatePaymentUrl: `${baseUrl.replace(/\/+$/, "")}/dashboard/billing` });
     } catch (err) {
-      // Never let an email failure break the webhook ack — Stripe will
-      // retry the event if we return non-2xx.
+      // An email failure must not fail the event: the state above is
+      // already applied, and a retry would only send the email again.
       this.logger.error(
         `Failed to send payment-failed email for invoice ${invoice.id}: ${(err as Error).message}`,
       );

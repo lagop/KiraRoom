@@ -1,5 +1,8 @@
-import { NotFoundException } from "@nestjs/common";
-import { PublicSiteService } from "./public-site.service";
+import { GoneException, NotFoundException } from "@nestjs/common";
+import { PublicSiteService, ownPrivacyPolicyUrl, whatsappDigits } from "./public-site.service";
+
+// Empresa: the multi-location feature only (client-locations.ts asks).
+const EMPRESA: any = { isFeatureUnlocked: async (_t: string, key: string) => key === "multi_location", isEnabled: async (_t: string, key: string) => key === "multi_location" };
 
 /**
  * The data behind a salon's server-rendered public page, its sitemap entry
@@ -35,8 +38,19 @@ function selectKeys(select: any, prefix = ""): string[] {
   );
 }
 
-function makeService({ tlsReady = false, tenant = {} as any } = {}) {
+function makeService({
+  tlsReady = false,
+  subdomains = false,
+  tenant = {} as any,
+  locations = [] as any[],
+  links = [] as any[],
+} = {}) {
   const prisma = {
+    // The salon's open locations and who works at each (client-locations.ts).
+    location: { findMany: jest.fn(async () => locations) },
+    professionalLocation: { findMany: jest.fn(async () => links) },
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
     tenant: {
       findFirst: jest.fn(async () =>
         tenant === null
@@ -61,6 +75,8 @@ function makeService({ tlsReady = false, tenant = {} as any } = {}) {
               language: "es",
               updatedAt: new Date("2026-10-01T10:00:00Z"),
               customDomain: null,
+              // A new salon: its catalogue already includes the IVA.
+              fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 21, taxRegime: "iva", tenantNif: "B12345678" },
               ...tenant,
             },
       ),
@@ -102,8 +118,11 @@ function makeService({ tlsReady = false, tenant = {} as any } = {}) {
       ),
     },
   };
-  const webDomain = { servingEnabled: () => tlsReady };
-  return { svc: new PublicSiteService(prisma as any, webDomain as any), prisma };
+  const webDomain = {
+    servingEnabled: () => tlsReady,
+    liveSubdomain: (slug: string) => (subdomains ? `${slug}.kiraroom.net` : null),
+  };
+  return { svc: new PublicSiteService(prisma as any, webDomain as any, EMPRESA), prisma };
 }
 
 describe("PublicSiteService.getPage", () => {
@@ -117,9 +136,91 @@ describe("PublicSiteService.getPage", () => {
       monday: { openTime: "09:00", closeTime: "18:00" },
       saturday: { openTime: "10:00", closeTime: "14:00" },
     });
+    expect(page.openingShifts).toEqual({
+      monday: [{ openTime: "09:00", closeTime: "18:00" }],
+      saturday: [{ openTime: "10:00", closeTime: "14:00" }],
+    });
     expect(page.professionals[0]).not.toHaveProperty("workingHours");
     expect(page.professionals[0].services).toEqual([{ serviceId: "s1" }]);
     expect(page.address).toEqual({ street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" });
+  });
+
+  it("prices are the final ones, tax included, whatever way the catalogue is written", async () => {
+    // Catalogue with the IVA inside: shown as stored.
+    const included = await makeService().svc.getPage("x");
+    expect(included.services[0].price).toBe(18.5);
+    expect(included.taxLabel).toBe("IVA");
+
+    // Net catalogue: the IVA the invoice adds is in the price shown.
+    const net = await makeService({ tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21 } } }).svc.getPage("x");
+    expect(net.services[0].price).toBe(22.39); // 18,50 + 3,885 -> 3,89
+    expect(net.taxLabel).toBe("IVA");
+
+    // A salon from before the setting: no key, net, as its invoices are.
+    const legacy = await makeService({ tenant: { fiscalSettings: {} } }).svc.getPage("x");
+    expect(legacy.services[0].price).toBe(22.39);
+
+    // The Canaries: IGIC 7 %.
+    const canary = await makeService({
+      tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 7, taxRegime: "igic" } },
+    }).svc.getPage("x");
+    expect(canary.services[0].price).toBe(19.8); // 18,50 + 1,295 -> 1,30
+    expect(canary.taxLabel).toBe("IGIC");
+  });
+
+  it("never sends the salon's fiscal settings, only the label of its tax", async () => {
+    const page = await makeService().svc.getPage("x");
+    expect(page).not.toHaveProperty("fiscalSettings");
+    expect(JSON.stringify(page)).not.toContain("B12345678");
+  });
+
+  it("shows the salon's own hours when it set them, not its professionals'", async () => {
+    const { svc } = makeService({
+      tenant: {
+        openingHours: [
+          { day: "monday", openTime: "10:00", closeTime: "14:00" },
+          { day: "monday", openTime: "17:00", closeTime: "20:00" },
+          { day: "friday", openTime: "10:00", closeTime: "14:00" },
+        ],
+      },
+    });
+    const page = await svc.getPage("salon-luna");
+    expect(page.openingShifts).toEqual({
+      monday: [
+        { openTime: "10:00", closeTime: "14:00" },
+        { openTime: "17:00", closeTime: "20:00" },
+      ],
+      friday: [{ openTime: "10:00", closeTime: "14:00" }],
+    });
+    expect(page.openingHours).toEqual({
+      monday: { openTime: "10:00", closeTime: "20:00" },
+      friday: { openTime: "10:00", closeTime: "14:00" },
+    });
+    // Saturday is Ana's, not the salon's: not an open day. And the stored
+    // value never leaves as it is.
+    expect(page.openingShifts).not.toHaveProperty("saturday");
+    expect(Array.isArray(page.openingHours)).toBe(false);
+  });
+
+  it("sends the salon's Instagram and Facebook from its general settings, null when unset", async () => {
+    const page = await makeService({
+      tenant: {
+        instagram: "https://www.instagram.com/salonluna/",
+        facebook: "https://www.facebook.com/salonluna",
+      },
+    }).svc.getPage("x");
+    expect(page.instagram).toBe("https://www.instagram.com/salonluna/");
+    expect(page.facebook).toBe("https://www.facebook.com/salonluna");
+
+    const bare = await makeService({ tenant: { instagram: null, facebook: null } }).svc.getPage("x");
+    expect(bare.instagram).toBeNull();
+    expect(bare.facebook).toBeNull();
+  });
+
+  it("reads the legacy { open, close } as every day", async () => {
+    const page = await makeService({ tenant: { openingHours: { open: "09:00", close: "20:00" } } }).svc.getPage("x");
+    expect(Object.keys(page.openingHours)).toHaveLength(7);
+    expect(page.openingHours.sunday).toEqual({ openTime: "09:00", closeTime: "20:00" });
   });
 
   it("selects only public fields and only live rows", async () => {
@@ -146,6 +247,164 @@ describe("PublicSiteService.getPage", () => {
     expect(proArgs.where).toEqual({ tenantId: "t1", isActive: true });
   });
 
+  it("lists the days the salon is closed, from today on, as bare dates", async () => {
+    const { svc, prisma } = makeService();
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date());
+    const at = (offset: number) => new Date(Date.parse(`${today}T00:00:00.000Z`) + offset * 86_400_000);
+    const day = (offset: number) => at(offset).toISOString().slice(0, 10);
+    prisma.timeOff.findMany.mockImplementation((async () => [
+      // Started yesterday: only today and tomorrow are still ahead.
+      { professionalId: null, kind: "closure", startDate: at(-1), endDate: at(1) },
+      { professionalId: null, kind: "closure", startDate: at(10), endDate: at(10) },
+    ]) as any);
+
+    const page = await svc.getPage("salon-luna");
+
+    expect(page.closedDays).toEqual([day(0), day(1), day(10)]);
+    const args = (prisma.timeOff.findMany.mock.calls[0] as any[])[0];
+    // The salon's whole-day closures only: no professional's time off, and
+    // nothing but dates leaves the database (no note).
+    expect(args.where).toMatchObject({ tenantId: "t1", professionalId: null, startTime: null, status: "approved" });
+    expect(Object.keys(args.select)).not.toContain("note");
+  });
+
+  describe("locations (multi-local)", () => {
+    const CENTRO = {
+      id: "l-centro",
+      name: "Centro",
+      slug: "centro",
+      street: "Calle Mayor 1",
+      city: "Madrid",
+      state: "Madrid",
+      postalCode: "28013",
+      phone: "+34 910 000 001",
+    };
+    const NORTE = { ...CENTRO, id: "l-norte", name: "Norte", slug: "norte", street: "Av. Norte 5", postalCode: "28035", phone: null };
+
+    it("a salon with one location: no locations, professionals as before", async () => {
+      const page = await makeService({
+        locations: [CENTRO],
+        links: [{ professionalId: "p1", locationId: "l-centro", isPrimary: true }],
+      }).svc.getPage("x");
+      expect(page.locations).toEqual([]);
+      expect(page.professionals[0]).not.toHaveProperty("locationIds");
+    });
+
+    it("two locations to book at: each with its address, each professional with theirs", async () => {
+      const { svc, prisma } = makeService({
+        locations: [CENTRO, NORTE],
+        links: [
+          { professionalId: "p1", locationId: "l-centro", isPrimary: false },
+          { professionalId: "p1", locationId: "l-norte", isPrimary: true },
+        ],
+      });
+      const page = await svc.getPage("x");
+      expect(page.locations).toEqual([
+        { id: "l-centro", name: "Centro", slug: "centro", address: "Calle Mayor 1, 28013 Madrid", phone: "+34 910 000 001" },
+        { id: "l-norte", name: "Norte", slug: "norte", address: "Av. Norte 5, 28035 Madrid", phone: null },
+      ]);
+      expect(page.professionals[0]).toMatchObject({ locationIds: ["l-centro", "l-norte"], primaryLocationId: "l-norte" });
+      // Only this salon's open locations, and links of its active professionals.
+      const locArgs = (prisma.location.findMany.mock.calls[0] as any[])[0];
+      expect(locArgs.where).toEqual({ tenantId: "t1", isActive: true });
+      const linkArgs = (prisma.professionalLocation.findMany.mock.calls[0] as any[])[0];
+      expect(linkArgs.where).toEqual({
+        location: { tenantId: "t1", isActive: true },
+        professional: { tenantId: "t1", isActive: true },
+      });
+    });
+
+    it("a location's own closure closes only that location; the salon's close both", async () => {
+      const { svc, prisma } = makeService({
+        locations: [CENTRO, NORTE],
+        links: [
+          { professionalId: "p1", locationId: "l-centro", isPrimary: true },
+          { professionalId: "p1", locationId: "l-norte", isPrimary: false },
+        ],
+      });
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date());
+      const at = (offset: number) => new Date(Date.parse(`${today}T00:00:00.000Z`) + offset * 86_400_000);
+      const day = (offset: number) => at(offset).toISOString().slice(0, 10);
+      prisma.timeOff.findMany.mockImplementation((async () => [
+        { professionalId: null, locationId: null, kind: "closure", startDate: at(2), endDate: at(2) },
+        { professionalId: null, locationId: "l-norte", kind: "closure", startDate: at(5), endDate: at(6) },
+      ]) as any);
+      const page = await svc.getPage("x");
+      expect(page.closedDays).toEqual([day(2)]);
+      expect(page.closedDaysByLocation).toEqual({ "l-centro": [day(2)], "l-norte": [day(2), day(5), day(6)] });
+    });
+
+    it("a second location with nobody assigned is no choice: the page stays single-location", async () => {
+      const page = await makeService({
+        locations: [CENTRO, NORTE],
+        links: [{ professionalId: "p1", locationId: "l-centro", isPrimary: true }],
+      }).svc.getPage("x");
+      expect(page.locations).toEqual([]);
+    });
+  });
+
+  it("takes no bookings yet with nobody active, and says why (audit 7 N11)", async () => {
+    const t = makeService();
+    t.prisma.professional.findMany.mockResolvedValue([]);
+    const page = await t.svc.getPage("x");
+    expect(page.acceptsBookings).toBe(false);
+    expect(page.bookingUnavailable).toBe("no_professional");
+    expect((await makeService().svc.getPage("x")).bookingUnavailable).toBeNull();
+  });
+
+  it("is indexable only once the owner has confirmed their email (D1)", async () => {
+    expect((await makeService({ tenant: { users: [{ id: "u1" }] } }).svc.getPage("x")).indexable).toBe(true);
+    expect((await makeService({ tenant: { users: [] } }).svc.getPage("x")).indexable).toBe(false);
+  });
+
+  it("sends the online cancellation deadline (audit 7 N15)", async () => {
+    expect((await makeService({ tenant: { minCancelHours: 12 } }).svc.getPage("x")).minCancelHours).toBe(12);
+  });
+
+  it("takes bookings unless the salon is read-only (trial ended, cancelled, suspended)", async () => {
+    expect((await makeService({ tenant: { subscriptionStatus: "trialing" } }).svc.getPage("x")).acceptsBookings).toBe(true);
+    expect((await makeService({ tenant: { subscriptionStatus: "past_due" } }).svc.getPage("x")).acceptsBookings).toBe(true);
+    const inPeriod = new Date(Date.now() + 10 * 86_400_000);
+    for (const status of ["cancelled", "suspended"]) {
+      const page = await makeService({ tenant: { subscriptionStatus: status, readOnlyUntil: inPeriod } }).svc.getPage("x");
+      // Still the page, with the phone; only the form goes.
+      expect(page.acceptsBookings).toBe(false);
+      expect(page.phone).toBe("+34 600 000 000");
+    }
+  });
+
+  it("sends image URLs, never the stored data: URLs", async () => {
+    const logo = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    const page: any = await makeService({
+      tenant: { logo, coverImage: "https://cdn.example/cover.jpg" },
+    }).svc.getPage("x");
+    expect(page.logoUrl).toMatch(/^\/public-site\/image\/t1\/logo\?v=[A-Za-z0-9_-]{16}$/);
+    expect(page.coverImageUrl).toBe("https://cdn.example/cover.jpg");
+    expect(page.logo).toBeUndefined();
+    expect(page.coverImage).toBeUndefined();
+    expect(JSON.stringify(page)).not.toContain("data:");
+    const none: any = await makeService({ tenant: { logo: null, coverImage: "  " } }).svc.getPage("x");
+    expect([none.logoUrl, none.coverImageUrl]).toEqual([null, null]);
+  });
+
+  it("serves the stored image with its version, and nothing for a deleted salon", async () => {
+    const logo = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    const { svc, prisma } = makeService({ tenant: { logo } });
+    const image = await svc.image("t1", "logo");
+    expect(image?.contentType).toBe("image/png");
+    expect(image?.body.toString()).toBe("png-bytes");
+    const page: any = await svc.getPage("x");
+    expect(page.logoUrl).toContain(`v=${image?.version}`);
+    const args = (prisma.tenant.findFirst.mock.calls[0] as any[])[0];
+    expect(args.where).toEqual({ id: "t1", deletedAt: null });
+    expect(args.select).toEqual({ logo: true, coverImage: false });
+
+    const gone = makeService({ tenant: null });
+    expect(await gone.svc.image("t1", "cover")).toBeNull();
+    // A web URL is linked to directly; nothing to serve.
+    expect(await makeService({ tenant: { coverImage: "https://cdn.example/c.jpg" } }).svc.image("t1", "cover")).toBeNull();
+  });
+
   it("404s for an unknown or deleted salon", async () => {
     const { svc } = makeService({ tenant: null });
     await expect(svc.getPage("nope")).rejects.toBeInstanceOf(NotFoundException);
@@ -160,6 +419,15 @@ describe("PublicSiteService.getPage", () => {
     const pending = { customDomain: { domain: "reservas.salonluna.es", verifiedAt: null } };
     expect((await makeService({ tenant: pending, tlsReady: true }).svc.getPage("x")).customDomain).toBeNull();
   });
+  it("gives the salon's subdomain only once subdomains are live", async () => {
+    // The free address (salon-luna.kiraroom.net) becomes the canonical URL
+    // only when the wildcard certificate serves it; WebDomainService decides.
+    expect((await makeService().svc.getPage("x")).subdomainHost).toBeNull();
+    const page = await makeService({ subdomains: true }).svc.getPage("x");
+    expect(page.subdomainHost).toBe(`${page.slug}.kiraroom.net`);
+    const sitemap = await makeService({ subdomains: true }).svc.listForSitemap();
+    expect(sitemap.every((r) => r.subdomainHost === `${r.slug}.kiraroom.net`)).toBe(true);
+  });
 });
 
 describe("PublicSiteService.listForSitemap", () => {
@@ -169,8 +437,13 @@ describe("PublicSiteService.listForSitemap", () => {
     const args = (prisma.tenant.findMany.mock.calls[0] as any[])[0];
     expect(args.where).toEqual({
       deletedAt: null,
+      // Audit 9 T8: the platform's own test salons are never listed.
+      isInternal: false,
+      blockedAt: null,
       subscriptionStatus: { in: ["active", "trialing", "past_due"] },
       services: { some: { isActive: true } },
+      // D1: only once the owner has confirmed their email.
+      users: { some: { role: "owner", isEmailVerified: true } },
     });
     expect(selectKeys(args.select).sort()).toEqual(
       ["customDomain", "customDomain.domain", "customDomain.verifiedAt", "slug", "updatedAt"].sort(),
@@ -187,7 +460,7 @@ describe("PublicSiteService.resolveHost", () => {
     expect(args.where).toEqual({
       domain: "reservas.salonluna.es",
       verifiedAt: { not: null },
-      tenant: { deletedAt: null },
+      tenant: { deletedAt: null, blockedAt: null },
     });
   });
 
@@ -195,5 +468,177 @@ describe("PublicSiteService.resolveHost", () => {
     const { svc } = makeService();
     await expect(svc.resolveHost("otro.example.com")).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.resolveHost("not a host")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe("PublicSiteService: a salon that is gone", () => {
+  it("answers 410 once the read-only period is over, or with none (cancelled from the console)", async () => {
+    const past = new Date(Date.now() - 86_400_000);
+    for (const tenant of [
+      { subscriptionStatus: "cancelled", readOnlyUntil: past },
+      { subscriptionStatus: "cancelled", readOnlyUntil: null },
+      { subscriptionStatus: "suspended", readOnlyUntil: past },
+    ]) {
+      await expect(makeService({ tenant }).svc.getPage("x")).rejects.toBeInstanceOf(GoneException);
+      await expect(makeService({ tenant }).svc.legal("x")).rejects.toBeInstanceOf(GoneException);
+    }
+    // An old readOnlyUntil on an active salon (it paid again) changes nothing.
+    const page = await makeService({ tenant: { subscriptionStatus: "active", readOnlyUntil: past } }).svc.getPage("x");
+    expect(page.acceptsBookings).toBe(true);
+  });
+});
+
+describe("PublicSiteService: links on the page", () => {
+  it("WhatsApp as wa.me digits, a Spanish number without prefix gets 34", () => {
+    expect(whatsappDigits("+34 600 11 22 33")).toBe("34600112233");
+    expect(whatsappDigits("600 11 22 33")).toBe("34600112233");
+    expect(whatsappDigits("+351 912 345 678")).toBe("351912345678");
+    expect(whatsappDigits("123")).toBeNull();
+    expect(whatsappDigits(null)).toBeNull();
+  });
+
+  it("the salon's own privacy policy only as https", () => {
+    expect(ownPrivacyPolicyUrl(" https://salonluna.example/privacidad ")).toBe("https://salonluna.example/privacidad");
+    expect(ownPrivacyPolicyUrl("http://salonluna.example/privacidad")).toBeNull();
+    expect(ownPrivacyPolicyUrl("ftp://salonluna.example/x")).toBeNull();
+    expect(ownPrivacyPolicyUrl("")).toBeNull();
+  });
+
+  it("sends the WhatsApp link digits and the salon's own privacy URL", async () => {
+    const page: any = await makeService({
+      tenant: { whatsapp: "600 11 22 33", privacyPolicyUrl: "https://salonluna.example/privacidad" },
+    }).svc.getPage("x");
+    expect(page.whatsapp).toBe("34600112233");
+    expect(page.privacyPolicyUrl).toBe("https://salonluna.example/privacidad");
+    const none: any = await makeService().svc.getPage("x");
+    expect([none.whatsapp, none.privacyPolicyUrl]).toEqual([null, null]);
+  });
+
+  it("says whether the page shows the receptionist chat (Chat en mi web)", async () => {
+    const on: any = await makeService().svc.getPage("x");
+    expect(on.webChatEnabled).toBe(true);
+    const off: any = await makeService({ tenant: { webChatEnabled: false } }).svc.getPage("x");
+    expect(off.webChatEnabled).toBe(false);
+  });
+});
+
+describe("PublicSiteService.legal", () => {
+  it("only who runs the salon and how to reach it", async () => {
+    const { svc, prisma } = makeService({ tenant: { legalName: " Luna Estética SL ", taxId: "B12345678" } });
+    const legal: any = await svc.legal("salon-luna");
+    expect(legal).toEqual({
+      name: "Salón Luna",
+      slug: "salon-luna",
+      legalName: "Luna Estética SL",
+      taxId: "B12345678",
+      email: "hola@salonluna.example",
+      phone: "+34 600 000 000",
+      address: { street: "Calle Mayor 1", city: "Madrid", state: "Madrid", postalCode: "28013", country: "ES" },
+      privacyPolicyUrl: null,
+    });
+    const args = (prisma.tenant.findFirst.mock.calls[0] as any[])[0];
+    expect(args.where.deletedAt).toBeNull();
+    for (const key of ["stripeTestSecretKey", "stripeLiveSecretKey", "features", "fiscalSettings", "logo"]) {
+      expect(args.select).not.toHaveProperty(key);
+    }
+    // Missing identity: nulls, the page says so.
+    const bare: any = await makeService({ tenant: { legalName: "  ", taxId: null } }).svc.legal("x");
+    expect([bare.legalName, bare.taxId]).toEqual([null, null]);
+    await expect(makeService({ tenant: null }).svc.legal("x")).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe("PublicSiteService: the team as the salon shows it", () => {
+  const photo = `data:image/jpeg;base64,${Buffer.from("jpeg-bytes").toString("base64")}`;
+  const pro = (over: Record<string, unknown>) => ({
+    id: "p1",
+    firstName: "Ana",
+    lastName: "García",
+    profileImage: photo,
+    bio: "Colorista",
+    position: "Estilista",
+    specialties: ["color"],
+    portfolioImages: [photo],
+    yearsExperience: 5,
+    languages: [],
+    certifications: [],
+    workingHours: [],
+    services: [{ serviceId: "s1" }],
+    ...over,
+  });
+  const withTeam = (rows: any[]) => {
+    const made = makeService();
+    made.prisma.professional.findMany = jest.fn(async () => rows) as any;
+    return made;
+  };
+
+  it("names and pictures per Mostrar en la web, hidden ones bookable but not listed", async () => {
+    const { svc } = withTeam([
+      pro({ id: "p1", webNameDisplay: "full", webShowPhoto: true }),
+      pro({ id: "p2", firstName: "Bea", lastName: "López", webNameDisplay: "initial", webShowPhoto: false }),
+      pro({ id: "p3", firstName: "Carla", lastName: "Ruiz", webNameDisplay: "hidden", webShowPhoto: true }),
+    ]);
+    const page: any = await svc.getPage("x");
+    const [a, b, c] = page.professionals;
+    expect([a.firstName, a.lastName, a.listed]).toEqual(["Ana", "García", true]);
+    expect(a.profileImage).toMatch(/^\/public-site\/professional-image\/p1\/photo\?v=/);
+    expect(a.portfolioImages[0]).toMatch(/^\/public-site\/professional-image\/p1\/portfolio-0\?v=/);
+    expect([b.firstName, b.lastName, b.profileImage, b.portfolioImages, b.listed]).toEqual(["Bea", "L.", null, [], true]);
+    expect([c.id, c.firstName, c.lastName, c.profileImage, c.bio, c.position, c.listed]).toEqual([
+      "p3",
+      "Profesional",
+      "",
+      null,
+      null,
+      null,
+      false,
+    ]);
+    expect(c.services).toEqual([{ serviceId: "s1" }]);
+    const json = JSON.stringify(page);
+    expect(json).not.toContain("data:");
+    expect(json).not.toContain("Carla");
+    expect(json).not.toContain("webNameDisplay");
+  });
+
+  it("serves her picture only while it is shown", async () => {
+    const { svc, prisma } = makeService();
+    const pros: any = prisma.professional;
+    pros.findFirst = jest.fn(async () => ({
+      profileImage: photo,
+      portfolioImages: [photo],
+      webNameDisplay: "initial",
+      webShowPhoto: true,
+    }));
+    const image = await svc.professionalImage("p1", "photo");
+    expect(image?.body.toString()).toBe("jpeg-bytes");
+    expect((await svc.professionalImage("p1", "portfolio-0"))?.contentType).toBe("image/jpeg");
+    expect(await svc.professionalImage("p1", "portfolio-3")).toBeNull();
+    expect(await svc.professionalImage("p1", "logo")).toBeNull();
+    expect(pros.findFirst.mock.calls[0][0].where).toEqual({ id: "p1", isActive: true, tenant: { deletedAt: null, blockedAt: null } });
+
+    pros.findFirst = jest.fn(async () => ({ profileImage: photo, webNameDisplay: "full", webShowPhoto: false }));
+    expect(await svc.professionalImage("p1", "photo")).toBeNull();
+    pros.findFirst = jest.fn(async () => ({ profileImage: photo, webNameDisplay: "hidden", webShowPhoto: true }));
+    expect(await svc.professionalImage("p1", "photo")).toBeNull();
+  });
+});
+
+describe("D4: a salon's old web address", () => {
+  it("finds the salon for 12 months, and answers with its current address", async () => {
+    const { svc, prisma } = makeService();
+    const real = prisma.tenant.findFirst.getMockImplementation() as unknown as (args: any) => Promise<any>;
+    (prisma.tenant.findFirst as jest.Mock).mockImplementation(async (args: any) => (args.where.OR ? null : real(args)));
+    (prisma as any).tenantSlugRedirect = { findFirst: jest.fn(async () => ({ tenantId: "t1" })) };
+    const page = await svc.getPage("salon-luna-antes");
+    expect(page.slug).toBe("salon-luna");
+    expect((prisma.tenant.findFirst.mock.calls[1] as any[])[0].where).toEqual({ id: "t1", deletedAt: null, blockedAt: null });
+    const legal = await svc.legal("salon-luna-antes");
+    expect(legal.slug).toBe("salon-luna");
+  });
+
+  it("is a 404 once the redirect has expired (no row found)", async () => {
+    const { svc, prisma } = makeService({ tenant: null });
+    (prisma as any).tenantSlugRedirect = { findFirst: jest.fn(async () => null) };
+    await expect(svc.getPage("salon-luna-antes")).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -1,5 +1,6 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
 import { Observable, map } from "rxjs";
+import { formatLocationAddress } from "../multi-location/client-locations";
 
 /**
  * What an appointment response may carry.
@@ -36,6 +37,10 @@ const SECRET_FIELDS = new Set([
   "stripeLiveSecretKey",
   "emailVerificationToken",
   "twoFactorSecret",
+  "twoFactorPendingSecret",
+  "twoFactorRecoveryCodes",
+  "passwordResetToken",
+  "tokenVersion",
 ]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -65,6 +70,30 @@ export function scrubSecrets<T>(value: T): T {
   return out as T;
 }
 
+/**
+ * The professional of each service of a visit, as appointment responses
+ * carry it: who does it, nothing else. The services used to include the
+ * professional whole, so a professional's calendar received a colleague's
+ * commission rate, personal email and phone, hire and termination dates,
+ * settings and stats on any visit they shared. Nothing in the panel reads
+ * more than the name and the photo of a service's professional.
+ */
+export const VISIT_LINE_PROFESSIONAL = {
+  select: { id: true, firstName: true, lastName: true, profileImage: true },
+} as const;
+
+/**
+ * The appointment's own professional as a staff member sees it when the
+ * appointment is a colleague's (they do one of its services): the same
+ * fields as VISIT_LINE_PROFESSIONAL. Their own professional, and every
+ * professional for the owner and managers, is left whole.
+ */
+export function colleagueProfessional(professional: any): any {
+  if (!professional || typeof professional !== "object") return professional;
+  const { id, firstName, lastName, profileImage } = professional;
+  return { id, firstName, lastName, profileImage };
+}
+
 /** Applies scrubSecrets to everything a controller returns. */
 @Injectable()
 export class ScrubSecretsInterceptor implements NestInterceptor {
@@ -91,6 +120,15 @@ export function publicBooking(appointment: any) {
           id: appointment.professional.id,
           firstName: appointment.professional.firstName,
           lastName: appointment.professional.lastName,
+        }
+      : null,
+    // Where, at a salon with several locations: the confirmation shows it.
+    // Null when the appointment has no location (most salons).
+    location: appointment.salonLocation
+      ? {
+          id: appointment.salonLocation.id,
+          name: appointment.salonLocation.name,
+          address: formatLocationAddress(appointment.salonLocation),
         }
       : null,
   };

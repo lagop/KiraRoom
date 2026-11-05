@@ -7,23 +7,32 @@ import { EmailCampaignsScheduler } from "./email-campaigns.scheduler";
 import { EmailSuppressionService } from "./email-suppression.service";
 import { EmailUnsubscribeService } from "./email-unsubscribe.service";
 import { ResendEventsService } from "./resend-events.service";
+import { EmailCampaignSender } from "./email-campaign-sender.service";
+import { EmailPacer } from "./email-pacer";
+import { EmailQuotaService } from "./email-quota.service";
+import { EmailPacksService } from "./email-packs.service";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { EmailService } from "../notifications/services/email.service";
 import { PromotionsModule } from "../promotions/promotions.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { ConsentModule } from "../consent/consent.module";
+import { PlatformModule } from "../platform/platform.module";
 
 @Module({
-  imports: [PrismaModule, PromotionsModule, TranslationsModule, ConsentModule],
+  imports: [PrismaModule, PromotionsModule, TranslationsModule, ConsentModule, PlatformModule],
   controllers: [EmailCampaignsController, ResendWebhooksController, EmailUnsubscribeController],
   providers: [
     EmailCampaignsService,
     EmailCampaignsScheduler,
+    EmailCampaignSender,
+    EmailPacer,
+    EmailQuotaService,
+    EmailPacksService,
     EmailService,
     EmailSuppressionService,
     EmailUnsubscribeService,
     ResendEventsService,
   ],
-  exports: [EmailCampaignsService],
+  exports: [EmailCampaignsService, EmailUnsubscribeService, EmailSuppressionService, EmailQuotaService],
 })
 export class EmailCampaignsModule {}

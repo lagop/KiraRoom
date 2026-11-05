@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger } from "@nestjs/common";
+import { Injectable, BadRequestException, Logger, Optional } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 // @ts-ignore - papaparse lacks bundled types in some setups
 import * as Papa from "papaparse";
@@ -15,16 +15,20 @@ import { salonInstant } from "../appointments/salon-time";
 import {
   ClientRow,
   ServiceRow,
+  ReadInfo,
   clientRowErrors,
   nameCandidates,
   nameKey,
+  nameMatches,
+  sameName,
   readAppointmentRows,
   readClientRows,
   readServiceRows,
   serviceRowErrors,
 } from "./columns";
-import { readXlsxRows, SpreadsheetError } from "./spreadsheet";
+import { MAX_CELL_CHARS, readXlsxRows, SpreadsheetError } from "./spreadsheet";
 import { appointmentLocations } from "../multi-location/appointment-location";
+import { ConsentService } from "../consent/consent.service";
 
 /** The uploaded file: CSV text, or the bytes of an .xlsx (its first sheet is read). */
 export type ImportFile = string | { xlsx: Buffer };
@@ -66,6 +70,99 @@ function ambiguous(text: string, names: string[]): string {
   return `"${text}" puede ser varios (${shown}): pon el nombre completo en el archivo`;
 }
 
+/**
+ * A client's notes after an import with action=update: the file's notes are
+ * added after the ones she has (a blank line between), not written over
+ * them; nothing changes when the file has none or they are already there.
+ */
+export function mergeNotes(existing: string | null | undefined, incoming: string | null | undefined): string | null {
+  const before = (existing ?? "").trim();
+  const added = (incoming ?? "").trim();
+  if (!added) return before || null;
+  if (!before) return added;
+  if (before.includes(added)) return before;
+  return `${before}\n\n${added}`;
+}
+
+/**
+ * One row that was not imported: where and why, and the row as it came in
+ * the file (only in the response, for "Descargar filas con errores"; the
+ * import job keeps the reasons, not the client's data).
+ */
+export interface ImportError {
+  row: number;
+  fields: RowErrors;
+  data?: Record<string, unknown>;
+}
+
+/** Clients by contact key ("e:<email>", "p:<last nine digits>"), with their names. */
+type IndexedClient = { id: string; firstName: string; lastName: string | null };
+type ClientIndex = Map<string, IndexedClient[]>;
+
+function contactKeys(c: { email?: string | null; phone?: string | null }): string[] {
+  const keys: string[] = [];
+  if (c.email) keys.push(`e:${c.email.toLowerCase()}`);
+  if (c.phone && phoneKey(c.phone)) keys.push(`p:${phoneKey(c.phone)}`);
+  return keys;
+}
+
+function indexClient(index: ClientIndex, keys: string[], c: IndexedClient): void {
+  for (const k of keys) index.set(k, [...(index.get(k) ?? []), c]);
+}
+
+/**
+ * The client this row is: the one with its email, else one with its phone
+ * and the same name (sameName). A phone shared with someone of another name
+ * is a relative's (a mother gives hers for her daughter), so no match, and
+ * `sharesPhoneWith` names who has it (O7).
+ */
+function findClient(
+  index: ClientIndex,
+  row: { email?: string | null; phone?: string | null; firstName: string; lastName?: string | null },
+): { id?: string; sharesPhoneWith?: string } {
+  if (row.email) {
+    const byEmail = index.get(`e:${row.email.toLowerCase()}`);
+    if (byEmail?.length) return { id: byEmail[0].id };
+  }
+  const key = row.phone ? phoneKey(row.phone) : null;
+  if (!key) return {};
+  const byPhone = index.get(`p:${key}`) ?? [];
+  const same = byPhone.find((c) => sameName(c, row));
+  if (same) return { id: same.id };
+  const other = byPhone[0];
+  return other ? { sharesPhoneWith: `${other.firstName} ${other.lastName ?? ""}`.trim() } : {};
+}
+
+/**
+ * A database failure as the salon can read it: it used to be Prisma's own
+ * text, in English (O8). The detail is logged.
+ */
+export function dbErrorMessage(err: unknown, kind: "client" | "service" | "appointment"): string {
+  const e = err as { code?: string; meta?: { target?: unknown } };
+  if (e?.code === "P2002") {
+    const target = String(e.meta?.target ?? "");
+    if (/email/i.test(target)) return "Ese email ya lo tiene otra clienta.";
+    if (kind === "service") return "Ya hay un servicio con ese nombre.";
+    return "Ya existe un registro con esos mismos datos.";
+  }
+  if (e?.code === "P2000") return "Un dato es demasiado largo para guardarlo.";
+  if (e?.code === "P2003" || e?.code === "P2025") {
+    return kind === "appointment"
+      ? "El servicio, la profesional o la clienta ya no existe."
+      : "Un dato relacionado ya no existe.";
+  }
+  return "No se ha podido guardar esta fila. Revísala e inténtalo de nuevo.";
+}
+
+/** The file-wide notices (see ReadInfo). */
+function readWarnings(info: ReadInfo, what: string): string[] {
+  return info.monthFirst
+    ? [
+        `Las ${what} del archivo están en formato mes/día (americano): las hemos leído así. Revisa en la vista previa que salen bien.`,
+      ]
+    : [];
+}
+
 /** "10:30" + 45 -> "11:15" (wraps past midnight). */
 function addMinutes(time: string, minutes: number): string {
   const [h, m] = time.split(":").map(Number);
@@ -88,7 +185,10 @@ function addMinutes(time: string, minutes: number): string {
 export class ImportService {
   private readonly logger = new Logger(ImportService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private readonly consent?: ConsentService,
+  ) {}
 
   // ---- Clients ------------------------------------------------------------
 
@@ -96,21 +196,31 @@ export class ImportService {
     return this.importClients(tenantId, file, filename, true);
   }
 
-  async commitClients(tenantId: string, file: ImportFile, filename: string) {
-    return this.importClients(tenantId, file, filename, false);
+  /** `actorId`: who imports (kept on the marketing refusals the file records). */
+  async commitClients(tenantId: string, file: ImportFile, filename: string, actorId?: string) {
+    return this.importClients(tenantId, file, filename, false, actorId);
   }
 
-  private async importClients(tenantId: string, file: ImportFile, filename: string, dryRun: boolean) {
+  private async importClients(
+    tenantId: string,
+    file: ImportFile,
+    filename: string,
+    dryRun: boolean,
+    actorId?: string,
+  ) {
     const raw = await this.readRows(file);
     const country = await this.tenantCountry(tenantId);
-    const rows = readClientRows(raw, country);
+    const info: ReadInfo = {};
+    const rows = readClientRows(raw, country, info);
     const known = await this.clientIndex(tenantId);
-    const seen = new Set<string>();
+    // The file's earlier rows, the same way.
+    const seen: ClientIndex = new Map();
     const preview: PreviewRow[] = [];
-    const errors: { row: number; fields: RowErrors }[] = [];
+    const errors: ImportError[] = [];
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let marketingRefusals = 0;
     const tally: Record<PreviewRow["status"], number> = { ok: 0, update: 0, duplicate: 0, invalid: 0, skip: 0 };
 
     for (let i = 0; i < rows.length; i++) {
@@ -118,72 +228,137 @@ export class ImportService {
       const rowIndex = i + 2;
       const dateColumn = Object.keys(raw[i]).find((k) => /nacim|birth|cumple/i.test(k));
       const rowErrors = clientRowErrors(row, dateColumn ? String(raw[i][dateColumn] ?? "").trim() : undefined);
-      const keys = [row.email ? `e:${row.email}` : null, row.phone ? `p:${phoneKey(row.phone)}` : null].filter(
-        Boolean,
-      ) as string[];
-      const existingId = keys.map((k) => known.get(k)).find(Boolean);
-      const repeated = keys.some((k) => seen.has(k));
+      const keys = contactKeys(row);
+      // The same person: the same email, or the same phone AND the same
+      // name. A mother who gives her phone for her daughter is two clients
+      // (O7): the second row used to be dropped as "Ya existe".
+      const existing = findClient(known, row);
+      const repeated = findClient(seen, row);
+      const existingId = existing.id;
+      const sharesWith = existingId || repeated.id ? undefined : (existing.sharesPhoneWith ?? repeated.sharesPhoneWith);
 
       let status: PreviewRow["status"];
       if (rowErrors.length > 0) status = "invalid";
-      else if (repeated) status = "duplicate";
+      else if (repeated.id) status = "duplicate";
       else if (existingId) status = row.action === "update" ? "update" : "duplicate";
       else status = "ok";
-      keys.forEach((k) => seen.add(k));
-      if (rowErrors.length > 0) errors.push({ row: rowIndex, fields: rowErrors });
+      if (!repeated.id) indexClient(seen, keys, { id: `row-${rowIndex}`, firstName: row.firstName, lastName: row.lastName });
+      if (rowErrors.length > 0) errors.push({ row: rowIndex, fields: rowErrors, data: raw[i] });
       tally[status]++;
-      if (preview.length < 50) preview.push({ rowIndex, data: row, errors: rowErrors, status, existingId });
+      // A "no" to advertising is recorded for the client the row is, new or
+      // already in KiraRoom (not for a row left out on purpose, nor for the
+      // same person's second row in the file: the first one decides).
+      const refuses = row.marketing === "no" && status !== "invalid" && row.action !== "skip" && !repeated.id;
+      const sharedNote = status === "ok" && sharesWith ? `Comparte teléfono con ${sharesWith}: se crea como clienta aparte` : undefined;
+      const note =
+        [sharedNote, refuses ? "No acepta publicidad: se guardará en su ficha" : undefined].filter(Boolean).join(" · ") ||
+        undefined;
+      if (preview.length < 50) preview.push({ rowIndex, data: row, errors: rowErrors, status, existingId, note });
 
       if (dryRun || status === "invalid") continue;
       if (status === "duplicate" || row.action === "skip") {
         skipped++;
+        if (refuses && existingId && (await this.recordMarketingRefusal(tenantId, existingId, actorId))) {
+          marketingRefusals++;
+        }
         continue;
       }
       try {
-        const data = {
-          firstName: row.firstName,
-          lastName: row.lastName,
-          phone: row.phone ?? null,
-          dateOfBirth: row.dateOfBirth ? new Date(row.dateOfBirth) : null,
-          notes: row.notes ?? null,
-        };
+        let clientId: string;
         if (status === "update" && existingId) {
+          // An empty cell keeps what the client has: an export with no
+          // phone or birthday for her is not a reason to erase hers. Notes
+          // are added to hers, not written over them.
+          const current = await this.prisma.client.findFirst({
+            where: { id: existingId, tenantId },
+            select: { notes: true },
+          });
           await this.prisma.client.update({
             where: { id: existingId },
-            data: { ...data, ...(row.email ? { email: row.email } : {}) },
+            data: {
+              firstName: row.firstName,
+              ...(row.lastName ? { lastName: row.lastName } : {}),
+              ...(row.phone ? { phone: row.phone } : {}),
+              ...(row.dateOfBirth ? { dateOfBirth: new Date(row.dateOfBirth) } : {}),
+              ...(row.notes ? { notes: mergeNotes(current?.notes, row.notes) } : {}),
+              ...(row.email ? { email: row.email } : {}),
+            },
           });
+          clientId = existingId;
           updated++;
         } else {
           const client = await this.prisma.client.create({
-            data: { tenantId, ...data, email: row.email ?? null, status: "active", source: "import" } as any,
+            data: {
+              tenantId,
+              firstName: row.firstName,
+              lastName: row.lastName,
+              phone: row.phone ?? null,
+              dateOfBirth: row.dateOfBirth ? new Date(row.dateOfBirth) : null,
+              // Who she shares the phone with, so the salon knows why two
+              // clients have the same number.
+              notes: mergeNotes(row.notes, sharesWith ? `Comparte teléfono con ${sharesWith}.` : null),
+              email: row.email ?? null,
+              status: "active",
+              source: "import",
+            } as any,
             select: { id: true },
           });
-          keys.forEach((k) => known.set(k, client.id));
+          indexClient(known, keys, { id: client.id, firstName: row.firstName, lastName: row.lastName });
+          clientId = client.id;
           created++;
         }
+        if (refuses && (await this.recordMarketingRefusal(tenantId, clientId, actorId))) marketingRefusals++;
       } catch (err: any) {
-        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: err.message ?? "error" }] });
+        this.logger.warn(`import clients row ${rowIndex}: ${err?.message}`);
+        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: dbErrorMessage(err, "client") }], data: raw[i] });
       }
     }
 
-    return this.finish(tenantId, ImportType.clients, filename, dryRun, rows.length, preview, errors, tally, {
+    const result = await this.finish(tenantId, ImportType.clients, filename, dryRun, rows.length, preview, errors, tally, {
       created,
       updated,
       skipped,
     });
+    return { ...result, marketingRefusals, warnings: readWarnings(info, "fechas de nacimiento") };
   }
 
-  /** The salon's clients by email and by phone (last nine digits). */
-  private async clientIndex(tenantId: string): Promise<Map<string, string>> {
+  /**
+   * The old program says the client does not accept advertising: recorded
+   * as her refusal of commercial communications, through the same consent
+   * record as a "no" from her account, marked as recorded by the salon (who
+   * imported). Campaigns then leave her out. Nothing is sent.
+   *
+   * A "yes" is not recorded: an acceptance is the client's own act, with
+   * the wording she saw, and the file cannot show either. (Without a
+   * record, email campaigns still reach existing clients, as before.)
+   *
+   * Never fails the import; returns whether it was recorded.
+   */
+  private async recordMarketingRefusal(tenantId: string, clientId: string, actorId?: string): Promise<boolean> {
+    if (!this.consent) return false;
+    try {
+      await this.consent.recordMarketingChoice({
+        tenantId,
+        clientId,
+        accepts: false,
+        channel: "email",
+        recordedBy: actorId ?? "import",
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn(`marketing refusal of imported client ${clientId} not recorded: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** The salon's clients by email and by phone (last nine digits), with their names. */
+  private async clientIndex(tenantId: string): Promise<ClientIndex> {
     const clients = await this.prisma.client.findMany({
       where: { tenantId },
-      select: { id: true, email: true, phone: true },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true },
     });
-    const index = new Map<string, string>();
-    for (const c of clients) {
-      if (c.email) index.set(`e:${c.email.toLowerCase()}`, c.id);
-      if (c.phone && phoneKey(c.phone)) index.set(`p:${phoneKey(c.phone)}`, c.id);
-    }
+    const index: ClientIndex = new Map();
+    for (const c of clients) indexClient(index, contactKeys(c), c);
     return index;
   }
 
@@ -198,12 +373,13 @@ export class ImportService {
   }
 
   private async importServices(tenantId: string, file: ImportFile, filename: string, dryRun: boolean) {
-    const rows = readServiceRows(await this.readRows(file));
+    const source = await this.readRows(file);
+    const rows = readServiceRows(source);
     const existing = await this.prisma.service.findMany({ where: { tenantId }, select: { id: true, name: true } });
     const byName = new Map(existing.map((s) => [s.name.trim().toLowerCase(), s.id]));
     const seen = new Set<string>();
     const preview: PreviewRow[] = [];
-    const errors: { row: number; fields: RowErrors }[] = [];
+    const errors: ImportError[] = [];
     let created = 0;
     let updated = 0;
     let skipped = 0;
@@ -220,7 +396,7 @@ export class ImportService {
       else if (seen.has(key)) status = "duplicate";
       else status = existingId ? "update" : "ok";
       seen.add(key);
-      if (rowErrors.length > 0) errors.push({ row: rowIndex, fields: rowErrors });
+      if (rowErrors.length > 0) errors.push({ row: rowIndex, fields: rowErrors, data: source[i] });
       tally[status]++;
       if (preview.length < 50) preview.push({ rowIndex, data: row, errors: rowErrors, status, existingId });
 
@@ -248,7 +424,8 @@ export class ImportService {
           created++;
         }
       } catch (err: any) {
-        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: err.message ?? "error" }] });
+        this.logger.warn(`import services row ${rowIndex}: ${err?.message}`);
+        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: dbErrorMessage(err, "service") }], data: source[i] });
       }
     }
 
@@ -289,7 +466,9 @@ export class ImportService {
     dryRun: boolean,
     options: AppointmentImportOptions,
   ) {
-    const rows = readAppointmentRows(await this.readRows(file), await this.tenantCountry(tenantId));
+    const source = await this.readRows(file);
+    const info: ReadInfo = {};
+    const rows = readAppointmentRows(source, await this.tenantCountry(tenantId), info);
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
     const timeZone = tenant?.timezone || "Europe/Madrid";
     const [services, professionals, clients, booked, locations] = await Promise.all([
@@ -317,11 +496,10 @@ export class ImportService {
       // Each professional's location, written on the appointment (multi-location report).
       dryRun ? Promise.resolve(new Map<string, string>()) : appointmentLocations(this.prisma, tenantId),
     ]);
-    const contacts = new Map<string, string>();
-    for (const c of clients) {
-      if (c.email) contacts.set(`e:${c.email.toLowerCase()}`, c.id);
-      if (c.phone && phoneKey(c.phone)) contacts.set(`p:${phoneKey(c.phone)}`, c.id);
-    }
+    // By email, and by phone with the name (findClient): the clients this
+    // file creates are added as it goes, so their other rows reuse them.
+    const contacts: ClientIndex = new Map();
+    for (const c of clients) indexClient(contacts, contactKeys(c), c);
     const byName = new Map<string, string[]>();
     for (const c of clients) {
       const key = nameKey(`${c.firstName} ${c.lastName ?? ""}`);
@@ -330,11 +508,11 @@ export class ImportService {
     const taken = new Set(booked.map((a) => slotKey(a.professionalId, a.scheduledDate, a.scheduledTime, a.clientId)));
     // The same appointment twice in the file, by the client's name.
     const inFile = new Set<string>();
-    // Clients this file creates, so their other appointments reuse them.
-    const createdClients = new Map<string, string>();
+    // Clients this file creates, by name (for rows with no email or phone).
+    const createdByName = new Map<string, string>();
 
     const preview: PreviewRow[] = [];
-    const errors: { row: number; fields: RowErrors }[] = [];
+    const errors: ImportError[] = [];
     let created = 0;
     let skipped = 0;
     let newClients = 0;
@@ -349,7 +527,8 @@ export class ImportService {
       if (!row.time) rowErrors.push({ col: "hora", msg: raw.time ? "Hora no reconocida" : "Falta la hora" });
       if (!row.firstName) rowErrors.push({ col: "cliente", msg: "Falta el nombre del cliente" });
 
-      const serviceMatches = row.service ? nameCandidates(row.service, services, (s) => [s.name]) : [];
+      const serviceMatch = row.service ? nameMatches(row.service, services, (s) => [s.name]) : { items: [], exact: false };
+      const serviceMatches = serviceMatch.items;
       const service = serviceMatches.length === 1 ? serviceMatches[0] : null;
       if (!row.service) rowErrors.push({ col: "servicio", msg: "Falta el servicio" });
       else if (serviceMatches.length > 1) {
@@ -378,13 +557,17 @@ export class ImportService {
         rowErrors.push({ col: "duración", msg: "Duración no reconocida (minutos)" });
       }
 
-      // The client: by email or phone, then by name if only one has it.
-      const keys = [row.email ? `e:${row.email}` : null, row.phone ? `p:${phoneKey(row.phone)}` : null].filter(
-        Boolean,
-      ) as string[];
-      const sameName = byName.get(nameKey(row.clientName)) ?? [];
-      const nameId = createdClients.get(nameKey(row.clientName)) ?? (sameName.length === 1 ? sameName[0] : undefined);
-      const clientId = keys.map((k) => contacts.get(k) ?? createdClients.get(k)).find(Boolean) ?? nameId;
+      // The client: by email, or by phone when the name fits too (a phone
+      // shared with a relative of another name is not hers; O7), then by
+      // name if only one has it.
+      const keys = contactKeys(row);
+      const namesakes = byName.get(nameKey(row.clientName)) ?? [];
+      const nameId = createdByName.get(nameKey(row.clientName)) ?? (namesakes.length === 1 ? namesakes[0] : undefined);
+      // The name only when the row has no email or phone: a row whose
+      // contact matches nobody is someone else with the same name (a new
+      // client), not the one already called that.
+      const match = keys.length > 0 ? findClient(contacts, row) : {};
+      const clientId = keys.length > 0 ? match.id : nameId;
 
       let status: PreviewRow["status"];
       let note: string | undefined;
@@ -404,16 +587,24 @@ export class ImportService {
         status = "duplicate";
       } else {
         status = "ok";
-        if (!clientId) note = "Cliente nuevo";
+        const notes = [
+          !clientId ? (match.sharesPhoneWith ? `Cliente nuevo (comparte teléfono con ${match.sharesPhoneWith})` : "Cliente nuevo") : null,
+          // "Corte" taken as "Corte y peinado": said, so it can be checked (O16).
+          service && !serviceMatch.exact ? `Unida a «${service.name}»` : null,
+        ].filter(Boolean);
+        note = notes.length > 0 ? notes.join(" · ") : undefined;
       }
       if (key) taken.add(key);
       if (fileKey) inFile.add(fileKey);
       if (status === "ok" && !clientId) {
         newClients++;
         // The dry run creates nothing, but the client's next rows are not new.
-        if (dryRun) createdClients.set(nameKey(row.clientName), "(nuevo)");
+        if (dryRun) {
+          createdByName.set(nameKey(row.clientName), "(nuevo)");
+          indexClient(contacts, keys, { id: "(nuevo)", firstName: row.firstName, lastName: row.lastName });
+        }
       }
-      if (status === "invalid") errors.push({ row: rowIndex, fields: rowErrors });
+      if (status === "invalid") errors.push({ row: rowIndex, fields: rowErrors, data: source[i] });
       tally[status]++;
       if (preview.length < 50) {
         preview.push({
@@ -451,8 +642,8 @@ export class ImportService {
             select: { id: true },
           });
           id = client.id;
-          createdClients.set(nameKey(row.clientName), id);
-          keys.forEach((k) => createdClients.set(k, id!));
+          createdByName.set(nameKey(row.clientName), id);
+          indexClient(contacts, keys, { id, firstName: row.firstName, lastName: row.lastName });
         }
         const duration = row.duration ?? service!.duration;
         const price = row.price ?? Number(service!.price);
@@ -473,6 +664,11 @@ export class ImportService {
             price: new Prisma.Decimal(price),
             totalAmount: Math.round(price * 100), // cents, as insertAppointment stores it
             currency: service!.currency,
+            // What it was booked at: the other program's price and length
+            // when the file has them (appointment-snapshot.ts).
+            serviceName: service!.name,
+            servicePrice: new Prisma.Decimal(price),
+            serviceDuration: duration,
             paymentStatus: PaymentStatus.pending,
             notes: row.notes ?? null,
             internalNotes: `Importada de ${filename}`,
@@ -483,7 +679,12 @@ export class ImportService {
         });
         created++;
       } catch (err: any) {
-        errors.push({ row: rowIndex, fields: [{ col: "base de datos", msg: err.message ?? "error" }] });
+        this.logger.warn(`import appointments row ${rowIndex}: ${err?.message}`);
+        errors.push({
+          row: rowIndex,
+          fields: [{ col: "base de datos", msg: dbErrorMessage(err, "appointment") }],
+          data: source[i],
+        });
       }
     }
 
@@ -492,7 +693,7 @@ export class ImportService {
       updated: 0,
       skipped,
     });
-    return { ...result, newClients };
+    return { ...result, newClients, warnings: readWarnings(info, "fechas") };
   }
 
   // ---- Shared -------------------------------------------------------------
@@ -504,7 +705,7 @@ export class ImportService {
     dryRun: boolean,
     totalRows: number,
     preview: PreviewRow[],
-    errors: { row: number; fields: RowErrors }[],
+    errors: ImportError[],
     tally: Record<PreviewRow["status"], number>,
     counts: { created: number; updated: number; skipped: number },
   ) {
@@ -518,7 +719,8 @@ export class ImportService {
         totalRows,
         successRows: dryRun ? tally.ok + tally.update : counts.created + counts.updated,
         errorRows: invalidCount,
-        errors: errors as any,
+        // The reasons only: the rows themselves (client data) are not kept.
+        errors: errors.map(({ row, fields }) => ({ row, fields })) as any,
         dryRun,
         completedAt: new Date(),
       },
@@ -608,6 +810,14 @@ export class ImportService {
     );
     if (rows.length > 5000) {
       throw new BadRequestException("El archivo tiene más de 5.000 filas: divídelo en varios.");
+    }
+    // Each cell cut as the Excel path cuts them (spreadsheet.ts): a 4 MB
+    // "name" used to reach the database.
+    for (const r of rows) {
+      for (const k of Object.keys(r)) {
+        const v = r[k];
+        if (typeof v === "string" && v.length > MAX_CELL_CHARS) r[k] = v.slice(0, MAX_CELL_CHARS);
+      }
     }
     return rows;
   }

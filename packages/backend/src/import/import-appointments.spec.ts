@@ -157,6 +157,47 @@ describe("appointment import", () => {
     expect(out.createdRows).toBe(2);
   });
 
+  it("matches a client by name only when the row has neither phone nor email", async () => {
+    const ana = { id: "c-ana", firstName: "Ana", lastName: "López", email: null, phone: "+34600000001" };
+
+    // Same name, another phone: someone else, a new client (not c-ana).
+    const other = prisma({ clients: [ana] });
+    await new ImportService(other).commitAppointments(
+      "t1",
+      HEADER + `${day(2)};10:00;Ana López;699 99 99 99;Corte mujer;Carmen;\n`,
+      "agenda.csv",
+    );
+    expect(other.client.create).toHaveBeenCalledTimes(1);
+    expect(other.client.create.mock.calls[0][0].data).toMatchObject({ phone: "+34699999999" });
+    expect(other.appointment.create.mock.calls[0][0].data.clientId).toBe("c-new-1");
+
+    // Same name, another email: also someone else.
+    const byEmail = prisma({ clients: [ana] });
+    await new ImportService(byEmail).commitAppointments(
+      "t1",
+      "Fecha;Hora;Cliente;Email;Servicio;Profesional\n" + `${day(2)};10:00;Ana López;otra.ana@x.test;Corte mujer;Carmen\n`,
+      "agenda.csv",
+    );
+    expect(byEmail.appointment.create.mock.calls[0][0].data.clientId).toBe("c-new-1");
+
+    // No contact at all: the only Ana López the salon has.
+    const noContact = prisma({ clients: [ana] });
+    await new ImportService(noContact).commitAppointments(
+      "t1",
+      HEADER + `${day(2)};10:00;Ana López;;Corte mujer;Carmen;\n`,
+      "agenda.csv",
+    );
+    expect(noContact.client.create).not.toHaveBeenCalled();
+    expect(noContact.appointment.create.mock.calls[0][0].data.clientId).toBe("c-ana");
+  });
+
+  it("the preview counts a new client once when her rows share a phone", async () => {
+    const csv =
+      HEADER + `${day(2)};10:00;Eva Sanz;611 22 33 44;Corte mujer;Carmen;\n` + `${day(9)};10:00;Eva Sanz Gil;611223344;Corte mujer;Carmen;\n`;
+    const dry: any = await new ImportService(prisma()).dryRunAppointments("t1", csv, "agenda.csv");
+    expect(dry.newClients).toBe(1);
+  });
+
   it("marks the reminders as sent when the salon turns them off", async () => {
     const p = prisma();
     await new ImportService(p).commitAppointments(
@@ -245,5 +286,45 @@ describe("matchByName", () => {
     expect(matchByName("Corte mujer", services, (s) => [s.n])?.n).toBe("Corte de Cabello Mujer");
     expect(matchByName("Corte", services, (s) => [s.n])).toBeNull();
     expect(matchByName("Masaje", services, (s) => [s.n])).toBeNull();
+  });
+});
+
+describe("appointment import: shared phones, US dates, partial service names (O7, O16)", () => {
+  it("puts an appointment on the client with that phone only when the name fits", async () => {
+    const p = prisma({ clients: [{ id: "c-lucia", firstName: "Lucía", lastName: "Pérez", email: null, phone: "+34600112233" }] });
+    const csv =
+      HEADER +
+      `${day(3)};10:30;Carmen Pérez;600 11 22 33;Corte mujer;Carmen;\n` + // her mother, same phone
+      `${day(3)};12:00;Lucía Pérez;600 11 22 33;Corte mujer;Carmen;\n`;
+    const out: any = await new ImportService(p).commitAppointments("t1", csv, "agenda.csv");
+    const [mother, lucia] = p.appointment.create.mock.calls.map((c: any) => c[0].data);
+    expect(mother.clientId).toBe("c-new-1");
+    expect(lucia.clientId).toBe("c-lucia");
+    expect(out.preview[0].note).toMatch(/Cliente nuevo \(comparte teléfono con Lucía Pérez\)/);
+  });
+
+  it("reads a month/day file as such, and says so", async () => {
+    // Every first number <= 12, some second ones > 12: month/day.
+    const future = new Date(Date.now() + 40 * DAY);
+    const y = future.getUTCFullYear() + 1;
+    const csv = HEADER + `11/25/${y};10:30;Ana Ruiz;612345678;Corte mujer;Carmen;\n` + `03/04/${y};11:00;Eva Gil;622334455;Corte mujer;Carmen;\n`;
+    const out: any = await new ImportService(prisma()).dryRunAppointments("t1", csv, "fresha.csv");
+    expect(out.preview.map((r: any) => r.data.date)).toEqual([`${y}-11-25`, `${y}-03-04`]);
+    expect(out.warnings[0]).toMatch(/mes\/día/);
+  });
+
+  it("keeps day/month when any first number is over 12, with no warning", async () => {
+    const y = new Date().getUTCFullYear() + 1;
+    const csv = HEADER + `25/11/${y};10:30;Ana Ruiz;612345678;Corte mujer;Carmen;\n` + `03/04/${y};11:00;Eva Gil;622334455;Corte mujer;Carmen;\n`;
+    const out: any = await new ImportService(prisma()).dryRunAppointments("t1", csv, "agenda.csv");
+    expect(out.preview.map((r: any) => r.data.date)).toEqual([`${y}-11-25`, `${y}-04-03`]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("flags a service matched only by part of its name", async () => {
+    const csv = HEADER + `${day(3)};10:30;Ana Ruiz;612345678;manicura;Carmen;\n` + `${day(3)};12:00;Eva Gil;622334455;Corte mujer;Carmen;\n`;
+    const out: any = await new ImportService(prisma()).dryRunAppointments("t1", csv, "agenda.csv");
+    expect(out.preview[0].note).toMatch(/Unida a «Manicura semipermanente»/);
+    expect(out.preview[1].note ?? "").not.toMatch(/Unida/);
   });
 });

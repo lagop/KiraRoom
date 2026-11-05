@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
-import { buildConsolidatedReport, ConsolidatedReport } from "./consolidated-report";
+import { buildConsolidatedReport, ConsolidatedReport, homeLocations, locationOf } from "./consolidated-report";
 import { CreateLocationDto, UpdateLocationDto } from "./location.dto";
 import {
   AnalyticsAppointment,
@@ -16,6 +16,17 @@ import {
   salonToday,
   scheduledDateRange,
 } from "../analytics/analytics-metrics";
+import { timeOffBetween } from "../time-off/time-off-query";
+import { ANALYTICS_APPOINTMENT_SELECT } from "../analytics/analytics.service";
+
+/**
+ * Why the salon cannot open (or reopen) another location: on Empresa each
+ * location is paid for, and the owner adds one in Facturación.
+ */
+export function locationLimitMessage(maxLocations: number): string {
+  const paid = maxLocations === 1 ? "1 local activo" : `${maxLocations} locales activos`;
+  return `Tu plan Empresa incluye ${paid}. Para abrir otro, la cuenta principal puede añadir un local en Ajustes > Facturación (149 € al mes por local, precio final), o desactiva otro local antes.`;
+}
 
 @Injectable()
 export class MultiLocationService {
@@ -64,13 +75,7 @@ export class MultiLocationService {
       select: { maxLocations: true, plan: true },
     });
     if (!tenant) throw new NotFoundException("Tenant no encontrado");
-    const current = await this.prisma.location.count({ where: { tenantId } });
-    const max = tenant.maxLocations ?? 1;
-    if (current >= max) {
-      throw new BadRequestException(
-        `Has alcanzado el maximo de locales (${max}) para tu plan Empresa.`,
-      );
-    }
+    await this.assertRoomForActive(tenantId, tenant.maxLocations);
     const slug = (dto.slug || this.slugify(dto.name)).toLowerCase();
     if (!slug) throw new BadRequestException("slug es obligatorio");
     const exists = await this.prisma.location.findUnique({
@@ -101,6 +106,13 @@ export class MultiLocationService {
     if (dto.isActive === false && loc.isActive) {
       await this.assertNotLastActive(tenantId);
     }
+    if (dto.isActive === true && !loc.isActive) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { maxLocations: true },
+      });
+      await this.assertRoomForActive(tenantId, tenant?.maxLocations);
+    }
     return this.prisma.location.update({
       where: { id },
       data: { ...dto, slug: dto.slug ? this.slugify(dto.slug) : undefined },
@@ -114,6 +126,56 @@ export class MultiLocationService {
    * Empresa salon with two locations could not close one. The only real
    * limit is not switching off the last one.
    */
+  /**
+   * The plan limit counts active locations only: a closed one used to count
+   * too, so a salon at its limit that closed one by mistake could neither
+   * reactivate it nor create another.
+   */
+  private async assertRoomForActive(tenantId: string, maxLocations: number | null | undefined) {
+    const active = await this.prisma.location.count({ where: { tenantId, isActive: true } });
+    const max = maxLocations ?? 1;
+    if (active >= max) {
+      // Empresa pays per location (maxLocations is the quantity paid in
+      // Stripe): the way to open one more is to add it in Facturación, not
+      // a dead end (B8). The panel links the code to the billing page.
+      throw new BadRequestException({
+        code: "LOCATION_LIMIT_REACHED",
+        message: locationLimitMessage(max),
+        limit: max,
+        billingUrl: "/dashboard/billing",
+      });
+    }
+  }
+
+  /**
+   * What deactivating a location affects: its appointments from the salon's
+   * today on that are still to happen (pending or confirmed). An appointment
+   * without a location of its own counts where its professional works, as in
+   * the consolidated report. The panel shows the number in the confirmation.
+   */
+  async deactivationPreview(tenantId: string, id: string): Promise<{ upcomingAppointments: number }> {
+    await this.get(tenantId, id);
+    const today = await this.todayOf(tenantId);
+    const [appointments, links, active] = await Promise.all([
+      this.prisma.appointment.findMany({
+        where: {
+          tenantId,
+          scheduledDate: { gte: new Date(`${today}T00:00:00.000Z`) },
+          status: { in: ["pending", "confirmed"] },
+          OR: [{ locationId: id }, { locationId: null }],
+        },
+        select: { locationId: true, professionalId: true },
+      }),
+      this.prisma.professionalLocation.findMany({
+        where: { location: { tenantId } },
+        select: { professionalId: true, locationId: true, isPrimary: true },
+      }),
+      this.prisma.location.findMany({ where: { tenantId, isActive: true }, select: { id: true } }),
+    ]);
+    const homes = homeLocations(links, new Set([...active.map((l) => l.id), id]));
+    return { upcomingAppointments: appointments.filter((a) => locationOf(a, homes) === id).length };
+  }
+
   private async assertNotLastActive(tenantId: string) {
     const activeCount = await this.prisma.location.count({
       where: { tenantId, isActive: true },
@@ -144,28 +206,17 @@ export class MultiLocationService {
     period: SalonPeriod,
     extra?: { id: string; name: string },
   ): Promise<ConsolidatedReport> {
-    const [active, appointments, professionals, links] = await Promise.all([
+    const [active, appointments, professionals, links, timeOff, tenant] = await Promise.all([
       this.prisma.location.findMany({
         where: { tenantId, isActive: true },
         orderBy: { createdAt: "asc" },
         select: { id: true, name: true },
       }),
+      // The columns Analítica reads, so both apply the same definitions
+      // (loyalty rewards, multi-service visits).
       this.prisma.appointment.findMany({
-        where: { tenantId, scheduledDate: scheduledDateRange(period) },
-        select: {
-          status: true,
-          paymentStatus: true,
-          amountPaid: true,
-          totalAmount: true,
-          price: true,
-          scheduledDate: true,
-          duration: true,
-          clientId: true,
-          professionalId: true,
-          serviceId: true,
-          locationId: true,
-          service: { select: { name: true } },
-        },
+        where: { tenantId, isTest: false, scheduledDate: scheduledDateRange(period) },
+        select: ANALYTICS_APPOINTMENT_SELECT,
       }),
       this.prisma.professional.findMany({
         where: { tenantId, isActive: true },
@@ -175,6 +226,8 @@ export class MultiLocationService {
         where: { location: { tenantId } },
         select: { professionalId: true, locationId: true, isPrimary: true },
       }),
+      timeOffBetween(this.prisma as any, tenantId, period.start, period.end),
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
     ]);
     const locations =
       extra && !active.some((l) => l.id === extra.id) ? [...active, extra] : active;
@@ -184,6 +237,8 @@ export class MultiLocationService {
       appointments: appointments as unknown as AnalyticsAppointment[],
       professionals,
       links,
+      timeOff,
+      timeZone: tenant?.timezone || "Europe/Madrid",
     });
   }
 

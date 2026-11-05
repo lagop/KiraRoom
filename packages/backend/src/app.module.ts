@@ -1,6 +1,9 @@
 ﻿import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
+import { SupportScopeGuard } from "./common/guards/support-scope.guard";
+import { SaasOwnerTwoFactorGuard } from "./common/guards/saas-owner-two-factor.guard";
+import { SentryExceptionFilter } from "./common/observability/sentry-exception.filter";
 import { JwtModule } from "@nestjs/jwt";
 import {
   parseJwtDuration,
@@ -24,6 +27,7 @@ import { WaitListModule } from "./wait-list/wait-list.module";
 import { UpsellModule } from "./upsell/upsell.module";
 import { MessageBundlesModule } from "./message-bundles/message-bundles.module";
 import { ProfessionalsModule } from "./professionals/professionals.module";
+import { TimeOffModule } from "./time-off/time-off.module";
 import { PublicViewerModule } from "./common/tenancy/public-viewer.service";
 import { PaymentsModule } from "./payments/payments.module";
 import { PosModule } from "./pos/pos.module";
@@ -56,11 +60,20 @@ import { SmsModule } from "./sms/sms.module";
 // Controllers
 import { AppController } from "./app.controller";
 import { AuthController } from "./auth/auth.controller";
+import { WebAddressController } from "./web-address/web-address.controller";
+import { WebAddressService } from "./web-address/web-address.service";
+import { AuthSessionsModule } from "./auth/sessions/auth-sessions.module";
+import { SalonRetentionModule } from "./saas/retention/salon-retention.module";
+import { SalonDeletionController } from "./saas/retention/salon-deletion.controller";
+import { SupportAccessController, SupportAccessService } from "./auth/support-access/support-access.controller";
+import { SalonDeletionService } from "./saas/retention/salon-deletion.service";
+import { TwoFactorService } from "./auth/two-factor/two-factor.service";
 import { AppointmentsController } from "./appointments/appointments.controller";
 import { AppointmentServicesController } from "./appointments/appointment-services.controller";
 import { ClientsController } from "./clients/clients.controller";
 import { ServicesController } from "./services/services.controller";
 import { PaymentsController } from "./payments/payments.controller";
+import { CspReportController } from "./security/csp-report.controller";
 
 // Services
 import { AppService } from "./app.service";
@@ -74,10 +87,18 @@ import { ThrottlerBehindProxyGuard } from "./common/guards/throttler-behind-prox
 import { JwtStrategy } from "./auth/strategies/jwt.strategy";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { PasswordResetService } from "./auth/password-reset.service";
+import { DefaultPasswordSweepService } from "./auth/default-password-sweep.service";
+import { TurnstileService } from "./auth/abuse/turnstile.service";
+import { AuthRateLimitsService } from "./auth/abuse/auth-rate-limits.service";
 import { RolesGuard } from "./auth/guards/roles.guard";
+import { ReadOnlyTenantGuard } from "./common/guards/read-only-tenant.guard";
 import { BugReportModule } from "./bug-reports/bug-report.module";
 import { InvitesModule } from "./saas/invites/invites.module";
 import { PublicModule } from "./public-site/public.module";
+// Last: it imports NotificationsModule, and loading that file first changes
+// the order Node resolves the module graph in (a cycle then leaves
+// OnboardingModule undefined at boot).
+import { OpsAlertsModule } from "./common/ops-alerts/ops-alerts.module";
 
 @Module({
   imports: [
@@ -86,6 +107,9 @@ import { PublicModule } from "./public-site/public.module";
       isGlobal: true,
       envFilePath: ".env",
     }),
+
+    // Refresh-token sessions (global: sign-in, refresh, invite acceptance)
+    AuthSessionsModule,
 
     // Passport
     PassportModule.register({ defaultStrategy: "jwt" }),
@@ -146,6 +170,8 @@ import { PublicModule } from "./public-site/public.module";
 
     // Notifications module
     NotificationsModule,
+    // Emails the platform owner: AEAT rejections, failed jobs, bounce spikes (audit 8 D15).
+    OpsAlertsModule,
 
     // Virtual Receptionist module
     VirtualReceptionistModule,
@@ -159,6 +185,7 @@ import { PublicModule } from "./public-site/public.module";
     MessageBundlesModule,
     // Professionals module
     ProfessionalsModule,
+    TimeOffModule,
     PublicViewerModule,
 
     // Payments module
@@ -190,6 +217,8 @@ import { PublicModule } from "./public-site/public.module";
 
     // SaaS Owner module
     SaasModule,
+    // Audit 7 D7: the retention job (warn, then anonymise, a salon that left).
+    SalonRetentionModule,
 
     // Multi-location (plan Empresa)
     MultiLocationModule,
@@ -232,19 +261,29 @@ import { PublicModule } from "./public-site/public.module";
     // (invite flow + accept-invite wizard + trial state machine)
     InvitesModule,
 
-    // Public site resolution — `/public-site/tenant/:slug` (@Public)
+    // Public site resolution — `/public-site/page/:slug` (@Public)
     PublicModule,
   ],
   controllers: [
     AppController,
     AuthController,
+    WebAddressController,
+    // "Borrar mi salón" (Ajustes > Seguridad); needs TwoFactorService below.
+    SalonDeletionController,
+    SupportAccessController,
     AppointmentsController,
     AppointmentServicesController,
     ClientsController,
     ServicesController,
     PaymentsController,
+    CspReportController,
   ],
   providers: [
+    // 5xx and unexpected errors reach GlitchTip (audit 8 D6).
+    {
+      provide: APP_FILTER,
+      useClass: SentryExceptionFilter,
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerBehindProxyGuard,
@@ -258,9 +297,33 @@ import { PublicModule } from "./public-site/public.module";
       provide: APP_GUARD,
       useClass: RolesGuard,
     },
+    // After RolesGuard: a salon without an active plan only reads.
+    {
+      provide: APP_GUARD,
+      useClass: ReadOnlyTenantGuard,
+    },
+    // After JwtAuthGuard: a support session cannot pay, touch fiscal data,
+    // passwords, 2FA, exports or delete the salon (audit 8 D1).
+    {
+      provide: APP_GUARD,
+      useClass: SupportScopeGuard,
+    },
+    // After JwtAuthGuard: with SAAS_OWNER_2FA_REQUIRED=true, a platform
+    // owner without 2FA can only set it up (audit 8 D15). Off by default.
+    {
+      provide: APP_GUARD,
+      useClass: SaasOwnerTwoFactorGuard,
+    },
     AppService,
     AuthService,
+    WebAddressService,
+    TwoFactorService,
+    SalonDeletionService,
+    SupportAccessService,
     PasswordResetService,
+    DefaultPasswordSweepService,
+    TurnstileService,
+    AuthRateLimitsService,
     AuditLogService,
     ClientsService,
     AppointmentServicesService,

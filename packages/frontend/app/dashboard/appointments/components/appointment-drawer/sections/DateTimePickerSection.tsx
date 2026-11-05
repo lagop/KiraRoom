@@ -1,6 +1,8 @@
 import React from "react";
 import { Clock } from "lucide-react";
 import { DayPicker } from "react-day-picker";
+import { es } from "date-fns/locale";
+import { dateOfDay, localDay } from "../../../../../../components/Calendar/day-grid";
 import "react-day-picker/dist/style.css";
 import type { DateTimePreference } from "../hooks/useAppointmentFormState";
 
@@ -51,6 +53,8 @@ export interface DateTimePickerSectionProps {
     specificDateAndTime: string;
     selectDate: string;
     selectTimePeriod: string;
+    morning: string;
+    evening: string;
     morningAnyHour: string;
     eveningAnyHour: string;
   };
@@ -119,7 +123,7 @@ export function DateTimePickerSection({
                 specificTime: "",
                 specificTimePeriod: "",
               });
-              setNewAppointmentDate(new Date().toISOString().split("T")[0]);
+              setNewAppointmentDate(localDay());
             }}
             className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
           />
@@ -145,7 +149,7 @@ export function DateTimePickerSection({
                 specificTime: "",
                 specificTimePeriod: "",
               });
-              setNewAppointmentDate(new Date().toISOString().split("T")[0]);
+              setNewAppointmentDate(localDay());
             }}
             className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
           />
@@ -169,7 +173,7 @@ export function DateTimePickerSection({
                 specificTime: "",
                 specificTimePeriod: "",
               });
-              setNewAppointmentDate(new Date().toISOString().split("T")[0]);
+              setNewAppointmentDate(localDay());
             }}
             className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
           />
@@ -191,7 +195,7 @@ export function DateTimePickerSection({
                 specificTime: "",
                 specificTimePeriod: "",
               });
-              setNewAppointmentDate(new Date().toISOString().split("T")[0]);
+              setNewAppointmentDate(localDay());
             }}
             className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
           />
@@ -274,7 +278,7 @@ export function DateTimePickerSection({
                     mode="single"
                     selected={
                       dateTimePreference.specificDate
-                        ? new Date(dateTimePreference.specificDate)
+                        ? dateOfDay(dateTimePreference.specificDate)
                         : undefined
                     }
                     onSelect={(day) => {
@@ -299,6 +303,7 @@ export function DateTimePickerSection({
                       today.setHours(0, 0, 0, 0);
                       return date < today;
                     }}
+                    locale={es}
                     numberOfMonths={1}
                     showOutsideDays={false}
                     className="w-full"
@@ -329,7 +334,7 @@ export function DateTimePickerSection({
                         }
                       >
                         <div className="text-lg font-semibold">🌅</div>
-                        <div className="text-sm font-medium mt-1">Morning</div>
+                        <div className="text-sm font-medium mt-1">{labels.morning}</div>
                         <div className="text-xs text-gray-500 mt-1">
                           {labels.morningAnyHour}
                         </div>
@@ -349,7 +354,7 @@ export function DateTimePickerSection({
                         }
                       >
                         <div className="text-lg font-semibold">🌆</div>
-                        <div className="text-sm font-medium mt-1">Evening</div>
+                        <div className="text-sm font-medium mt-1">{labels.evening}</div>
                         <div className="text-xs text-gray-500 mt-1">
                           {labels.eveningAnyHour}
                         </div>

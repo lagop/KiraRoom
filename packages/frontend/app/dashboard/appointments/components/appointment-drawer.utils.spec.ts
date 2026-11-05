@@ -1,6 +1,5 @@
 /**
- * Hand-rolled Node test runner matching the style of
- * `lib/appointment-scheduler.test.ts`. Run via:
+ * Hand-rolled Node test runner. Run via:
  *
  *   cd packages/frontend && npx ts-node \
  *     app/dashboard/appointments/components/appointment-drawer.utils.spec.ts
@@ -14,16 +13,38 @@ import * as path from "path";
 import {
   addMinutesToTime,
   appointmentEditHref,
+  asksFirst,
+  canChangeStatus,
+  statusLabelKey,
+  NEXT_STATUSES,
+  sendStatusChange,
+  serverMessage,
+  statusActions,
+  buildStaffBookingPayload,
+  staffOwnCatalog,
   drawerTargetFromQuery,
   calculateTotalDuration,
   formatDateString,
   formatDateTimeString,
-  formatIsoDate,
-  getProfessionalName,
+  formatShortDay,
+  formatEuros,
+  formatCents,
+  eurosToCents,
+  centsToEuros,
+  appointmentTotalCents,
+  parseRate,
+  effectiveCommission,
+  formatRate,
+  salonTermsForm,
+  salonTermsInvalid,
+  salonTermsUpdate,
+  toDrawerAppointment,
+  mergeActivity,
+  activityLabelKey,
+  CREATED_ACTIVITY,
   getStatusBadgeStyle,
   getTotalDuration,
   getTotalPrice,
-  sumServiceDurations,
   transformAddons,
 } from "./appointment-drawer.utils";
 
@@ -66,26 +87,168 @@ check("zero minutes", addMinutesToTime("09:00", 0), "09:00");
 check("wrap multiple days", addMinutesToTime("00:00", 1440), "00:00");
 check("negative time wraps forward", addMinutesToTime("00:30", -60), "23:30");
 
-// ----- formatDateString / formatDateTimeString -----
+// ----- formatDateString / formatShortDay / formatDateTimeString -----
 
 console.log("\n[formatDateString]");
-const sample = "2026-03-17";
-const formatted = formatDateString(sample);
-// Locale-dependent: just check the date components are present.
-checkTrue("contains weekday", /Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday/.test(formatted));
-checkTrue("contains year", formatted.includes("2026"));
-checkTrue("contains month name", /March|February|January|April|April|Apr/.test(formatted) || formatted.includes("March"));
+check("Spanish, the day as written", formatDateString("2026-03-17"), "martes, 17 de marzo de 2026");
+check("an ISO date-time keeps its calendar day", formatDateString("2026-03-01T00:00:00.000Z"), "domingo, 1 de marzo de 2026");
+check("nothing for nothing", formatDateString(""), "");
+
+console.log("\n[formatShortDay]");
+check("dd/mm/yyyy", formatShortDay("2026-03-07"), "07/03/2026");
+check("from the API's date-time", formatShortDay("2026-12-31T00:00:00.000Z"), "31/12/2026");
 
 console.log("\n[formatDateTimeString]");
 const formattedDt = formatDateTimeString("2026-03-17T14:30:00Z");
-checkTrue("contains year", formattedDt.includes("2026"));
-checkTrue("contains hour", /\d{1,2}:\d{2}/.test(formattedDt));
+checkTrue("Spanish month", /mar/.test(formattedDt) && formattedDt.includes("2026"));
+checkTrue("24-hour clock, no AM/PM", /\d{2}:\d{2}/.test(formattedDt) && !/AM|PM/i.test(formattedDt));
+check("an invalid date shows nothing", formatDateTimeString("not a date"), "");
 
-// ----- formatIsoDate -----
+// ----- Money: euros and cents -----
 
-console.log("\n[formatIsoDate]");
-check("UTC ISO date", formatIsoDate(new Date("2026-03-17T12:00:00Z")), "2026-03-17");
-check("different timezone still UTC ISO", formatIsoDate(new Date("2026-12-31T23:59:59Z")), "2026-12-31");
+console.log("\n[money]");
+// Intl puts a no-break space before the euro sign.
+const plain = (text: string) => text.replace(/\s/g, " ");
+check("euros", plain(formatEuros(35)), "35,00 €");
+check("euros from a Decimal string", plain(formatEuros("12.5")), "12,50 €");
+check("thousands", plain(formatEuros(1234.5)), "1234,50 €");
+check("cents", plain(formatCents(3550)), "35,50 €");
+check("cents from a string", plain(formatCents("2000")), "20,00 €");
+check("nothing is 0", plain(formatCents(null)), "0,00 €");
+check("euros to cents, rounded", [eurosToCents(12.5), eurosToCents("0.1"), eurosToCents("12,34"), eurosToCents(19.99)], [1250, 10, 1234, 1999]);
+check("not a number is 0 cents", eurosToCents("abc"), 0);
+check("cents to euros", [centsToEuros(1250), centsToEuros("99"), centsToEuros(undefined)], [12.5, 0.99, 0]);
+check("the server's total wins (cents)", appointmentTotalCents({ totalAmount: 4500, price: 30 }), 4500);
+check(
+  "else the services' prices (euros)",
+  appointmentTotalCents({ totalAmount: 0, price: 30, services: [{ service: { price: 20 } }, { service: { price: "15.5" } }] }),
+  3550,
+);
+check("else the price (euros)", appointmentTotalCents({ price: "30.00" }), 3000);
+
+// ----- Commission and deposit -----
+
+console.log("\n[commission]");
+check("0 is a rate, not unset", parseRate(0), 0);
+check("a Decimal string", parseRate("12.50"), 12.5);
+check("a comma", parseRate("7,5"), 7.5);
+check("empty and null are unset", [parseRate(""), parseRate("  "), parseRate(null), parseRate(undefined)], [null, null, null, null]);
+check("out of range is not a rate", [parseRate(101), parseRate(-1), parseRate("x")], [null, null, null]);
+check("the appointment's own rate, 0 included", effectiveCommission(0, 30), { rate: 0, source: "appointment" });
+check("else the professional's", effectiveCommission(null, "25"), { rate: 25, source: "professional" });
+check("a professional at 0 % keeps 0", effectiveCommission(undefined, 0), { rate: 0, source: "professional" });
+check("else the salon's default", effectiveCommission(null, null, 10), { rate: 10, source: "default" });
+check("a new salon's default is 0 %", effectiveCommission(null, null, 0), { rate: 0, source: "default" });
+check("the salon's default not known: 0, never a hard-coded 10", effectiveCommission(null, null), { rate: 0, source: "default" });
+check("shown in Spanish", plain(formatRate(12.5)), "12,5 %");
+
+console.log("\n[salon terms]");
+const termsBefore = { commissionRate: null, depositRequired: false, depositAmount: null };
+check(
+  "the form from the appointment: deposit in euros, no override as empty",
+  salonTermsForm({ commissionRate: null, depositRequired: true, depositAmount: 1250 }),
+  { commission: "", depositRequired: true, deposit: "12.5" },
+);
+check("a 0 % override shows as 0", salonTermsForm({ commissionRate: 0 }).commission, "0");
+check(
+  "nothing changed, nothing sent",
+  salonTermsUpdate({ role: "owner", before: termsBefore, form: salonTermsForm(termsBefore) }),
+  {},
+);
+check(
+  "a 0 % override is sent as 0",
+  salonTermsUpdate({ role: "owner", before: termsBefore, form: { commission: "0", depositRequired: false, deposit: "" } }),
+  { commissionRate: 0 },
+);
+check(
+  "clearing the override sends null (the professional's rate again)",
+  salonTermsUpdate({ role: "admin", before: { commissionRate: "15" }, form: { commission: "", depositRequired: false, deposit: "" } }),
+  { commissionRate: null },
+);
+check(
+  "the deposit goes in cents",
+  salonTermsUpdate({ role: "owner", before: termsBefore, form: { commission: "", depositRequired: true, deposit: "20" } }),
+  { depositRequired: true, depositAmount: 2000 },
+);
+check(
+  "an unchanged deposit is not resent (it used to be sent as typed euros)",
+  salonTermsUpdate({
+    role: "owner",
+    before: { depositRequired: true, depositAmount: 2000 },
+    form: salonTermsForm({ depositRequired: true, depositAmount: 2000 }),
+  }),
+  {},
+);
+check(
+  "turning the deposit off",
+  salonTermsUpdate({ role: "owner", before: { depositRequired: true, depositAmount: 2000 }, form: { commission: "", depositRequired: false, deposit: "20" } }),
+  { depositRequired: false },
+);
+check(
+  "a professional's edit sends no terms (the server ignores them)",
+  salonTermsUpdate({ role: "staff", before: termsBefore, form: { commission: "50", depositRequired: true, deposit: "5" } }),
+  {},
+);
+checkTrue("a rate over 100 is refused", salonTermsInvalid({ commission: "150", depositRequired: false, deposit: "" }));
+checkTrue("a negative deposit is refused", salonTermsInvalid({ commission: "", depositRequired: true, deposit: "-5" }));
+checkTrue("0 % and an empty deposit are fine", !salonTermsInvalid({ commission: "0", depositRequired: true, deposit: "" }));
+
+// ----- The appointment as the drawer shows it -----
+
+console.log("\n[toDrawerAppointment]");
+const apiAppointment = {
+  id: "apt-1",
+  client: { id: "c1", firstName: "Lucía", lastName: "Pérez", email: null, phone: "600000000" },
+  professional: { id: "p1", firstName: "Ana", lastName: "Gil", email: "ana@salon.es", commissionRate: "20" },
+  service: { id: "s1", name: "Corte", duration: 30, price: "25.00" },
+  services: [],
+  addons: [{ addonId: "s2", quantity: 2 }],
+  scheduledDate: "2026-03-17T00:00:00.000Z",
+  scheduledTime: "10:30",
+  status: "confirmed",
+  price: "25.00",
+  notes: null,
+  commissionRate: "0",
+  depositRequired: true,
+  depositAmount: "1000",
+  depositPaid: false,
+  totalAmount: 3500,
+  amountPaid: "0",
+  createdAt: "2026-03-01T09:00:00.000Z",
+  updatedAt: "2026-03-01T09:00:00.000Z",
+};
+const drawerAppointment = toDrawerAppointment(apiAppointment, [{ id: "s2", name: "Mascarilla", price: 5, duration: 10 }]);
+check("the calendar day", drawerAppointment.date, "2026-03-17");
+check("a 0 % override stays 0, not unset", drawerAppointment.commissionRate, 0);
+check("the professional's rate for the fallback", drawerAppointment.professionalCommissionRate, 20);
+check("the deposit, in cents as stored", [drawerAppointment.depositRequired, drawerAppointment.depositAmount], [true, 1000]);
+check("the server's total, in cents", drawerAppointment.totalAmount, 3500);
+check("prices as numbers (euros)", [drawerAppointment.price, drawerAppointment.service.price], [25, 25]);
+check("empty notes are empty, not null", drawerAppointment.notes, "");
+check("add-ons resolved when the catalog is there", drawerAppointment.addons.map((a) => [a.name, a.quantity]), [["Mascarilla", 2]]);
+check("no English fallback for a missing specialty", drawerAppointment.professional.specialty, "");
+check(
+  "no override is null",
+  toDrawerAppointment({ ...apiAppointment, commissionRate: null }).commissionRate,
+  null,
+);
+
+console.log("\n[activity]");
+const merged = mergeActivity("2026-03-01T09:00:00.000Z", [
+  { createdAt: "2026-03-02T09:00:00.000Z", action: "appointment_updated", details: { notes: "" } },
+  { createdAt: "2026-03-01T09:00:00.000Z", action: CREATED_ACTIVITY },
+]);
+check("newest first, the creation once", merged.map((a) => a.action), ["appointment_updated", CREATED_ACTIVITY]);
+check("known actions have a label", activityLabelKey("appointment_cancelled"), "appointments.activityActions.cancelled");
+check("unknown ones do not", activityLabelKey("something_else"), null);
+const recorded = mergeActivity("2026-03-01T09:00:00.000Z", [
+  { createdAt: "2026-03-01T09:00:00.120Z", action: CREATED_ACTIVITY, details: { userRole: "staff" } },
+]);
+check(
+  "the server's record of the booking (with who made it) is the creation, once",
+  recorded.map((a) => [a.timestamp, a.action]),
+  [["2026-03-01T09:00:00.120Z", CREATED_ACTIVITY]],
+);
 
 // ----- getTotalPrice -----
 
@@ -220,46 +383,16 @@ check("string id coerces", transformAddons(
   [{ id: 1, name: "Foo", price: 5, duration: 1 }] as any,
 ), [{ id: "1", name: "Foo", quantity: undefined, price: 5, duration: 1 }]);
 
-// ----- getProfessionalName -----
-
-console.log("\n[getProfessionalName]");
-const pros = [
-  { id: "p1", firstName: "María", lastName: "García" },
-  { id: "p2", firstName: "John", lastName: "Doe" },
-];
-check("returns full name", getProfessionalName("p1", pros), "María García");
-check("unknown id → Staff", getProfessionalName("ghost", pros), "Staff");
-check("undefined → Staff", getProfessionalName(undefined, pros), "Staff");
-check("empty professionals → Staff", getProfessionalName("p1", []), "Staff");
-
 // ----- getStatusBadgeStyle -----
 
 console.log("\n[getStatusBadgeStyle]");
-check("confirmed style", getStatusBadgeStyle("confirmed").label, "Confirmed");
+check("confirmed style", getStatusBadgeStyle("confirmed").label, "Confirmada");
 check("pending style", getStatusBadgeStyle("pending").bg, "bg-yellow-50");
 check("cancelled style", getStatusBadgeStyle("cancelled").border, "border-red-200");
-check("in_progress style", getStatusBadgeStyle("in_progress").label, "In Progress");
+check("in_progress style", getStatusBadgeStyle("in_progress").label, "En curso");
 check("completed style", getStatusBadgeStyle("completed").text, "text-blue-700");
 check("unknown status falls back to gray", getStatusBadgeStyle("future_status").label, "future_status");
 check("unknown status uses gray bg", getStatusBadgeStyle("future_status").bg, "bg-gray-50");
-
-// ----- sumServiceDurations -----
-
-console.log("\n[sumServiceDurations]");
-check("sums all durations", sumServiceDurations(
-  [{ serviceId: "s1" }, { serviceId: "s2" }],
-  [{ id: "s1", duration: 30 }, { id: "s2", duration: 45 }],
-), 75);
-check("uses default when duration missing", sumServiceDurations(
-  [{ serviceId: "s1" }],
-  [{ id: "s1" }],
-), 60);
-check("custom default", sumServiceDurations(
-  [{ serviceId: "s1" }],
-  [{ id: "s1" }],
-  120,
-), 120);
-check("empty selection", sumServiceDurations([], [{ id: "s1", duration: 30 }]), 0);
 
 // ----- appointmentEditHref / drawerTargetFromQuery -----
 // "Editar" on the appointment page pushed /dashboard/appointments/:id/edit,
@@ -285,6 +418,239 @@ checkTrue(
   "no link to the non-existent /edit page is left in the detail page",
   !fs.readFileSync(path.join(__dirname, "..", "[id]", "page.tsx"), "utf8").includes("/edit`"),
 );
+
+// ----- Status changes -----
+
+console.log("\nStatus changes");
+
+checkTrue("completed and cancelled offer nothing", statusActions("completed").length === 0 && statusActions("cancelled").length === 0);
+check("pending: confirm, no-show, cancel", statusActions("pending"), ["confirmed", "no_show", "cancelled"]);
+check("confirmed: start, no-show, cancel", statusActions("confirmed"), ["in_progress", "no_show", "cancelled"]);
+check("in progress: complete or cancel, not a no-show", statusActions("in_progress"), ["completed", "cancelled"]);
+check("a no-show can be confirmed again (arrived late)", statusActions("no_show"), ["confirmed"]);
+checkTrue("every button is one the table allows", (["pending", "confirmed", "in_progress", "no_show"] as const).every((from) => statusActions(from).every((to) => canChangeStatus(from, to))));
+checkTrue("an unknown status offers nothing", statusActions("archived").length === 0);
+
+{
+  const calls: string[] = [];
+  const api = {
+    cancelAppointment: (id: string, reason?: string) => (calls.push(`cancel ${id} ${reason ?? "-"}`), Promise.resolve()),
+    completeAppointment: (id: string) => (calls.push(`complete ${id}`), Promise.resolve()),
+    markAppointmentNoShow: (id: string) => (calls.push(`no-show ${id}`), Promise.resolve()),
+    updateAppointment: (id: string, data: { status: string }) => (calls.push(`patch ${id} ${data.status}`), Promise.resolve()),
+  };
+  void sendStatusChange(api, "a1", "cancelled", "  Enferma ");
+  void sendStatusChange(api, "a1", "cancelled", "   ");
+  void sendStatusChange(api, "a1", "completed");
+  void sendStatusChange(api, "a1", "no_show");
+  void sendStatusChange(api, "a1", "confirmed");
+  void sendStatusChange(api, "a1", "in_progress");
+  check("each change goes to the route that owns it", calls, [
+    "cancel a1 Enferma",
+    "cancel a1 -",
+    "complete a1",
+    "no-show a1",
+    "patch a1 confirmed",
+    "patch a1 in_progress",
+  ]);
+}
+
+checkTrue("cancel, no-show and complete are asked first", asksFirst("cancelled") && asksFirst("no_show") && asksFirst("completed"));
+checkTrue("confirm and start are not", !asksFirst("confirmed") && !asksFirst("in_progress"));
+{
+  const es = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "es.json"), "utf8"));
+  const en = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "en.json"), "utf8"));
+  const has = (json: any, key: string) => typeof key.split(".").reduce((o, k) => o?.[k], json) === "string";
+  checkTrue("every status badge label exists in es and en", Object.keys(NEXT_STATUSES).every((s) => has(es, statusLabelKey(s)!) && has(en, statusLabelKey(s)!)));
+  check("an unknown status has no label key", statusLabelKey("archived"), null);
+  checkTrue("the completion dialog's copy exists in es and en", ["complete_confirm", "complete_notice", "mark_completed", "not_yet"].every((k) => has(es, `appointments.${k}`) && has(en, `appointments.${k}`)));
+  checkTrue("and it warns about the invoice", /factura/.test(es.appointments.complete_notice));
+}
+check("the server's reason reaches the toast", serverMessage(new Error("Una cita cancelada no puede pasar a completada.")), "Una cita cancelada no puede pasar a completada.");
+check("no reason, no description", serverMessage(new Error("  ")), undefined);
+check("not an error, no description", serverMessage("boom"), undefined);
+
+// The panel's copy of the transition table must match the server's.
+{
+  const backendTable = path.join(__dirname, "..", "..", "..", "..", "..", "backend", "src", "appointments", "appointment-status.ts");
+  if (fs.existsSync(backendTable)) {
+    const src = fs.readFileSync(backendTable, "utf8");
+    const server: Record<string, string[]> = {};
+    for (const m of src.matchAll(/\[AppointmentStatus\.(\w+)\]:\s*\[([^\]]*)\]/g)) {
+      server[m[1]] = [...m[2].matchAll(/AppointmentStatus\.(\w+)/g)].map((x) => x[1]);
+    }
+    check("same transition table as the server", server, NEXT_STATUSES);
+  } else {
+    console.log("  - server table not found; skipped the comparison");
+  }
+}
+// ----- staffOwnCatalog: what a professional books with -----
+
+console.log("\n=== staffOwnCatalog ===");
+{
+  const pros = [
+    { id: "p-ana", userId: "u-ana", firstName: "Ana", services: [{ serviceId: "cut" }] },
+    { id: "p-bea", userId: "u-bea", firstName: "Bea", services: [{ serviceId: "colour" }] },
+    { id: "p-eva", userId: null, firstName: "Eva", services: [] },
+  ];
+  const svcs = [{ id: "cut" }, { id: "colour" }, { id: "nails" }];
+  const own = staffOwnCatalog("u-ana", pros, svcs);
+  check("finds the caller's professional by their login", own?.me.id, "p-ana");
+  check("only themself to book on", own?.professionals.map((p) => p.id), ["p-ana"]);
+  check("only the services they perform", own?.services.map((s) => s.id), ["cut"]);
+  check(
+    "every service when none is linked to them",
+    staffOwnCatalog("u-eva", [{ ...pros[2], userId: "u-eva" }], svcs)?.services.length,
+    3,
+  );
+  check("null for an account with no professional", staffOwnCatalog("u-nobody", pros, svcs), null);
+  check("null without a user id", staffOwnCatalog(undefined, pros, svcs), null);
+
+  // D19: "los profesionales pueden reservar para compañeros".
+  const team = staffOwnCatalog("u-bea", pros, svcs, true);
+  check("with cross-booking: the whole team, themself first", team?.professionals.map((p) => p.id), ["p-bea", "p-ana", "p-eva"]);
+  check("with cross-booking: every service", team?.services.map((s) => s.id), ["cut", "colour", "nails"]);
+  check("with cross-booking: still knows who they are", team?.me.id, "p-bea");
+  check("with cross-booking but no professional: still null", staffOwnCatalog("u-nobody", pros, svcs, true), null);
+}
+
+// ----- buildStaffBookingPayload: one request for the whole visit -----
+
+console.log("\n=== buildStaffBookingPayload ===");
+{
+  const form = {
+    clientId: "c1",
+    serviceId: "",
+    professionalId: "",
+    date: "2026-12-07",
+    time: "10:00",
+    notes: "",
+    selectedServices: [] as Array<{ serviceId: string; professionalId?: string; isParallel?: boolean }>,
+    depositRequired: false,
+    depositAmount: 0,
+  };
+
+  const forColleague = {
+    ...form,
+    role: "staff",
+    ownProfessionalId: "p-ana",
+    selectedServices: [
+      { serviceId: "cut", professionalId: "p-bea" },
+      { serviceId: "nails", isParallel: true },
+    ],
+  };
+  check(
+    "staff without cross-booking: a colleague picked in a stale form still books on their own agenda",
+    buildStaffBookingPayload(forColleague)?.services?.map((r) => r.professionalId),
+    ["p-ana", "p-ana"],
+  );
+  const crossed = buildStaffBookingPayload({ ...forColleague, crossBooking: true });
+  check(
+    "staff with cross-booking: the colleague they picked, their own where they picked none",
+    crossed?.services?.map((r) => r.professionalId),
+    ["p-bea", "p-ana"],
+  );
+  check("staff with cross-booking: the visit's professional is the first service's", crossed?.professionalId, "p-bea");
+  check(
+    "crossBooking changes nothing for a manager",
+    buildStaffBookingPayload({ ...forColleague, role: "owner", crossBooking: true })?.services?.map((r) => r.professionalId),
+    buildStaffBookingPayload({ ...forColleague, role: "owner" })?.services?.map((r) => r.professionalId),
+  );
+  check(
+    "a professional's single service: their own professional, no commission",
+    buildStaffBookingPayload({
+      ...form,
+      role: "staff",
+      ownProfessionalId: "p-ana",
+      selectedServices: [{ serviceId: "cut", professionalId: "p-ana" }],
+      commissionRate: 100,
+    }),
+    { clientId: "c1", serviceId: "cut", professionalId: "p-ana", scheduledDate: "2026-12-07", scheduledTime: "10:00" },
+  );
+
+  const visit = buildStaffBookingPayload({
+    ...form,
+    role: "owner",
+    selectedServices: [
+      { serviceId: "colour", professionalId: "p-bea" },
+      { serviceId: "cut" },
+      { serviceId: "nails", isParallel: true },
+    ],
+    autoAssign: { cut: "p-ana" },
+  });
+  check("several services go in the same request, in order", visit?.services, [
+    { serviceId: "colour", professionalId: "p-bea", isParallel: false },
+    { serviceId: "cut", professionalId: "p-ana", isParallel: false },
+    { serviceId: "nails", professionalId: "p-bea", isParallel: true },
+  ]);
+  check("the appointment is the first service's", [visit?.serviceId, visit?.professionalId], ["colour", "p-bea"]);
+  checkTrue("no timing sent: the server times the rows", !JSON.stringify(visit).includes("scheduledStart"));
+
+  check(
+    "the commission is sent only when an owner typed one",
+    [
+      buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana" })?.commissionRate,
+      buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", commissionRate: 0 })?.commissionRate,
+      buildStaffBookingPayload({ ...form, role: "admin", serviceId: "cut", professionalId: "p-ana", commissionRate: 35 })?.commissionRate,
+    ],
+    [undefined, 0, 35],
+  );
+  check(
+    "the deposit in cents, only when asked for",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", depositRequired: true, depositAmount: 12.5 })?.depositAmount,
+    1250,
+  );
+  check(
+    "a confirmed booking outside hours says so",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut", professionalId: "p-ana", allowOutsideHours: true })?.allowOutsideHours,
+    true,
+  );
+  check(
+    "an owner has to choose a professional",
+    buildStaffBookingPayload({ ...form, role: "owner", serviceId: "cut" }),
+    null,
+  );
+  check("a client, a service, a day and a time are needed", [
+    buildStaffBookingPayload({ ...form, role: "staff", clientId: "", serviceId: "cut" }),
+    buildStaffBookingPayload({ ...form, role: "staff" }),
+    buildStaffBookingPayload({ ...form, role: "staff", serviceId: "cut", time: "" }),
+  ], [null, null, null]);
+}
+checkTrue(
+  "the drawer no longer adds the services in a second request",
+  !fs.readFileSync(path.join(__dirname, "appointment-drawer", "appointment-drawer.tsx"), "utf8").includes("bulkCreateAppointmentServices"),
+);
+checkTrue(
+  "the drawer no longer reads /admin/professionals for a professional's services",
+  !fs.readFileSync(path.join(__dirname, "appointment-drawer", "hooks", "useAppointmentCatalog.ts"), "utf8").includes("getProfessional("),
+);
+
+{
+  const es = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "es.json"), "utf8"));
+  const en = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "messages", "en.json"), "utf8"));
+  const get = (o: any, key: string) => key.split(".").reduce((a, k) => (a == null ? a : a[k]), o);
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)],
+    );
+  const files = walk(path.join(__dirname, "..")).filter((f) => /\.tsx?$/.test(f) && !/\.spec\.ts$/.test(f));
+  const keys = new Set<string>();
+  for (const f of files) {
+    for (const m of fs.readFileSync(f, "utf8").matchAll(/\bt\(\s*["']([a-zA-Z0-9_.]+)["']/g)) keys.add(m[1]);
+  }
+  const missing = [...keys].filter((k) => typeof get(es, k) !== "string" || typeof get(en, k) !== "string");
+  check("every string the appointment pages use exists in es and en", missing, []);
+  checkTrue("the quantity label is a real key", keys.has("appointments.quantity") && !keys.has("appointments.common.quantity"));
+  check(
+    "no English left in the Spanish appointment strings",
+    ["services", "professionals", "professionals_description"].filter((k) => /Services|Professionals|Description/.test(es.appointments[k])),
+    [],
+  );
+  const source = files.map((f) => fs.readFileSync(f, "utf8")).join("\n");
+  checkTrue("no dollar prices in the appointment pages", !/>\s*\$\s*\{|\$\{\(|>\$\{|DollarSign/.test(source));
+  checkTrue("no en-US dates in the appointment pages", !source.includes("en-US"));
+  checkTrue("no console.log printing client data", !/console\.log\(/.test(source));
+}
 
 // ----- Summary -----
 

@@ -9,9 +9,17 @@ function when(state: MarketingConsentState) {
   return state.decidedAt ? new Date(state.decidedAt).toLocaleDateString("es-ES") : "";
 }
 
+/** Where a recorded choice was made, as the end of a sentence. */
+export function choiceOrigin(source: string | null | undefined): string {
+  if (source === "booking") return ", al reservar en la web del salón";
+  if (source === "widget") return ", al reservar con el widget";
+  if (source === "salon") return ", anotado por el salón";
+  return "";
+}
+
 function describe(state: MarketingConsentState, channel: "email" | "whatsapp") {
-  if (state.status === "granted") return `Acepta (desde el ${when(state)})`;
-  if (state.status === "refused") return `No quiere (desde el ${when(state)})`;
+  if (state.status === "granted") return `Acepta (desde el ${when(state)}${choiceOrigin(state.source)})`;
+  if (state.status === "refused") return `No quiere (desde el ${when(state)}${choiceOrigin(state.source)})`;
   return channel === "email"
     ? "No lo ha indicado: puede recibirlas como cliente hasta que diga que no"
     : "No lo ha indicado: no recibe promociones por WhatsApp";
@@ -20,7 +28,9 @@ function describe(state: MarketingConsentState, channel: "email" | "whatsapp") {
 /**
  * The client's choices about promotions, in their file. The salon can write
  * down a WhatsApp opt-in the client gave in person (the record says the
- * salon wrote it); the email choice is only the client's to make.
+ * salon wrote it), and that she does not want promotions by email -- only
+ * that: an acceptance of email promotions is never the salon's to record.
+ * Clients have no account, so this is where a "no" told to the salon goes.
  */
 export function ClientMarketingCard({ clientId }: { clientId: string }) {
   const { toast } = useToast();
@@ -41,6 +51,19 @@ export function ClientMarketingCard({ clientId }: { clientId: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function refuseEmail() {
+    setBusy(true);
+    try {
+      const email = await apiClient.recordClientEmailMarketingRefusal(clientId);
+      setData((d) => (d ? { ...d, email } : d));
+      toast({ title: "Anotado: no quiere promociones por email" });
+    } catch (err: any) {
+      toast({ title: "No se pudo guardar", description: err?.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function record(accepts: boolean) {
     setBusy(true);
@@ -71,6 +94,16 @@ export function ClientMarketingCard({ clientId }: { clientId: string }) {
           <div>
             <dt className="font-medium text-gray-700">Por email</dt>
             <dd className="text-gray-600">{describe(data.email, "email")}</dd>
+            {data.email.status !== "refused" && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={refuseEmail}
+                className="mt-2 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Anotar que no quiere
+              </button>
+            )}
           </div>
           <div>
             <dt className="font-medium text-gray-700">Por WhatsApp</dt>

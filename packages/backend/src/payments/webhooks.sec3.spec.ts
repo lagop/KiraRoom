@@ -48,11 +48,13 @@ describe('WebhooksController SEC-3 (signature enforcement)', () => {
       warn: jest.fn(),
       error: jest.fn(),
     };
-    c.configService = { get: () => opts.webhookSecret ?? '' } as any;
-    // The constructor normally sets `webhookSecret`; we bypass the
-    // constructor with Object.create so we set it explicitly here.
-    c.webhookSecret = opts.webhookSecret ?? '';
-    c.stripe = opts.stripe ?? null;
+    c.configService = { get: () => undefined } as any;
+    // The secret and the client come from the platform settings (console,
+    // else .env); the constructor is bypassed, so the stub is set here.
+    c.platformStripe = {
+      client: () => opts.stripe ?? null,
+      current: () => ({ webhookSecret: opts.webhookSecret || null }),
+    };
     c.paymentsService = {} as any;
     c.prisma = {} as any;
     c.email = {} as any;

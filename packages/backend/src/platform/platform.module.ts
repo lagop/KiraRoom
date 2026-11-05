@@ -1,12 +1,19 @@
 import { Module } from "@nestjs/common";
 import { PlatformLlmConfigController } from "./platform-llm-config.controller";
 import { PlatformLlmConfigService } from "./platform-llm-config.service";
+import { PlatformEmailConfigController } from "./platform-email-config.controller";
+import { PlatformEmailConfigService } from "./platform-email-config.service";
+import { PlatformStripeConfigController } from "./platform-stripe-config.controller";
+import { PlatformStripeConfigService } from "./platform-stripe-config.service";
+import { PlatformRetentionConfigController } from "./platform-retention-config.controller";
+import { PlatformRetentionConfigService } from "./platform-retention-config.service";
+import { AuditLogService } from "../saas/audit-log.service";
 import { CommonModule } from "../common/common.module";
 
 @Module({
   imports: [CommonModule],
-  controllers: [PlatformLlmConfigController],
-  providers: [PlatformLlmConfigService],
-  exports: [PlatformLlmConfigService],
+  controllers: [PlatformLlmConfigController, PlatformEmailConfigController, PlatformStripeConfigController, PlatformRetentionConfigController],
+  providers: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService, PlatformRetentionConfigService, AuditLogService],
+  exports: [PlatformLlmConfigService, PlatformEmailConfigService, PlatformStripeConfigService, PlatformRetentionConfigService],
 })
 export class PlatformModule {}

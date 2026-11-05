@@ -3,6 +3,27 @@ import { ConfigService } from "@nestjs/config";
 import { Resend } from "resend";
 import { TranslationsService } from "../../translations/translations.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { PlatformEmailConfigService } from "../../platform/platform-email-config.service";
+import { EmailSettings, senderWithName } from "../../platform/email-settings";
+import { isPlaceholderEmail } from "../../common/placeholder-email";
+import { anonymizationDate } from "../../saas/retention/salon-retention";
+import { escapeHtml } from "../../common/html-escape";
+
+/**
+ * How long a send may take before the caller gives up on it. Resend's client
+ * has no timeout of its own, so a hung provider used to hold a scheduler
+ * tick (and every reminder after it) indefinitely.
+ */
+export const EMAIL_SEND_TIMEOUT_MS = 15_000;
+
+/** Rejects when `promise` has not settled within `ms`. The request itself is not aborted. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Email provider did not answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 export interface EmailOptions {
   to: string | string[];
@@ -11,20 +32,51 @@ export interface EmailOptions {
   text?: string;
   replyTo?: string;
   sendAt?: Date; // For scheduling emails with Resend
-  /**
-   * Extra RFC 822 headers (e.g. `List-Unsubscribe`). Pass-through to
-   * Resend. The service also auto-adds List-Unsubscribe for any
-   * single-recipient transactional email when `listUnsubscribe: true`
-   * is set (default for `sendTransactional` callers).
-   */
+  /** Extra RFC 822 headers, passed through to Resend as given. */
   headers?: Record<string, string>;
   /**
-   * Set to `true` to auto-add a `List-Unsubscribe: <mailto:…>` header
-   * pointing at `unsubscribe@<EMAIL_FROM_DOMAIN>`. Recommended for
-   * all transactional emails per RFC 8058. Defaults to `false` to
-   * preserve the historical behavior of one-off `sendEmail` callers.
+   * Resend's Idempotency-Key: a retry with the same key within 24 hours is
+   * not delivered twice (e.g. after a send that timed out but went through).
    */
-  listUnsubscribe?: boolean;
+  idempotencyKey?: string;
+  /** Files attached to the email (an invoice's PDF). */
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /**
+   * The display name in front of the platform's sender address (a salon's
+   * name on its campaigns). The address itself never changes. Cleaned of
+   * quotes and line breaks (senderWithName).
+   */
+  fromName?: string;
+  /**
+   * Resend tags, returned with every webhook event for this email: how a
+   * late complaint finds the salon it was about (ResendEventsService).
+   * Names and values: ASCII letters, digits, "_" and "-".
+   */
+  tags?: Array<{ name: string; value: string }>;
+}
+
+/** What a send returned. */
+export interface EmailSendResult {
+  success: boolean;
+  id?: string;
+  error?: string;
+  /** The provider's HTTP status, when it answered with an error. */
+  statusCode?: number | null;
+  /**
+   * Whether trying again later may work: a rate limit (429), a provider
+   * error (5xx), no answer at all (timeout, network). A refused address or
+   * a bad request is not.
+   */
+  retryable?: boolean;
+}
+
+/** Resend errors worth retrying, by their status or name. */
+export function isRetryableSendError(error: { statusCode?: number | null; name?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const status = error.statusCode ?? null;
+  if (status === null) return true; // no HTTP answer: network or timeout
+  if (status === 429 || status >= 500) return true;
+  return error.name === "concurrent_idempotent_requests";
 }
 
 export interface BatchEmailOptions {
@@ -47,74 +99,203 @@ export interface AppointmentEmailData {
   salonName: string;
   salonAddress?: string;
   salonPhone?: string;
+  /**
+   * The salon's location the appointment is at, when it has several
+   * (multi-location/client-locations.ts, bookingPlace); salonAddress is then
+   * that location's address.
+   */
+  locationName?: string;
+  /**
+   * The salon's booking page, when the email invites to book again (a
+   * cancellation because the professional is away or the salon is closed).
+   */
+  bookingUrl?: string;
+  /**
+   * The booking waits for the salon to confirm it: the confirmation email
+   * says the request was received ("te confirmará la cita"), not that the
+   * appointment is confirmed. The "confirmada" one goes when it confirms.
+   */
+  pending?: boolean;
+  /** The client's "Cancelar mi cita" page (appointments/public-cancel-link.ts), when she may use it. */
+  cancelUrl?: string;
+  /**
+   * The salon's contact email (Tenant.email): replies go there, not to the
+   * platform's sender. Empty: no Reply-To.
+   */
+  salonEmail?: string | null;
+  /**
+   * The salon's online cancellation deadline (Tenant.minCancelHours), passed
+   * when it has no policy text of its own: the confirmation with a cancel
+   * link then says "Puedes cancelar online hasta N h antes".
+   */
+  minCancelHours?: number;
+  /**
+   * Not used: the appointment emails are in Spanish. No caller knows the
+   * salon's language today, and the dates they pass are already Spanish.
+   */
   language?: string;
 }
+
+/**
+ * What every read-only email says about the data (audit 7 D7): it can be
+ * exported until the end of the read-only period, and is anonymised 30 days
+ * after (saas/retention/salon-retention.ts). The same wording as the terms,
+ * the privacy policy and the panel's read-only notice.
+ */
+export function retentionSentence(readOnlyUntil: Date): string {
+  return `Puedes exportar tus datos hasta el ${formatLongDateEs(readOnlyUntil)}; después se anonimizan, el ${formatLongDateEs(anonymizationDate(readOnlyUntil))}. Las facturas emitidas se conservan, como exige la ley.`;
+}
+
+/** "23 de noviembre de 2026", in Madrid time so a late-UTC instant shows the right day. */
+export function formatLongDateEs(date: Date, timeZone = "Europe/Madrid"): string {
+  return date.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone,
+  });
+}
+
+/**
+ * An appointment's date as the client reads it. A calendar day
+ * ("2026-11-02", what the reminder scheduler passes, or its midnight-UTC
+ * serialisation) becomes "lunes, 2 de noviembre de 2026"; it is the salon's
+ * own calendar day, so it is read in UTC and never shifts. Anything else is
+ * already a formatted date and is shown as given.
+ */
+export function displayDate(date: string): string {
+  const value = String(date ?? "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(value);
+  if (!m) return value;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** The appointment card's look in the confirmation and reminders. */
+const CARD_DEFAULT = {
+  title: "📅 Detalles de la cita",
+  background: "#f9fafb",
+  border: "#e5e7eb",
+  titleColor: "#111827",
+  accent: "#667eea",
+};
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private resend: Resend | null = null;
+  /** The key `resend` was built with: a new one in the console builds a new client. */
+  private resendKey: string | null = null;
 
   constructor(
     private configService: ConfigService,
     private translationsService: TranslationsService,
     private readonly prisma: PrismaService,
-  ) {
-    const apiKey = this.configService.get<string>("RESEND_API_KEY");
-    if (apiKey) {
-      this.resend = new Resend(apiKey);
-    } else {
-      this.logger.warn(
-        "RESEND_API_KEY not configured - email sending disabled",
-      );
+    // The platform console's settings, falling back to the server's .env.
+    // Always injected in the app (a module that forgets PlatformModule fails
+    // at boot); tests that build the service by hand leave it out.
+    private readonly platformEmail?: PlatformEmailConfigService,
+  ) {}
+
+  /** API key, sender and webhook secret in force (console, else .env). */
+  private settings(): EmailSettings {
+    if (this.platformEmail) return this.platformEmail.current();
+    return {
+      apiKey: this.configService.get<string>("RESEND_API_KEY") || null,
+      from: this.configService.get<string>("EMAIL_FROM") || null,
+      webhookSecret: this.configService.get<string>("RESEND_WEBHOOK_SECRET") || null,
+    };
+  }
+
+  /** The Resend client for the key in force, or null when there is none. */
+  private client(): Resend | null {
+    const key = this.settings().apiKey;
+    if (!key) return null;
+    if (!this.resend || key !== this.resendKey) {
+      this.resend = new Resend(key);
+      this.resendKey = key;
     }
+    return this.resend;
+  }
+
+  private fromAddress(): string {
+    return this.settings().from || "noreply@yourdomain.com";
   }
 
   /**
    * Check if email service is configured
    */
   isConfigured(): boolean {
-    return this.resend !== null;
+    return !!this.settings().apiKey;
+  }
+
+  /** Whether Resend's delivery events can be verified (webhook secret set). */
+  isTrackingConfigured(): boolean {
+    return !!this.settings().webhookSecret;
   }
 
   /**
    * Send raw email
    */
-  async sendEmail(
-    options: EmailOptions,
-  ): Promise<{ success: boolean; id?: string; error?: string }> {
-    if (!this.resend) {
+  async sendEmail(options: EmailOptions): Promise<EmailSendResult> {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn("Email service not configured - skipping email send");
       return { success: false, error: "Email service not configured" };
     }
 
-    const from =
-      this.configService.get<string>("EMAIL_FROM") || "noreply@yourdomain.com";
+    const to = this.deliverableRecipients(options.to);
+    if (!to.length) {
+      this.logger.warn("Email to a placeholder address only - skipping email send");
+      return { success: false, error: "No deliverable recipient" };
+    }
 
-    const headers = this.buildHeaders(options, from);
+    const from = options.fromName ? senderWithName(options.fromName, this.fromAddress()) : this.fromAddress();
+
+    const headers = this.buildHeaders(options);
 
     try {
-      const { data, error } = await this.resend.emails.send({
-        from,
-        to: Array.isArray(options.to) ? options.to : [options.to],
-        subject: options.subject,
-        html: options.html,
-        text: options.text,
-        replyTo: options.replyTo,
-        headers,
-      });
+      const { data, error } = await withTimeout(
+        resend.emails.send(
+          {
+            from,
+            to,
+            subject: options.subject,
+            html: options.html,
+            text: options.text,
+            replyTo: options.replyTo,
+            headers,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+            ...(options.tags?.length ? { tags: options.tags } : {}),
+          },
+          options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+        ),
+        EMAIL_SEND_TIMEOUT_MS,
+      );
 
       if (error) {
         this.logger.error(`Failed to send email: ${error.message}`);
-        return { success: false, error: error.message };
+        const statusCode = (error as { statusCode?: number | null }).statusCode ?? null;
+        return {
+          success: false,
+          error: error.message,
+          statusCode,
+          retryable: isRetryableSendError({ statusCode, name: (error as { name?: string }).name }),
+        };
       }
 
       this.logger.log(`Email sent successfully: ${data?.id}`);
       return { success: true, id: data?.id };
     } catch (err) {
+      // A timeout or a network failure: the provider never answered.
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
       this.logger.error(`Failed to send email: ${errorMessage}`);
-      return { success: false, error: errorMessage };
+      return { success: false, error: errorMessage, retryable: true };
     }
   }
 
@@ -124,24 +305,30 @@ export class EmailService {
   async sendScheduledEmail(
     options: EmailOptions,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    if (!this.resend) {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn("Email service not configured - skipping email send");
       return { success: false, error: "Email service not configured" };
     }
 
-    const from =
-      this.configService.get<string>("EMAIL_FROM") || "noreply@yourdomain.com";
+    const to = this.deliverableRecipients(options.to);
+    if (!to.length) {
+      this.logger.warn("Email to a placeholder address only - skipping email send");
+      return { success: false, error: "No deliverable recipient" };
+    }
+
+    const from = this.fromAddress();
 
     try {
       // Build email payload with optional scheduling
       const emailPayload: any = {
         from,
-        to: Array.isArray(options.to) ? options.to : [options.to],
+        to,
         subject: options.subject,
         html: options.html,
         text: options.text,
         replyTo: options.replyTo,
-        headers: this.buildHeaders(options, from),
+        headers: this.buildHeaders(options),
       };
 
       // Add scheduled time if provided (Resend accepts send_at as Unix timestamp)
@@ -149,7 +336,13 @@ export class EmailService {
         emailPayload.send_at = Math.floor(options.sendAt.getTime() / 1000);
       }
 
-      const { data, error } = await this.resend.emails.send(emailPayload);
+      const { data, error } = await withTimeout(
+        resend.emails.send(
+          emailPayload,
+          options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+        ),
+        EMAIL_SEND_TIMEOUT_MS,
+      );
 
       if (error) {
         this.logger.error(`Failed to send scheduled email: ${error.message}`);
@@ -172,19 +365,23 @@ export class EmailService {
   async sendBatchEmails(
     emails: BatchEmailOptions[],
   ): Promise<{ success: boolean; ids?: string[]; error?: string }> {
-    if (!this.resend) {
+    const resend = this.client();
+    if (!resend) {
       this.logger.warn(
         "Email service not configured - skipping batch email send",
       );
       return { success: false, error: "Email service not configured" };
     }
 
+    emails = emails
+      .map((email) => ({ ...email, to: this.deliverableRecipients(email.to) }))
+      .filter((email) => email.to.length > 0);
     if (emails.length === 0) {
       return { success: true, ids: [] };
     }
 
     try {
-      const { data, error } = await this.resend.batch.send(emails);
+      const { data, error } = await withTimeout(resend.batch.send(emails), EMAIL_SEND_TIMEOUT_MS);
 
       if (error) {
         this.logger.error(`Failed to send batch emails: ${error.message}`);
@@ -204,37 +401,83 @@ export class EmailService {
   }
 
   /**
-   * Send appointment confirmation
+   * An appointment email goes out in the salon's name (like its campaigns),
+   * and the client's reply reaches the salon when it has an email.
+   */
+  private salonSender(data: AppointmentEmailData): Pick<EmailOptions, "fromName" | "replyTo"> {
+    const replyTo = (data.salonEmail ?? "").trim();
+    return {
+      ...(data.salonName ? { fromName: data.salonName } : {}),
+      ...(replyTo && !isPlaceholderEmail(replyTo) ? { replyTo } : {}),
+    };
+  }
+
+  /** "Puedes cancelar online hasta 24 h antes.", when the email has a cancel link and the salon no policy text. */
+  private cancelDeadline(data: AppointmentEmailData): string {
+    if (!data.cancelUrl || data.minCancelHours === undefined || data.minCancelHours === null) return "";
+    const hours = Math.max(0, Math.round(Number(data.minCancelHours)));
+    if (!Number.isFinite(hours)) return "";
+    return hours > 0 ? `Puedes cancelar online hasta ${hours} h antes.` : "Puedes cancelar online hasta la hora de la cita.";
+  }
+
+  /** The recipients without KiraRoom's placeholder addresses (never deliverable). */
+  private deliverableRecipients(to: string | string[]): string[] {
+    return (Array.isArray(to) ? to : [to]).filter((address) => !isPlaceholderEmail(address));
+  }
+
+  /**
+   * The appointment emails to the client: confirmation, 24 h / 1 h reminder,
+   * cancellation and change of date.
+   *
+   * In Spanish, signed with the salon's own name. They used to be in English
+   * (the confirmation half and half), and a SALON_NAME setting of the server
+   * replaced every salon's name with one. Every value in the HTML is escaped;
+   * the plain-text part and the subject are not HTML.
    */
   async sendAppointmentConfirmation(
     data: AppointmentEmailData,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const language = data.language || "es";
-
-    const subject = this.translationsService.translate(
-      language as any,
-      "emails.appointment.confirmation.subject",
-      {
-        business_name: salonName,
-      },
-    );
-
-    const html = this.generateConfirmationHtml(
-      { ...data, salonName },
-      language,
-    );
-    const text = this.generateConfirmationText(
-      { ...data, salonName },
-      language,
-    );
-
+    const subject = data.pending
+      ? `Hemos recibido tu solicitud de cita en ${data.salonName}`
+      : `Tu cita en ${data.salonName} está confirmada`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateConfirmationHtml(data),
+      text: this.generateConfirmationText(data),
+      ...this.salonSender(data),
+    });
+  }
+
+  /**
+   * A booking the salon did not confirm in time (pending-booking-expiry):
+   * it has been cancelled, and the client is told so, with a link to book
+   * again when the salon has a booking page.
+   */
+  async sendBookingNotConfirmed(
+    data: AppointmentEmailData,
+  ): Promise<{ success: boolean; id?: string; error?: string }> {
+    return this.sendEmail({
+      to: data.clientEmail,
+      subject: `${data.salonName} no ha podido confirmar tu cita`,
+      ...this.salonSender(data),
+      html: this.appointmentHtml(data, {
+        title: "Cita no confirmada",
+        intro: `${this.escapeHtml(data.salonName)} no ha podido confirmar tu cita a tiempo y se ha anulado. Estos eran sus datos:`,
+        card: { title: "Solicitud anulada", background: "#fef2f2", border: "#fecaca", titleColor: "#991b1b", accent: "#f87171" },
+        rows: this.appointmentRows(data),
+        closing: data.bookingUrl
+          ? `Sentimos las molestias. <a href="${this.escapeHtml(data.bookingUrl)}" style="color: #7c3aed; font-weight: 600;">Pide otra cita</a> cuando te venga bien, o llama al salón.`
+          : "Sentimos las molestias. Puedes pedir otra cita cuando te venga bien, o llamar al salón.",
+      }),
+      text: this.appointmentText(data, {
+        title: "Cita no confirmada",
+        intro: `${data.salonName} no ha podido confirmar tu cita a tiempo y se ha anulado. Estos eran sus datos:`,
+        cardTitle: "Solicitud anulada",
+        closing: data.bookingUrl
+          ? `Sentimos las molestias. Pide otra cita cuando te venga bien: ${data.bookingUrl}`
+          : "Sentimos las molestias. Puedes pedir otra cita cuando te venga bien, o llamar al salón.",
+      }),
     });
   }
 
@@ -244,19 +487,20 @@ export class EmailService {
   async sendAppointmentReminder(
     data: AppointmentEmailData,
     hoursBefore: number,
+    options: Pick<EmailOptions, "idempotencyKey"> = {},
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Reminder: Your appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"} - ${data.serviceName}`;
-
-    const html = this.generateReminderHtml({ ...data, salonName }, hoursBefore);
-    const text = this.generateReminderText({ ...data, salonName }, hoursBefore);
+    const subject =
+      hoursBefore === 1
+        ? `Recordatorio: tu cita en ${data.salonName} es dentro de 1 hora`
+        : `Recordatorio: mañana tienes cita en ${data.salonName} (${data.serviceName})`;
 
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateReminderHtml(data, hoursBefore),
+      text: this.generateReminderText(data, hoursBefore),
+      ...this.salonSender(data),
+      idempotencyKey: options.idempotencyKey,
     });
   }
 
@@ -267,18 +511,13 @@ export class EmailService {
     data: AppointmentEmailData,
     reason?: string,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Appointment Cancelled - ${data.serviceName} on ${data.date}`;
-
-    const html = this.generateCancellationHtml({ ...data, salonName }, reason);
-    const text = this.generateCancellationText({ ...data, salonName }, reason);
-
+    const subject = `Cita cancelada en ${data.salonName}: ${data.serviceName}, ${displayDate(data.date)}`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateCancellationHtml(data, reason),
+      text: this.generateCancellationText(data, reason),
+      ...this.salonSender(data),
     });
   }
 
@@ -290,26 +529,13 @@ export class EmailService {
     oldDate: string,
     oldTime: string,
   ): Promise<{ success: boolean; id?: string; error?: string }> {
-    const salonName =
-      this.configService.get<string>("SALON_NAME") || data.salonName;
-    const subject = `Appointment Rescheduled - ${data.serviceName} on ${data.date}`;
-
-    const html = this.generateRescheduledHtml(
-      { ...data, salonName },
-      oldDate,
-      oldTime,
-    );
-    const text = this.generateRescheduledText(
-      { ...data, salonName },
-      oldDate,
-      oldTime,
-    );
-
+    const subject = `Tu cita en ${data.salonName} ha cambiado: ${displayDate(data.date)} a las ${data.time}`;
     return this.sendEmail({
       to: data.clientEmail,
       subject,
-      html,
-      text,
+      html: this.generateRescheduledHtml(data, oldDate, oldTime),
+      text: this.generateRescheduledText(data, oldDate, oldTime),
+      ...this.salonSender(data),
     });
   }
 
@@ -426,7 +652,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -446,6 +671,150 @@ export class EmailService {
   // short-circuit. See `shouldSkipBouncedUser` below.
 
   /**
+   * To the salon's owner and admins (audit 7 D12): a client booked online
+   * (salon page, widget, virtual receptionist) or cancelled her appointment
+   * herself, with a link to it in the panel. Each user can turn these off
+   * in Ajustes > Seguridad (SALON_BOOKING_ALERT, salon-booking-alerts.ts).
+   */
+  async sendSalonBookingAlert(data: {
+    to: string;
+    kind: "booked" | "cancelled";
+    tenantName: string;
+    clientName: string;
+    serviceName: string | null;
+    professionalName: string | null;
+    /** The salon's calendar day, YYYY-MM-DD. */
+    date: string;
+    time: string | null;
+    appointmentUrl: string;
+    settingsUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const booked = data.kind === "booked";
+    const when = `${displayDate(data.date)}${data.time ? ` a las ${data.time}` : ""}`;
+    const what = [data.serviceName, data.professionalName ? `con ${data.professionalName}` : null].filter(Boolean).join(" ");
+    const subject = booked
+      ? `Nueva reserva online: ${data.clientName}, ${when}`
+      : `${data.clientName} ha anulado su cita del ${when}`;
+    const lead = booked
+      ? `<strong>${this.escapeHtml(data.clientName)}</strong> ha reservado online en <strong>${this.escapeHtml(data.tenantName)}</strong>.`
+      : `<strong>${this.escapeHtml(data.clientName)}</strong> ha anulado su cita en <strong>${this.escapeHtml(data.tenantName)}</strong> desde el enlace del email.`;
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:16px;">KiraRoom</div>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">${lead}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            ${what ? `${this.escapeHtml(what)}<br>` : ""}<strong>${this.escapeHtml(when)}</strong>
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${this.escapeHtml(data.appointmentUrl)}"
+                 style="display:inline-block;padding:12px 24px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+                Ver la cita
+              </a>
+            </td></tr>
+          </table>
+          <p style="font-size:12px;color:#64748b;line-height:1.5;margin:0;">
+            Te llega porque eres dueña o administradora del salón. Puedes dejar de recibir estos avisos en
+            <a href="${this.escapeHtml(data.settingsUrl)}" style="color:#64748b;">Ajustes &gt; Seguridad</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      booked
+        ? `${data.clientName} ha reservado online en ${data.tenantName}.`
+        : `${data.clientName} ha anulado su cita en ${data.tenantName} desde el enlace del email.`,
+      what,
+      when,
+      "",
+      `Ver la cita: ${data.appointmentUrl}`,
+      "",
+      `Puedes dejar de recibir estos avisos en Ajustes > Seguridad: ${data.settingsUrl}`,
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
+   * Day 2 after signup, to the owner, when a mandatory onboarding step is
+   * still missing (audit 7 D17, OnboardingNudgeService): what is missing,
+   * with a link to each. A tip from KiraRoom, so it carries an unsubscribe
+   * link and the RFC 8058 one-click headers.
+   */
+  async sendOnboardingReminder(data: {
+    to: string;
+    firstName: string | null;
+    tenantName: string;
+    missing: Array<{ label: string; url: string }>;
+    unsubscribeUrl: string;
+    headers: Record<string, string>;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const one = data.missing.length === 1;
+    const subject = one
+      ? `Te falta un paso para recibir reservas en ${data.tenantName}`
+      : `Te faltan ${data.missing.length} pasos para recibir reservas en ${data.tenantName}`;
+    const hello = data.firstName ? `Hola, ${this.escapeHtml(data.firstName)}:` : "Hola:";
+    const items = data.missing
+      .map(
+        (m) =>
+          `<li style="margin:0 0 8px 0;"><a href="${this.escapeHtml(m.url)}" style="color:#4f46e5;font-weight:600;">${this.escapeHtml(m.label)}</a></li>`,
+      )
+      .join("");
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:16px;">KiraRoom</div>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">${hello}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 12px 0;">
+            Para que tus clientas puedan reservar en <strong>${this.escapeHtml(data.tenantName)}</strong>, ${one ? "te falta esto" : "te falta lo siguiente"}:
+          </p>
+          <ul style="font-size:15px;line-height:1.6;margin:0 0 20px 0;padding-left:20px;">${items}</ul>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">Son unos minutos. Si te atascas, responde a este email y te ayudamos.</p>
+          <p style="font-size:12px;color:#64748b;line-height:1.5;margin:0;">
+            Es el único recordatorio de este tipo que te enviaremos.
+            <a href="${this.escapeHtml(data.unsubscribeUrl)}" style="color:#64748b;">No quiero recibir consejos de KiraRoom</a>.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      data.firstName ? `Hola, ${data.firstName}:` : "Hola:",
+      "",
+      `Para que tus clientas puedan reservar en ${data.tenantName}, ${one ? "te falta esto" : "te falta lo siguiente"}:`,
+      ...data.missing.map((m) => `- ${m.label}: ${m.url}`),
+      "",
+      "Son unos minutos. Si te atascas, responde a este email y te ayudamos.",
+      "",
+      `No quiero recibir consejos de KiraRoom: ${data.unsubscribeUrl}`,
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text, headers: data.headers });
+  }
+
+  /**
    * T-3 / T-1 warning that the free trial is about to end.
    * Sent by `TrialExpiryScheduler` (new in 2.3) once per trial window.
    */
@@ -455,6 +824,10 @@ export class EmailService {
     daysLeft: 3 | 1;
     trialEnd: Date;
     upgradeUrl: string;
+    /** Length of this salon's trial; the console can create trials other than 14 days. */
+    trialDays?: number;
+    /** The salon's time zone, so a trial ending near midnight shows its own day. */
+    timeZone?: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
       return { success: false, skipped: true, error: "email_bounced" };
@@ -465,11 +838,19 @@ export class EmailService {
         ? `Mañana termina tu prueba gratuita en KiraRoom`
         : `Tu prueba gratuita en KiraRoom termina en ${data.daysLeft} días`;
 
-    const formattedDate = data.trialEnd.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+    let formattedDate: string;
+    try {
+      formattedDate = formatLongDateEs(data.trialEnd, data.timeZone || "Europe/Madrid");
+    } catch {
+      // An unknown time zone name: fall back to Madrid.
+      formattedDate = formatLongDateEs(data.trialEnd);
+    }
+    const trialLength =
+      data.trialDays && data.trialDays > 0
+        ? data.trialDays === 1
+          ? "1 día"
+          : `${data.trialDays} días`
+        : null;
 
     const html = `
 <!DOCTYPE html>
@@ -486,7 +867,7 @@ export class EmailService {
             Hola,
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Tu prueba gratuita de <strong>14 días</strong> de KiraRoom para
+            Tu prueba gratuita${trialLength ? ` de <strong>${trialLength}</strong>` : ""} de KiraRoom para
             <strong>${this.escapeHtml(data.tenantName)}</strong> termina el
             <strong>${formattedDate}</strong>.
             ${data.daysLeft === 1
@@ -531,7 +912,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -629,7 +1009,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -649,6 +1028,8 @@ export class EmailService {
     }
 
     const shortId = data.reportId.slice(0, 8);
+    // The reporter's own words, cut short: this goes out from the KiraRoom domain.
+    const excerpt = bugReportExcerpt(data.subject);
     const subject = `Hemos recibido tu reporte (${shortId})`;
     const html = `
 <!DOCTYPE html>
@@ -660,13 +1041,13 @@ export class EmailService {
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
           <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
-          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en menos de 24h</p>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Recibido · te responderemos en 2-3 días laborables</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Hemos recibido tu reporte: <em>${this.escapeHtml(data.subject)}</em>.
+            Hemos recibido tu reporte: <em>${this.escapeHtml(excerpt)}</em>.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            El equipo técnico lo revisará durante el siguiente día laborable.
+            Te responderemos en 2-3 días laborables.
             Si necesitamos más información te responderemos a este mismo correo.
           </p>
           <p style="font-size:13px;color:#94a3b8;background:#f1f5f9;padding:12px;border-radius:6px;margin:0;">
@@ -681,8 +1062,8 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      `Hemos recibido tu reporte: "${data.subject}".`,
-      `El equipo técnico lo revisará durante el siguiente día laborable.`,
+      `Hemos recibido tu reporte: "${excerpt}".`,
+      `Te responderemos en 2-3 días laborables.`,
       ``,
       `Identificador de seguimiento: ${shortId}`,
     ].join("\n");
@@ -692,7 +1073,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -708,6 +1088,8 @@ export class EmailService {
     to: string;
     tenantName: string;
     gracePeriodEndsAt: Date;
+    /** End of the read-only window: what the email promises to keep. */
+    readOnlyUntil: Date;
     updatePaymentUrl: string;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
@@ -715,11 +1097,8 @@ export class EmailService {
     }
 
     const subject = `Hemos suspendido tu cuenta de KiraRoom`;
-    const formattedDate = data.gracePeriodEndsAt.toLocaleDateString("es-ES", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
+    const formattedDate = formatLongDateEs(data.gracePeriodEndsAt);
+    const keep = retentionSentence(data.readOnlyUntil);
 
     const html = `
 <!DOCTYPE html>
@@ -734,20 +1113,19 @@ export class EmailService {
           <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu suscripción lleva más de 7 días sin poder cobrarse</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            Después de los avisos enviados desde el <strong>${formattedDate}</strong>,
-            no hemos podido procesar el cargo de tu suscripción de
-            KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>.
+            No hemos podido procesar el cargo de tu suscripción de
+            KiraRoom para <strong>${this.escapeHtml(data.tenantName)}</strong>,
+            y el plazo para actualizar el pago terminó el <strong>${formattedDate}</strong>.
             Tu cuenta ha pasado a modo lectura.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>¿Qué significa esto?</strong> Puedes iniciar sesión y consultar
-            tus datos y los de tus clientas, pero no podrás emitir facturas
-            nuevas, registrar citas, ni modificar información hasta que
-            actualices tu método de pago.
+            <strong>¿Qué significa esto?</strong> Puedes iniciar sesión, consultar
+            y exportar tus datos y los de tus clientas, pero no podrás emitir facturas
+            nuevas, registrar citas, ni modificar información, y tu página no
+            acepta reservas hasta que actualices tu método de pago.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
-            Tus datos se conservan durante 60 días. Pasado ese plazo se
-            anonimizarán conforme a nuestra política de privacidad.
+            ${this.escapeHtml(keep)}
           </p>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
             <tr><td style="background:#4f46e5;border-radius:8px;">
@@ -771,10 +1149,12 @@ export class EmailService {
     const text = [
       `Hemos suspendido tu cuenta de KiraRoom.`,
       ``,
-      `No pudimos procesar el cargo de tu suscripción tras los avisos`,
-      `enviados desde el ${formattedDate}. Tu cuenta ha pasado a modo lectura:`,
-      `puedes consultar tus datos pero no emitir facturas, registrar citas`,
-      `ni modificar información hasta actualizar tu método de pago.`,
+      `No pudimos procesar el cargo de tu suscripción y el plazo para`,
+      `actualizar el pago terminó el ${formattedDate}. Tu cuenta ha pasado a modo lectura:`,
+      `puedes consultar y exportar tus datos, pero no emitir facturas, registrar citas`,
+      `ni modificar información, y tu página no acepta reservas, hasta actualizar tu método de pago.`,
+      ``,
+      keep,
       ``,
       `Reactivar:`,
       data.updatePaymentUrl,
@@ -785,8 +1165,304 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
+  }
+
+  /**
+   * Sent the day an account becomes read-only without a failed payment:
+   * the trial ended without a plan (`BillingScheduler.expireTrials`) or the
+   * subscription was cancelled, from the dashboard or in Stripe. The
+   * suspended case has its own email above. Says what still works, until
+   * when the data is kept, and links back to Billing.
+   */
+  async sendAccountReadOnly(data: {
+    to: string;
+    tenantName: string;
+    /**
+     * deletion_requested: the owner asked to delete the salon (Ajustes > Seguridad).
+     * platform_cancelled: KiraRoom ended the subscription from the console ("Suspender", audit 8 D4).
+     * courtesy_ended: the courtesy period KiraRoom gave has ended (audit 8 D6).
+     */
+    reason: "trial_ended" | "cancelled" | "deletion_requested" | "platform_cancelled" | "courtesy_ended";
+    readOnlyUntil: Date;
+    billingUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+
+    const trial = data.reason === "trial_ended";
+    const deletion = data.reason === "deletion_requested";
+    const platform = data.reason === "platform_cancelled";
+    const courtesy = data.reason === "courtesy_ended";
+    const subject = trial
+      ? `Tu prueba de KiraRoom ha terminado: tu cuenta está en modo lectura`
+      : deletion
+        ? `Hemos recibido tu petición para borrar tu salón de KiraRoom`
+        : platform
+          ? `KiraRoom ha dado de baja la suscripción de tu salón`
+          : courtesy
+            ? `Tu período de cortesía en KiraRoom ha terminado: tu cuenta está en modo lectura`
+            : `Hemos cancelado tu suscripción de KiraRoom`;
+    const heading = trial
+      ? "Tu prueba gratuita ha terminado"
+      : deletion
+        ? "Borrado del salón solicitado"
+        : platform
+          ? "Suscripción dada de baja"
+          : courtesy
+            ? "Fin del período de cortesía"
+            : "Suscripción cancelada";
+    const lead = trial
+      ? "La prueba gratuita de 14 días ha terminado sin un plan elegido, así que tu cuenta ha pasado a modo lectura."
+      : deletion
+        ? "Has pedido borrar tu salón. Tu cuenta ha pasado a modo lectura y no se te volverá a cobrar."
+        : platform
+          ? "Hemos dado de baja la suscripción de tu salón en KiraRoom. Tu cuenta ha pasado a modo lectura y no se te volverá a cobrar."
+          : courtesy
+            ? "El período de cortesía que te dimos ha terminado, así que tu cuenta ha pasado a modo lectura."
+            : "Tu suscripción está cancelada y tu cuenta ha pasado a modo lectura. No se te volverá a cobrar.";
+    const cta = trial || courtesy ? "Elegir un plan" : deletion ? "Anular el borrado" : "Reactivar mi suscripción";
+    const meaning =
+      "Puedes iniciar sesión, consultar y exportar tus datos y los de tus clientas, " +
+      "pero no crear ni cambiar citas, clientas ni servicios, y tu página no acepta reservas.";
+    const keep = trial || courtesy
+      ? `${retentionSentence(data.readOnlyUntil)} Si eliges un plan antes, sigues donde lo dejaste, sin perder nada.`
+      : deletion
+        ? `${retentionSentence(data.readOnlyUntil)} Hasta entonces puedes anular el borrado desde Ajustes > Seguridad.`
+        : `${retentionSentence(data.readOnlyUntil)} Si reactivas la suscripción antes, sigues donde lo dejaste, sin perder nada.`;
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">${heading}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            ${lead} Cuenta: <strong>${this.escapeHtml(data.tenantName)}</strong>.
+          </p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>¿Qué significa esto?</strong> ${meaning}
+          </p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 24px 0;">
+            ${keep}
+          </p>
+          <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+            <tr><td style="background:#4f46e5;border-radius:8px;">
+              <a href="${data.billingUrl}"
+                 style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+                ${cta}
+              </a>
+            </td></tr>
+          </table>
+          <p style="font-size:13px;color:#64748b;line-height:1.5;margin:0;">
+            Si tienes cualquier duda sobre qué plan encaja con tu salón,
+            responde a este correo y te ayudamos.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+
+    const text = [
+      `${heading}.`,
+      ``,
+      `${lead} Cuenta: ${data.tenantName}.`,
+      ``,
+      meaning,
+      ``,
+      keep,
+      ``,
+      `${cta}:`,
+      data.billingUrl,
+    ].join("\n");
+
+    return this.sendEmail({
+      to: data.to,
+      subject,
+      html,
+      text,
+    });
+  }
+
+  /**
+   * 7 days before a read-only salon's data is anonymised (audit 7 D7,
+   * saas/retention/salon-retention.scheduler.ts): what will go, what stays,
+   * and that exporting or choosing a plan before then keeps everything.
+   */
+  async sendAnonymizationWarning(data: {
+    to: string;
+    tenantName: string;
+    anonymizeOn: Date;
+    /** Ajustes > Seguridad (exports) or Facturación. */
+    exportUrl: string;
+    billingUrl: string;
+    /**
+     * The salon was deleted from the console (audit 8 D3): its team cannot
+     * sign in, so no links; a copy is asked for by email.
+     */
+    deleted?: boolean;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const day = formatLongDateEs(data.anonymizeOn);
+    const subject = `El ${day} se anonimizan los datos de ${data.tenantName} en KiraRoom`;
+    const lines = [
+      `El ${day} anonimizaremos los datos personales de tu salón en KiraRoom: las fichas de tus clientas, sus citas y conversaciones, y los datos de tu equipo.`,
+      "Las facturas emitidas se conservan, como exige la ley.",
+      data.deleted
+        ? "Tu salón se dio de baja en KiraRoom. Si necesitas una copia de tus datos antes de esa fecha, o crees que es un error, escríbenos a info@kiraroom.com."
+        : "Si quieres guardar una copia, expórtala antes de esa fecha. Si quieres seguir usando KiraRoom, elige un plan antes y no perderás nada.",
+    ];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Aviso: ${e(data.tenantName)}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          ${lines.map((l) => `<p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">${e(l)}</p>`).join("\n          ")}
+          ${
+            data.deleted
+              ? ""
+              : `<p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">
+            <a href="${e(data.exportUrl)}" style="color:#4f46e5;font-weight:600;">Exportar mis datos</a>
+            &nbsp;·&nbsp;
+            <a href="${e(data.billingUrl)}" style="color:#4f46e5;font-weight:600;">Elegir un plan</a>
+          </p>`
+          }
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      "Hola,",
+      "",
+      ...lines,
+      ...(data.deleted ? [] : ["", `Exportar mis datos: ${data.exportUrl}`, `Elegir un plan: ${data.billingUrl}`]),
+    ].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
+   * 3 days before a courtesy period ends (audit 8 D6, CourtesyScheduler):
+   * the date, and that choosing a plan before then keeps everything.
+   */
+  async sendCourtesyEnding(data: {
+    to: string;
+    tenantName: string;
+    endsOn: Date;
+    billingUrl: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const day = formatLongDateEs(data.endsOn);
+    const subject = `Tu período de cortesía en KiraRoom termina el ${day}`;
+    const lines = [
+      `El período de cortesía que te dimos en KiraRoom para ${data.tenantName} termina el ${day}.`,
+      "Si eliges un plan antes de esa fecha, sigues como hasta ahora, sin perder nada.",
+      "Si no, tu cuenta pasará a modo lectura: podrás entrar y exportar tus datos durante 30 días, pero no crear citas ni recibir reservas.",
+    ];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Aviso: ${e(data.tenantName)}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          ${lines.map((l) => `<p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">${e(l)}</p>`).join("\n          ")}
+          <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">
+            <a href="${e(data.billingUrl)}" style="color:#4f46e5;font-weight:600;">Elegir un plan</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = ["Hola,", "", ...lines, "", `Elegir un plan: ${data.billingUrl}`].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
+  }
+
+  /**
+   * Audit 8 D2: KiraRoom support has just opened a session in the salon's
+   * panel. To the owner, in Spanish: who, when, the reason typed in the
+   * console, and the setting that turns support access off.
+   */
+  async sendSupportSessionStarted(data: {
+    to: string;
+    tenantName: string;
+    /** The platform owner's name, as the console shows it. */
+    supportName: string;
+    startedAt: Date;
+    endsAt: Date;
+    reason: string;
+    /** Ajustes > Seguridad, where the setting and the list of sessions are. */
+    settingsUrl: string;
+    timeZone?: string;
+  }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
+    if (await this.shouldSkipBouncedUser(data.to)) {
+      return { success: false, skipped: true, error: "email_bounced" };
+    }
+    const timeZone = data.timeZone || "Europe/Madrid";
+    const when = (d: Date) =>
+      `${formatLongDateEs(d, timeZone)} a las ${d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone })}`;
+    const subject = `Soporte de KiraRoom ha entrado en el panel de ${data.tenantName}`;
+    const lines = [
+      `${data.supportName}, del equipo de soporte de KiraRoom, ha entrado en el panel de tu salón el ${when(data.startedAt)}.`,
+      `Motivo: ${data.reason}`,
+      `La sesión termina sola, como muy tarde, el ${when(data.endsAt)}. Soporte no puede cambiar tu contraseña, pagar ni cambiar tu plan, tocar tus datos fiscales ni exportar tus clientas.`,
+      "Si no lo esperabas, o prefieres que soporte no pueda entrar, desactívalo en Ajustes > Seguridad. Allí ves también las últimas sesiones de soporte.",
+    ];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px;">KiraRoom</div>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Aviso de seguridad: ${e(data.tenantName)}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">Hola,</p>
+          ${lines.map((l) => `<p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">${e(l)}</p>`).join("\n          ")}
+          <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">
+            <a href="${e(data.settingsUrl)}" style="color:#4f46e5;font-weight:600;">Ir a Ajustes &gt; Seguridad</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = ["Hola,", "", ...lines, "", `Ajustes > Seguridad: ${data.settingsUrl}`].join("\n");
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
 
   /**
@@ -814,11 +1490,11 @@ export class EmailService {
 
     const firstName = data.ownerName?.split(" ")[0] ?? "";
     const greeting = firstName ? `Hola ${firstName},` : "Hola,";
-    const subject = `Multicanal ya esta activo en tu cuenta de KiraRoom`;
+    const subject = `Multicanal ya está activo en tu cuenta de KiraRoom`;
 
     const html = `
       <p>${greeting}</p>
-      <p>Confirmamos la activacion del <strong>add-on Multicanal</strong>
+      <p>Confirmamos la activación del <strong>add-on Multicanal</strong>
       en <strong>${this.escapeHtml(data.tenantName)}</strong>. Ya puedes
       conectar Messenger, Instagram y Telegram a tu recepcionista virtual
       para responder a tus clientas en su canal favorito.</p>
@@ -827,12 +1503,12 @@ export class EmailService {
         Configurar canales ahora
       </a></p>
       <p style="color:#6b7280;font-size:14px;">
-        Esta misma URL esta disponible en tu dashboard:
+        Esta misma URL está disponible en tu dashboard:
         <strong>Ajustes &rarr; Canales del recepcionista virtual</strong>.
       </p>
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
       <p style="font-size:13px;color:#6b7280;">
-        Guias paso a paso:
+        Guías paso a paso:
       </p>
       <ul style="font-size:13px;color:#6b7280;">
         <li><a href="${data.metaDocsUrl}">Conectar Facebook Messenger + Instagram</a></li>
@@ -846,7 +1522,7 @@ export class EmailService {
     const text = [
       greeting,
       "",
-      `Confirmamos la activacion del add-on Multicanal en ${data.tenantName}.`,
+      `Confirmamos la activación del add-on Multicanal en ${data.tenantName}.`,
       "Ya puedes conectar Messenger, Instagram y Telegram a tu recepcionista virtual.",
       "",
       `Configurar canales ahora:`,
@@ -864,7 +1540,6 @@ export class EmailService {
       subject,
       html,
       text,
-      listUnsubscribe: true,
     });
   }
 
@@ -895,438 +1570,127 @@ export class EmailService {
   }
 
   /**
-   * Build the RFC 822 headers for a transactional send. If the caller
-   * requested `listUnsubscribe: true` (or supplied their own
-   * `List-Unsubscribe`), the header is auto-derived from `EMAIL_FROM`.
-   * The header value follows RFC 8058: a `mailto:` URI + an `https:`
-   * URI pointing at the app's notification settings page.
+   * The headers for a send: the caller's own, as given. Emails to the
+   * salon's team are service emails (verification, billing, invites) and
+   * carry no List-Unsubscribe; the marketing sends to clients add their own
+   * signed one-click link (email-unsubscribe.service).
    */
-  private buildHeaders(
-    options: EmailOptions,
-    from: string,
-  ): Record<string, string> | undefined {
+  private buildHeaders(options: EmailOptions): Record<string, string> | undefined {
     const out: Record<string, string> = { ...(options.headers ?? {}) };
-    if (options.listUnsubscribe) {
-      const domain = from.split("@")[1] ?? "kiraroom.com";
-      const baseUrl =
-        this.configService.get<string>("APP_BASE_URL") ||
-        this.configService.get<string>("FRONTEND_URL") ||
-        "https://app.kiraroom.com";
-      const mailto = `mailto:unsubscribe@${domain}`;
-      const http = `${baseUrl.replace(/\/+$/, "")}/dashboard/settings/notifications`;
-      out["List-Unsubscribe"] = `<${mailto}>, <${http}>`;
-      out["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-    }
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
-  /** Minimal HTML escape for interpolating user-controlled strings into emails. */
-  private escapeHtml(input: string): string {
-    return input
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  /** HTML escape for interpolating user-controlled strings into emails. */
+  private escapeHtml(input: unknown): string {
+    return escapeHtml(input);
   }
 
-  // ==================== HTML Templates ====================
+  // ==================== Appointment emails: HTML ====================
 
-  private generateConfirmationHtml(
+  /**
+   * The layout the four appointment emails share. Only `rows` values,
+   * `previous` and the salon's details come from data, and they are escaped
+   * here; the other strings are this file's own copy.
+   */
+  private appointmentHtml(
     data: AppointmentEmailData,
-    language: string = "es",
+    parts: {
+      title: string;
+      banner?: { color: string; text: string };
+      intro: string;
+      previous?: string;
+      card: { title: string; background: string; border: string; titleColor: string; accent: string };
+      rows: Array<[string, string | undefined]>;
+      closing: string;
+      closingColor?: string;
+    },
   ): string {
+    const e = (v: unknown) => this.escapeHtml(v);
+    const rows = parts.rows
+      .filter(([, value]) => value !== undefined && value !== "")
+      .map(
+        ([label, value]) => `
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">${label}:</td>
+                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${e(value)}</td>
+                </tr>`,
+      )
+      .join("");
     return `
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Confirmation</title>
+  <title>${parts.title}</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
     <tr>
       <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">${this.translationsService.translate(language as any, "emails.appointment.confirmation.subject")}</p>
+        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${e(data.salonName)}</h1>
+        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">${parts.title}</p>
       </td>
-    </tr>
-    
-    <!-- Main Content -->
+    </tr>${
+      parts.banner
+        ? `
+    <tr>
+      <td style="background-color: ${parts.banner.color}; padding: 15px; text-align: center;">
+        <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: 600;">⏰ ${parts.banner.text}</p>
+      </td>
+    </tr>`
+        : ""
+    }
     <tr>
       <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
         <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          ${this.translationsService.translate(language as any, "emails.appointment.confirmation.greeting", { client_name: data.clientName })}
+          Hola <strong>${e(data.clientName)}</strong>,
         </p>
         <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          ${this.translationsService.translate(language as any, "emails.appointment.confirmation.body")}
-        </p>
-        
-        <!-- Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #111827; font-size: 18px; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
-                📅 Appointment Details
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Please arrive 5-10 minutes before your appointment time. If you need to reschedule or cancel, please contact us as soon as possible.
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateReminderHtml(
-    data: AppointmentEmailData,
-    hoursBefore: number,
-  ): string {
-    const urgencyColor = hoursBefore === 1 ? "#ef4444" : "#f59e0b";
-    const urgencyText = hoursBefore === 1 ? "Starting in 1 hour!" : "Tomorrow";
-
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Reminder</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Reminder</p>
-      </td>
-    </tr>
-    
-    <!-- Urgency Banner -->
-    <tr>
-      <td style="background-color: ${urgencyColor}; padding: 15px; text-align: center;">
-        <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: 600;">
-          ⏰ ${urgencyText}
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          This is a friendly reminder about your upcoming appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"}.
-        </p>
-        
-        <!-- Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #111827; font-size: 18px; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
-                📅 Appointment Details
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        ${
-          hoursBefore === 1
+          ${parts.intro}
+        </p>${
+          parts.previous
             ? `
-        <p style="margin: 30px 0 0 0; color: #ef4444; font-size: 14px; line-height: 1.6; font-weight: 500;">
-          Please head to the salon now if you haven't already. We're excited to see you soon!
-        </p>
-        `
-            : `
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          We look forward to seeing you tomorrow! Please remember to arrive 5-10 minutes early.
-        </p>
-        `
-        }
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateCancellationHtml(
-    data: AppointmentEmailData,
-    reason?: string,
-  ): string {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Cancelled</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Cancelled</p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Your appointment has been cancelled. Here are the details of the cancelled appointment:
-        </p>
-        
-        <!-- Cancelled Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #fef2f2; border-radius: 8px; border: 1px solid #fecaca;">
-          <tr>
-            <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #991b1b; font-size: 18px; border-bottom: 2px solid #f87171; padding-bottom: 10px;">
-                ❌ Cancelled Appointment
-              </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
-                ${
-                  reason
-                    ? `
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Reason:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${reason}</td>
-                </tr>
-                `
-                    : ""
-                }
-              </table>
-            </td>
-          </tr>
-        </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Would you like to book a new appointment? Please contact us or visit our website to schedule a new time.
-        </p>
-      </td>
-    </tr>
-    
-    <!-- Footer -->
-    <tr>
-      <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-          <tr>
-            <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
-            </td>
-          </tr>
-        </table>
-        <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-    `.trim();
-  }
-
-  private generateRescheduledHtml(
-    data: AppointmentEmailData,
-    oldDate: string,
-    oldTime: string,
-  ): string {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Appointment Rescheduled</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <!-- Header -->
-    <tr>
-      <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 12px 12px 0 0;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">${data.salonName}</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Appointment Rescheduled</p>
-      </td>
-    </tr>
-    
-    <!-- Main Content -->
-    <tr>
-      <td style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e5e7eb; border-top: none;">
-        <p style="margin: 0 0 20px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Hi <strong>${data.clientName}</strong>,
-        </p>
-        <p style="margin: 0 0 30px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-          Your appointment has been rescheduled. Here are the updated details:
-        </p>
-        
-        <!-- Old Appointment (Crossed out) -->
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; margin-bottom: 20px;">
           <tr>
             <td style="padding: 20px;">
-              <p style="margin: 0 0 10px 0; color: #9ca3af; font-size: 14px; text-decoration: line-through;">
-                <strong>Previous:</strong> ${oldDate} at ${oldTime}
+              <p style="margin: 0; color: #9ca3af; font-size: 14px; text-decoration: line-through;">
+                <strong>Antes:</strong> ${e(parts.previous)}
               </p>
             </td>
           </tr>
-        </table>
-        
-        <!-- New Appointment Details Card -->
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0;">
+        </table>`
+            : ""
+        }
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: ${parts.card.background}; border-radius: 8px; border: 1px solid ${parts.card.border};">
           <tr>
             <td style="padding: 25px;">
-              <h2 style="margin: 0 0 20px 0; color: #166534; font-size: 18px; border-bottom: 2px solid #4ade80; padding-bottom: 10px;">
-                ✅ New Appointment Details
+              <h2 style="margin: 0 0 20px 0; color: ${parts.card.titleColor}; font-size: 18px; border-bottom: 2px solid ${parts.card.accent}; padding-bottom: 10px;">
+                ${parts.card.title}
               </h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px; width: 120px;">Service:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.serviceName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Professional:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.professionalName}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Date:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.date}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Time:</td>
-                  <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 500;">${data.time}</td>
-                </tr>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}
               </table>
             </td>
           </tr>
         </table>
-        
-        <p style="margin: 30px 0 0 0; color: #374151; font-size: 14px; line-height: 1.6;">
-          Please arrive 5-10 minutes before your new appointment time. If you need to make further changes, please contact us.
+        <p style="margin: 30px 0 0 0; color: ${parts.closingColor ?? "#374151"}; font-size: 14px; line-height: 1.6;">
+          ${parts.closing}
         </p>
       </td>
     </tr>
-    
-    <!-- Footer -->
     <tr>
       <td style="background-color: #f9fafb; padding: 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
           <tr>
             <td style="text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${data.salonName}</p>
-              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${data.salonAddress}</p>` : ""}
-              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${data.salonPhone}</p>` : ""}
+              <p style="margin: 0 0 10px 0; color: #111827; font-size: 16px; font-weight: 600;">${e(data.salonName)}</p>
+              ${data.salonAddress ? `<p style="margin: 0 0 5px 0; color: #6b7280; font-size: 14px;">📍 ${e(data.salonAddress)}</p>` : ""}
+              ${data.salonPhone ? `<p style="margin: 0; color: #6b7280; font-size: 14px;">📞 ${e(data.salonPhone)}</p>` : ""}
             </td>
           </tr>
         </table>
         <p style="margin: 20px 0 0 0; text-align: center; color: #9ca3af; font-size: 12px;">
-          This email was sent to ${data.clientEmail}
+          Este email se ha enviado a ${e(data.clientEmail)}
         </p>
       </td>
     </tr>
@@ -1336,133 +1700,165 @@ export class EmailService {
     `.trim();
   }
 
-  // ==================== Text Templates ====================
-
-  private generateConfirmationText(
-    data: AppointmentEmailData,
-    language: string = "es",
-  ): string {
-    return `
-${data.salonName}
-Appointment Confirmation
-
-Hi ${data.clientName},
-
-Your appointment has been confirmed! We're looking forward to seeing you.
-
-APPOINTMENT DETAILS
--------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-Please arrive 5-10 minutes before your appointment time. If you need to reschedule or cancel, please contact us as soon as possible.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private appointmentRows(data: AppointmentEmailData): Array<[string, string | undefined]> {
+    return [
+      ["Servicio", data.serviceName],
+      ["Profesional", data.professionalName],
+      ["Fecha", displayDate(data.date)],
+      ["Hora", data.time],
+      // Which of the salon's locations (multi-local); its address is
+      // salonAddress, under the salon's name.
+      ["Local", data.locationName || undefined],
+    ];
   }
 
-  private generateReminderText(
-    data: AppointmentEmailData,
-    hoursBefore: number,
-  ): string {
-    return `
-${data.salonName}
-Appointment Reminder
-
-Hi ${data.clientName},
-
-This is a friendly reminder about your upcoming appointment ${hoursBefore === 1 ? "in 1 hour" : "tomorrow"}.
-
-APPOINTMENT DETAILS
--------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-${
-  hoursBefore === 1
-    ? "Please head to the salon now if you haven't already. We're excited to see you soon!"
-    : "We look forward to seeing you tomorrow! Please remember to arrive 5-10 minutes early."
-}
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateConfirmationHtml(data: AppointmentEmailData): string {
+    const deadline = this.cancelDeadline(data);
+    const cancel = data.cancelUrl
+      ? ` <a href="${this.escapeHtml(data.cancelUrl)}" style="color: #7c3aed; font-weight: 600;">Cancelar mi cita</a>${deadline ? ` ${deadline}` : ""}`
+      : "";
+    if (data.pending) {
+      return this.appointmentHtml(data, {
+        title: "Solicitud recibida",
+        intro: `Hemos recibido tu solicitud. ${this.escapeHtml(data.salonName)} te confirmará la cita.`,
+        card: CARD_DEFAULT,
+        rows: this.appointmentRows(data),
+        closing: `Te avisaremos en cuanto esté confirmada. Si ya no puedes ir, avísanos.${cancel}`,
+      });
+    }
+    return this.appointmentHtml(data, {
+      title: "Cita confirmada",
+      intro: "Tu cita está confirmada. ¡Te esperamos!",
+      card: CARD_DEFAULT,
+      rows: this.appointmentRows(data),
+      closing: `Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.${cancel}`,
+    });
   }
 
-  private generateCancellationText(
-    data: AppointmentEmailData,
-    reason?: string,
-  ): string {
-    return `
-${data.salonName}
-Appointment Cancelled
-
-Hi ${data.clientName},
-
-Your appointment has been cancelled. Here are the details of the cancelled appointment:
-
-CANCELLED APPOINTMENT
----------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-${reason ? `Reason: ${reason}` : ""}
-
-Would you like to book a new appointment? Please contact us or visit our website to schedule a new time.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateReminderHtml(data: AppointmentEmailData, hoursBefore: number): string {
+    const soon = hoursBefore === 1;
+    return this.appointmentHtml(data, {
+      title: "Recordatorio de cita",
+      banner: soon ? { color: "#ef4444", text: "¡Dentro de 1 hora!" } : { color: "#f59e0b", text: "Mañana" },
+      intro: soon ? "Te recordamos que tu cita es dentro de 1 hora." : "Te recordamos tu cita de mañana.",
+      card: CARD_DEFAULT,
+      rows: this.appointmentRows(data),
+      closing: soon
+        ? "Si aún no has salido, es buen momento. ¡Hasta ahora!"
+        : "¡Nos vemos mañana! Recuerda llegar 5-10 minutos antes.",
+      closingColor: soon ? "#ef4444" : undefined,
+    });
   }
 
-  private generateRescheduledText(
+  private generateCancellationHtml(data: AppointmentEmailData, reason?: string): string {
+    return this.appointmentHtml(data, {
+      title: "Cita cancelada",
+      intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
+      card: { title: "❌ Cita cancelada", background: "#fef2f2", border: "#fecaca", titleColor: "#991b1b", accent: "#f87171" },
+      rows: [...this.appointmentRows(data), ["Motivo", reason || undefined]],
+      closing: data.bookingUrl
+        ? `Sentimos las molestias. <a href="${this.escapeHtml(data.bookingUrl)}" style="color: #7c3aed; font-weight: 600;">Reserva otra cita</a> cuando te venga bien, o escríbenos.`
+        : "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+    });
+  }
+
+  private generateRescheduledHtml(data: AppointmentEmailData, oldDate: string, oldTime: string): string {
+    return this.appointmentHtml(data, {
+      title: "Cita modificada",
+      intro: "Hemos cambiado tu cita. Estos son los nuevos datos:",
+      previous: `${displayDate(oldDate)} a las ${oldTime}`,
+      card: { title: "✅ Nueva cita", background: "#f0fdf4", border: "#bbf7d0", titleColor: "#166534", accent: "#4ade80" },
+      rows: this.appointmentRows(data),
+      closing: "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar algo más, contáctanos.",
+    });
+  }
+
+  // ==================== Appointment emails: plain text ====================
+
+  /** The plain-text version: the same content, not HTML, so nothing is escaped. */
+  private appointmentText(
     data: AppointmentEmailData,
-    oldDate: string,
-    oldTime: string,
+    parts: { title: string; intro: string; previous?: string; cardTitle: string; extraRows?: string[]; closing: string },
   ): string {
-    return `
-${data.salonName}
-Appointment Rescheduled
+    return [
+      data.salonName,
+      parts.title,
+      "",
+      `Hola ${data.clientName},`,
+      "",
+      parts.intro,
+      "",
+      ...(parts.previous ? [`ANTES: ${parts.previous}`, ""] : []),
+      parts.cardTitle.toUpperCase(),
+      "-".repeat(parts.cardTitle.length),
+      `Servicio: ${data.serviceName}`,
+      `Profesional: ${data.professionalName}`,
+      `Fecha: ${displayDate(data.date)}`,
+      `Hora: ${data.time}`,
+      ...(data.locationName ? [`Local: ${data.locationName}`] : []),
+      ...(parts.extraRows ?? []),
+      "",
+      parts.closing,
+      "",
+      data.salonName,
+      ...(data.salonAddress ? [`Dirección: ${data.salonAddress}`] : []),
+      ...(data.salonPhone ? [`Teléfono: ${data.salonPhone}`] : []),
+      "",
+      `Este email se ha enviado a ${data.clientEmail}`,
+    ].join("\n");
+  }
 
-Hi ${data.clientName},
+  private generateConfirmationText(data: AppointmentEmailData): string {
+    const deadline = this.cancelDeadline(data);
+    const cancel = data.cancelUrl ? `\nCancelar mi cita: ${data.cancelUrl}${deadline ? `\n${deadline}` : ""}` : "";
+    if (data.pending) {
+      return this.appointmentText(data, {
+        title: "Solicitud recibida",
+        intro: `Hemos recibido tu solicitud. ${data.salonName} te confirmará la cita.`,
+        cardTitle: "Detalles de la solicitud",
+        closing: `Te avisaremos en cuanto esté confirmada. Si ya no puedes ir, avísanos.${cancel}`,
+      });
+    }
+    return this.appointmentText(data, {
+      title: "Cita confirmada",
+      intro: "Tu cita está confirmada. ¡Te esperamos!",
+      cardTitle: "Detalles de la cita",
+      closing: `Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar o cancelar la cita, avísanos cuanto antes.${cancel}`,
+    });
+  }
 
-Your appointment has been rescheduled. Here are the updated details:
+  private generateReminderText(data: AppointmentEmailData, hoursBefore: number): string {
+    const soon = hoursBefore === 1;
+    return this.appointmentText(data, {
+      title: "Recordatorio de cita",
+      intro: soon ? "Te recordamos que tu cita es dentro de 1 hora." : "Te recordamos tu cita de mañana.",
+      cardTitle: "Detalles de la cita",
+      closing: soon
+        ? "Si aún no has salido, es buen momento. ¡Hasta ahora!"
+        : "¡Nos vemos mañana! Recuerda llegar 5-10 minutos antes.",
+    });
+  }
 
-PREVIOUS APPOINTMENT (CANCELLED)
---------------------------------
-Date: ${oldDate}
-Time: ${oldTime}
+  private generateCancellationText(data: AppointmentEmailData, reason?: string): string {
+    return this.appointmentText(data, {
+      title: "Cita cancelada",
+      intro: "Tu cita ha sido cancelada. Estos eran sus datos:",
+      cardTitle: "Cita cancelada",
+      extraRows: reason ? [`Motivo: ${reason}`] : [],
+      closing: data.bookingUrl
+        ? `Sentimos las molestias. Reserva otra cita cuando te venga bien: ${data.bookingUrl}`
+        : "¿Quieres reservar otra cita? Escríbenos o llámanos, o reserva en nuestra web.",
+    });
+  }
 
-NEW APPOINTMENT DETAILS
------------------------
-Service: ${data.serviceName}
-Professional: ${data.professionalName}
-Date: ${data.date}
-Time: ${data.time}
-
-Please arrive 5-10 minutes before your new appointment time. If you need to make further changes, please contact us.
-
-${data.salonName}
-${data.salonAddress ? `Address: ${data.salonAddress}` : ""}
-${data.salonPhone ? `Phone: ${data.salonPhone}` : ""}
-
-This email was sent to ${data.clientEmail}
-    `.trim();
+  private generateRescheduledText(data: AppointmentEmailData, oldDate: string, oldTime: string): string {
+    return this.appointmentText(data, {
+      title: "Cita modificada",
+      intro: "Hemos cambiado tu cita. Estos son los nuevos datos:",
+      previous: `${displayDate(oldDate)} a las ${oldTime}`,
+      cardTitle: "Nueva cita",
+      closing: "Te recomendamos llegar 5-10 minutos antes. Si necesitas cambiar algo más, contáctanos.",
+    });
   }
 
   /**
@@ -1480,6 +1876,11 @@ This email was sent to ${data.clientEmail}
     salonName: string;
     reviewUrl: string;
     optOutUrl: string;
+    /**
+     * The client's points ("Mostrar puntos en el email tras la visita"):
+     * shown when given (reviewEmailPoints decides).
+     */
+    loyalty?: { balance: number; expiryRule: string | null } | null;
   }): Promise<{ success: boolean; id?: string; error?: string; skipped?: boolean }> {
     if (await this.shouldSkipBouncedUser(data.to)) {
       return { success: false, skipped: true, error: "email_bounced" };
@@ -1511,9 +1912,10 @@ This email was sent to ${data.clientEmail}
             </td></tr>
           </table>
           <p style="font-size:13px;color:#64748b;line-height:1.6;margin:0 0 8px 0;">El enlace caduca en 14 días.</p>
+          ${data.loyalty ? this.pointsBlockHtml(`Tienes ${this.pointsText(data.loyalty.balance)} en ${salon}.`, data.loyalty.expiryRule) : ""}
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin:0;">
-            Te escribimos de parte de ${salon} porque acabas de visitarle.
+            Te escribimos de parte de ${salon} por tu visita reciente.
             <a href="${this.escapeHtml(data.optOutUrl)}" style="color:#94a3b8;">No quiero recibir más peticiones de opinión</a>.
           </p>
         </td></tr>
@@ -1530,6 +1932,13 @@ This email was sent to ${data.clientEmail}
       data.reviewUrl,
       ``,
       `El enlace caduca en 14 días.`,
+      ...(data.loyalty
+        ? [
+            ``,
+            `Tienes ${this.pointsText(data.loyalty.balance)} en ${data.salonName}.`,
+            ...(data.loyalty.expiryRule ? [`${data.loyalty.expiryRule}.`] : []),
+          ]
+        : []),
       ``,
       `Si no quieres recibir más peticiones de opinión: ${data.optOutUrl}`,
     ].join("\n");
@@ -1564,7 +1973,10 @@ This email was sent to ${data.clientEmail}
     const greeting = data.ownerName
       ? `Hola ${this.escapeHtml(data.ownerName)},`
       : "Hola,";
-    const subject = `Bienvenida a KiraRoom, ${data.tenantName}`;
+    // No user text in the subject: anyone can sign up with someone else's
+    // address, and the salon name went straight into a subject sent from
+    // KiraRoom's domain (S7). The name stays in the body, escaped.
+    const subject = "Te damos la bienvenida a KiraRoom";
     const steps = [
       "Configura tus datos, tus servicios y el horario del equipo.",
       "Comparte tu enlace de reservas o imprime tu QR.",
@@ -1584,10 +1996,10 @@ This email was sent to ${data.clientEmail}
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
         <tr><td>
           <div style="font-size:24px;font-weight:700;margin-bottom:8px;">KiraRoom</div>
-          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba de 14 dias ya esta activa</p>
+          <p style="font-size:14px;color:#64748b;margin:0 0 24px 0;">Tu prueba de 14 días ya está activa</p>
           <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>${this.escapeHtml(data.tenantName)}</strong> ya esta creado. Tienes 14 dias
+            <strong>${this.escapeHtml(data.tenantName)}</strong> ya está creado. Tienes 14 días
             con todo el plan Pro incluido, sin tarjeta.
           </p>
           <p style="font-size:15px;line-height:1.6;margin:0 0 8px 0;">Tres pasos y empiezas a recibir reservas:</p>
@@ -1596,7 +2008,7 @@ This email was sent to ${data.clientEmail}
           </ol>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
             <tr><td style="background:#4f46e5;border-radius:8px;">
-              <a href="${data.dashboardUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Entrar en mi salon</a>
+              <a href="${data.dashboardUrl}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Entrar en mi salón</a>
             </td></tr>
           </table>
           ${verifyBlock}
@@ -1606,7 +2018,7 @@ This email was sent to ${data.clientEmail}
           </p>
         </td></tr>
       </table>
-      <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">(c) ${new Date().getFullYear()} KiraRoom SaaS - Espana</p>
+      <p style="font-size:11px;color:#94a3b8;margin:16px 0 0 0;">(c) ${new Date().getFullYear()} KiraRoom SaaS - España</p>
     </td></tr>
   </table>
 </body>
@@ -1615,18 +2027,22 @@ This email was sent to ${data.clientEmail}
     const text = [
       greeting,
       ``,
-      `${data.tenantName} ya esta creado en KiraRoom. Tienes 14 dias con todo el plan Pro incluido, sin tarjeta.`,
+      `${data.tenantName} ya está creado en KiraRoom. Tienes 14 días con todo el plan Pro incluido, sin tarjeta.`,
       ``,
       `Tres pasos y empiezas a recibir reservas:`,
       ...steps.map((s, i) => `${i + 1}. ${s}`),
       ``,
-      `Entra en tu salon: ${data.dashboardUrl}`,
+      `Entra en tu salón: ${data.dashboardUrl}`,
       ...(data.verifyUrl ? [``, `Confirma tu correo: ${data.verifyUrl}`] : []),
       ``,
       `Responde a este correo si te atascas. Contesta una persona.`,
     ].join("\n");
 
-    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+    // "Responde a este correo": the answer goes to a mailbox someone reads
+    // (SUPPORT_EMAIL), not to the sender, which may be a noreply@. Unset:
+    // no Reply-To, as before.
+    const replyTo = (process.env.SUPPORT_EMAIL ?? "").trim() || undefined;
+    return this.sendEmail({ to: data.to, subject, html, text, replyTo });
   }
 
   /**
@@ -1694,7 +2110,7 @@ This email was sent to ${data.clientEmail}
       `El enlace caduca en ${hours} hora(s).`,
     ].join("\n");
 
-    return this.sendEmail({ to: data.to, subject, html, text, listUnsubscribe: true });
+    return this.sendEmail({ to: data.to, subject, html, text });
   }
 
   /**
@@ -1755,4 +2171,125 @@ This email was sent to ${data.clientEmail}
     ].join("\n");
     return this.sendEmail({ to: data.to, subject, html, text });
   }
+
+  /**
+   * An invoice, with its PDF attached, sent by the salon to its client
+   * (POST /invoices/:id/email). Signed with the salon's name; replies go to
+   * the salon's own address when it has one. Transactional: no unsubscribe.
+   */
+  /** "1 punto", "120 puntos", "-30 puntos". */
+  private pointsText(n: number): string {
+    return `${n.toLocaleString("es-ES")} ${Math.abs(n) === 1 ? "punto" : "puntos"}`;
+  }
+
+  /** The receipt's points lines: what the sale earned, the balance. */
+  private salePointsLines(l: { pointsEarned: number; balance: number }): string[] {
+    return [
+      ...(l.pointsEarned > 0 ? [`Puntos ganados con esta compra: ${this.pointsText(l.pointsEarned)}`] : []),
+      `Tu saldo de puntos: ${this.pointsText(l.balance)}`,
+    ];
+  }
+
+  /** A small boxed block with the points (`htmlBody` already escaped) and the expiry rule. */
+  private pointsBlockHtml(htmlBody: string, expiryRule: string | null): string {
+    const rule = expiryRule
+      ? `<div style="font-size:12px;color:#64748b;margin-top:4px;">${this.escapeHtml(expiryRule)}.</div>`
+      : "";
+    return `<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:12px 16px;margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#3b0764;">${htmlBody}${rule}</div>`;
+  }
+
+  async sendInvoice(data: {
+    to: string;
+    recipientName: string;
+    salonName: string;
+    salonEmail?: string | null;
+    /** "Factura", "Factura simplificada" or "Factura rectificativa". */
+    title: string;
+    number: string;
+    /** dd/mm/yyyy. */
+    issueDate: string;
+    /** "30,00 €". */
+    total: string;
+    pdf: Buffer;
+    filename: string;
+    /** A till sale's points (saleLoyaltyBlock): earned, balance, expiry rule. */
+    loyalty?: { pointsEarned: number; balance: number; expiryRule: string | null } | null;
+  }): Promise<{ success: boolean; id?: string; error?: string }> {
+    const points = data.loyalty ? this.salePointsLines(data.loyalty) : [];
+    const e = (v: unknown) => this.escapeHtml(v);
+    const subject = `${data.title} ${data.number} de ${data.salonName}`;
+    const greeting = data.recipientName ? `Hola ${e(data.recipientName)},` : "Hola,";
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:12px;padding:32px;">
+        <tr><td>
+          <div style="font-size:22px;font-weight:700;margin-bottom:16px;">${e(data.salonName)}</div>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 16px 0;">${greeting}</p>
+          <p style="font-size:15px;line-height:1.6;margin:0 0 20px 0;">
+            Te enviamos la ${e(data.title.toLowerCase())} <strong>${e(data.number)}</strong>. La tienes adjunta en PDF.
+          </p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin:0 0 24px 0;">
+            <tr><td style="padding:16px 20px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;width:120px;">Número:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.number)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;">Fecha:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.issueDate)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7280;font-size:14px;">Total:</td>
+                  <td style="padding:4px 0;color:#111827;font-size:14px;font-weight:500;">${e(data.total)}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+          ${points.length ? this.pointsBlockHtml(points.map((l) => e(l)).join("<br>"), data.loyalty?.expiryRule ?? null) : ""}
+          <p style="font-size:14px;line-height:1.6;margin:0;color:#475569;">
+            Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${e(data.salonName)}.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+    const text = [
+      data.recipientName ? `Hola ${data.recipientName},` : "Hola,",
+      "",
+      `Te enviamos la ${data.title.toLowerCase()} ${data.number} de ${data.salonName}. La tienes adjunta en PDF.`,
+      "",
+      `Número: ${data.number}`,
+      `Fecha: ${data.issueDate}`,
+      `Total: ${data.total}`,
+      ...(points.length ? ["", ...points, ...(data.loyalty?.expiryRule ? [`${data.loyalty.expiryRule}.`] : [])] : []),
+      "",
+      `Si tienes cualquier duda sobre esta factura, responde a este correo o ponte en contacto con ${data.salonName}.`,
+    ].join("\n");
+    return this.sendEmail({
+      to: data.to,
+      subject,
+      html,
+      text,
+      replyTo: data.salonEmail || undefined,
+      attachments: [{ filename: data.filename, content: data.pdf, contentType: "application/pdf" }],
+    });
+  }
+}
+
+/** Longest piece of the reporter's subject the acknowledgement repeats. */
+export const BUG_REPORT_ACK_EXCERPT_CHARS = 60;
+
+/** The subject on one line, control characters removed, cut to the excerpt length. */
+export function bugReportExcerpt(subject: string): string {
+  // eslint-disable-next-line no-control-regex
+  const flat = subject.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > BUG_REPORT_ACK_EXCERPT_CHARS ? `${flat.slice(0, BUG_REPORT_ACK_EXCERPT_CHARS - 1)}…` : flat;
 }

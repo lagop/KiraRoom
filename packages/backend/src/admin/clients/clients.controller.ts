@@ -1,12 +1,14 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminClientsService } from './clients.service';
-import { CreateClientDto, UpdateClientDto } from './dto';
+import { ClientMergeService } from './client-merge.service';
+import { CreateClientDto, MergeClientDto, UpdateClientDto } from './dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
 
 @ApiTags('Admin - Clients')
 @ApiBearerAuth()
@@ -14,7 +16,10 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 @Roles(UserRole.owner, UserRole.admin)
 @Controller('admin/clients')
 export class AdminClientsController {
-  constructor(private readonly adminClientsService: AdminClientsService) {}
+  constructor(
+    private readonly adminClientsService: AdminClientsService,
+    private readonly clientMerge: ClientMergeService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a new client' })
@@ -23,10 +28,7 @@ export class AdminClientsController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   async create(@CurrentUser() user: any, @Body() createClientDto: CreateClientDto) {
     // The tenant comes from the caller's token, never from the body.
-    return this.adminClientsService.create({
-      ...createClientDto,
-      tenantId: user.tenantId,
-    });
+    return this.adminClientsService.create(user.tenantId, createClientDto);
   }
 
   @Get()
@@ -75,12 +77,32 @@ export class AdminClientsController {
   }
 
   @Delete(':id')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Delete client by ID' })
   @ApiResponse({ status: 200, description: 'Client deleted successfully' })
   @ApiResponse({ status: 404, description: 'Client not found' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   async remove(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
     return this.adminClientsService.remove(user.tenantId, id);
+  }
+
+  @Post(':id/merge')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Merge a duplicate client into this one',
+    description:
+      'Everything the source record has (appointments, payments, sales, invoices, wallet, loyalty, consents, ...) moves to :id in one transaction; empty fields of :id are filled from the source; the source is then deleted. See client-merge.service.ts.',
+  })
+  @ApiResponse({ status: 200, description: 'Merged; `message` says what moved' })
+  @ApiResponse({ status: 400, description: 'The same record twice' })
+  @ApiResponse({ status: 404, description: 'Either record is not a client of this salon' })
+  @ApiResponse({ status: 409, description: 'Into a deactivated record, or a blocked record into one that is not' })
+  async merge(
+    @CurrentUser() user: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MergeClientDto,
+  ) {
+    return this.clientMerge.merge(user.tenantId, id, dto.sourceClientId, { id: user.id, role: user.role });
   }
 
   @Get('search/:query')

@@ -33,6 +33,10 @@ ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
 # Canonical URLs, sitemap and robots.txt of salons' public pages.
 ARG NEXT_PUBLIC_APP_URL=https://app.kiraroom.net
 ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+# Cloudflare Turnstile site key (public). Empty = no captcha on the forms.
+# ops/deploy/build-images.sh passes it from the deploy .env.
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 
 # No SWC download should happen here. The Linux SWC binaries are declared as
 # optionalDependencies of @kira/frontend and are in the lockfile, so `npm ci`
@@ -71,6 +75,9 @@ COPY --from=builder /repo/packages/frontend/package.json ./package.json
 # Runtime settings (poweredByHeader, images) are read by next start from
 # next.config.js; without it the defaults apply and X-Powered-By is sent.
 COPY --from=builder /repo/packages/frontend/next.config.js ./next.config.js
+# ...and next.config.js requires the CSP builder: without it next start
+# cannot load the config and the container restarts in a loop.
+COPY --from=builder /repo/packages/frontend/csp.js ./csp.js
 # 'next start' needs next CLI + frontend deps; both live at /repo/node_modules
 # because npm ci --workspaces hoists all workspace deps to the root.
 COPY --from=builder /repo/node_modules ./node_modules

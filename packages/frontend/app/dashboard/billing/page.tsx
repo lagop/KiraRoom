@@ -3,20 +3,40 @@
 import { useCallback, useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import apiClient from "../../../lib/api";
-import type { SubscriptionInvoice } from "../../../lib/api";
+import type { PlanLimitBlocker, SubscriptionInvoice } from "../../../lib/api";
 import { useTenantContext } from "@/hooks/useFeatureAccess";
 import { UsageMeters } from "@/components/billing/UsageMeters";
 import { TrialBanner } from "@/components/billing/TrialBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PlanId } from "@/lib/plans";
-import { Check, Loader2, Sparkles, X } from "lucide-react";
+import { empresaLocations, planAction, paysSubscription, scheduledCancellation, subscribedInTrial } from "@/lib/billing-plan";
+import { getCurrentUser } from "@/lib/utils";
+import { safeHttpUrl } from "@/lib/safe-url";
+import { isOwner } from "@/lib/dashboard-nav";
+import { aiConversationsApprox } from "@kira/shared";
+import { Check, FlaskConical, Loader2, Sparkles, X } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { useToast } from "@/components/ui/use-toast";
+import { addOnDisplayName, formatSubscriptionAmount } from "@/lib/billing-plan";
+import { checkoutReturnMessage, shouldKeepPolling } from "@/lib/checkout-return";
+import { forgetDesiredPlan, readDesiredPlan } from "@/lib/desired-plan";
 
 function BillingPageContent() {
   const t = useTranslations();
+  const { toast } = useToast();
   const ctx = useTenantContext();
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Facturación is the owner's (every billing route answers admins 403):
+  // read the role after mount (the server has no token) and send anyone
+  // else to the dashboard before any request is made.
+  const [role, setRole] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    setRole(getCurrentUser()?.role ?? null);
+  }, []);
+  useEffect(() => {
+    if (role !== undefined && !isOwner(role)) router.replace("/dashboard");
+  }, [role, router]);
   const [sub, setSub] = useState<any>(null);
   const [plans, setPlans] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,6 +44,16 @@ function BillingPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<SubscriptionInvoice[] | null>(null);
   const dateLocale = t("billing.invoices.dateFmt") || "es-ES";
+  // The plan picked on the website before signing up (B12): its card is
+  // highlighted until the salon pays for a plan.
+  const [desiredPlan, setDesiredPlan] = useState<PlanId | null>(null);
+  useEffect(() => setDesiredPlan(readDesiredPlan()), []);
+  useEffect(() => {
+    if (desiredPlan && paysSubscription(sub)) {
+      forgetDesiredPlan();
+      setDesiredPlan(null);
+    }
+  }, [desiredPlan, sub]);
 
   // P2A-receptionist-v2 -- AI counter + add-ons + message bundles
   const [addOns, setAddOns] = useState<any[] | null>(null);
@@ -31,14 +61,21 @@ function BillingPageContent() {
   const [aiUsage, setAiUsage] = useState<
     { used: number; cap: number | null; resetsAt: string | null } | null
   >(null);
-  const [bundles, setBundles] = useState<{
-    creditsRemaining: number;
-    creditsPurchasedTotal: number;
-    creditsUsedTotal: number;
-    lastTopupAt: string | null;
-  } | null>(null);
 
   // M-2: confirm dialog state for add-on purchase + cancel.
+  // The plan the salon is about to subscribe to or switch to, and whether it
+  // is about to cancel: confirmed in the panel's dialog, not window.confirm.
+  // `blockers`: what the salon must deactivate first (B9); the dialog then
+  // lists it instead of going to Stripe.
+  const [pendingPlan, setPendingPlan] = useState<{
+    planId: string;
+    change: boolean;
+    blockers: PlanLimitBlocker[];
+  } | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  // Empresa: the locations the subscription pays for (B8).
+  const [locationsDraft, setLocationsDraft] = useState<number | null>(null);
+  const [confirmLocations, setConfirmLocations] = useState(false);
   const [confirmAddOn, setConfirmAddOn] = useState<{
     key: string;
     action: "purchase" | "cancel";
@@ -82,11 +119,12 @@ function BillingPageContent() {
     const buyKey = searchParams.get("buy");
     if (!buyKey) return;
     if (!addOns) return; // catalog still loading
+    const buyName = addOnDisplayName(buyKey, addOns, installedAddOns);
     if (installedAddOns?.some((row) => row?.addOn?.key === buyKey)) {
       // Already installed: surface a friendly notice, don't open the dialog.
       setFlowBanner({
         kind: "info",
-        message: t("billing.addons.alreadyInstalled", { key: buyKey }),
+        message: t("billing.addons.alreadyInstalled", { key: buyName }),
       });
       cleanupQueryParams(["buy"]);
       return;
@@ -107,14 +145,21 @@ function BillingPageContent() {
       // the user browse plans instead.
       setFlowBanner({
         kind: "warning",
-        message: t("billing.addons.notInCatalog", { key: buyKey }),
+        message: t("billing.addons.notInCatalog", { key: buyName }),
       });
+      cleanupQueryParams(["buy"]);
+      return;
+    }
+    if (!canBuyAddOnsOf(sub)) {
+      // In trial or without a paid subscription the backend refuses it:
+      // say so instead of opening a dialog that would fail.
+      setFlowBanner({ kind: "info", message: t("billing.addons.needsPaidPlan") });
       cleanupQueryParams(["buy"]);
       return;
     }
     setConfirmAddOn({ key: buyKey, action: "purchase" });
     cleanupQueryParams(["buy"]);
-  }, [searchParams, addOns, installedAddOns, t, cleanupQueryParams]);
+  }, [searchParams, addOns, installedAddOns, sub, t, cleanupQueryParams]);
 
   // Handle the Stripe success / cancel return URLs set in
   // `tenant-addons.controller.ts`.
@@ -124,10 +169,12 @@ function BillingPageContent() {
     const status = searchParams.get("status");
     if (!addOn || !status) return;
     const returnTo = searchParams.get("returnTo");
+    // The name, not the internal key; the catalogue may still be loading.
+    const addOnName = addOnDisplayName(addOn, addOns, installedAddOns);
     if (status === "success") {
       setFlowBanner({
         kind: "success",
-        message: t("billing.addons.purchaseSuccess", { key: addOn }),
+        message: t("billing.addons.purchaseSuccess", { key: addOnName }),
       });
       // If the wizard asked us to bounce back, do it after a tick so
       // the user sees the success banner flash. Same-origin paths only.
@@ -143,13 +190,80 @@ function BillingPageContent() {
     } else if (status === "cancelled") {
       setFlowBanner({
         kind: "warning",
-        message: t("billing.addons.purchaseCancelled", { key: addOn }),
+        message: t("billing.addons.purchaseCancelled", { key: addOnName }),
       });
       // On cancel we DON'T redirect — let the user stay on the
       // billing page and retry when ready.
     }
     cleanupQueryParams(["addOn", "status", "returnTo"]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, t, cleanupQueryParams]);
+
+  // Back from the plan checkout (subscriptions.service createCheckoutSession:
+  // ?subscription=success&session_id=...|cancelled). The page asks the
+  // backend what Stripe says about that session (B15): in the free trial
+  // only the card was saved, so it says when the first charge comes instead
+  // of "Pago recibido". Stripe's webhook applies the plan, which can take a
+  // while: the session is asked again until the plan is applied (about 40
+  // seconds), and the page reloads the subscription when it is.
+  useEffect(() => {
+    if (!isOwner(role)) return;
+    const result = searchParams?.get("subscription");
+    if (!result) return;
+    const sessionId = searchParams?.get("session_id");
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let stopped = false;
+    if (result === "success" && sessionId) {
+      const MAX_ATTEMPTS = 10;
+      const ask = async (attempt: number) => {
+        const session = await apiClient.getCheckoutSessionStatus(sessionId).catch(() => null);
+        if (stopped) return;
+        if (attempt === 0) {
+          const message = checkoutReturnMessage(session);
+          if (message.kind === "cardSaved") {
+            toast({
+              title: t("billing.checkoutReturn.cardSavedTitle", {
+                date: new Date(message.firstChargeAt).toLocaleDateString(dateLocale, {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }),
+              }),
+              description: t("billing.checkoutReturn.cardSavedBody"),
+            });
+          } else if (message.kind === "paid") {
+            toast({ title: t("billing.checkoutReturn.successTitle"), description: t("billing.checkoutReturn.successBody") });
+          } else {
+            toast({ title: t("billing.checkoutReturn.pendingTitle"), description: t("billing.checkoutReturn.pendingBody") });
+          }
+        }
+        if (session?.applied) {
+          load();
+          return;
+        }
+        if (shouldKeepPolling(session, attempt + 1, MAX_ATTEMPTS)) {
+          timers.push(setTimeout(() => ask(attempt + 1), 4000));
+        } else if (session?.status === "complete") {
+          load();
+          toast({ title: t("billing.checkoutReturn.pendingTitle"), description: t("billing.checkoutReturn.slowBody") });
+        }
+      };
+      ask(0);
+    } else if (result === "success") {
+      // An older return link without the session: as before.
+      toast({ title: t("billing.checkoutReturn.successTitle"), description: t("billing.checkoutReturn.successBody") });
+      load();
+      timers.push(setTimeout(() => load(), 4000), setTimeout(() => load(), 10000));
+    } else if (result === "cancelled" || result === "cancel") {
+      toast({ title: t("billing.checkoutReturn.cancelTitle"), description: t("billing.checkoutReturn.cancelBody") });
+    }
+    cleanupQueryParams(["subscription", "session_id"]);
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, role]);
 
   const load = async () => {
     setLoading(true);
@@ -179,19 +293,19 @@ function BillingPageContent() {
       setPlans((p as any) || []);
       setInvoices((i as SubscriptionInvoice[]) || []);
 
-      // P2A-receptionist-v2 -- fetch add-ons + AI counter + bundles
+      // P2A-receptionist-v2 -- fetch add-ons + AI counter. (The SMS
+      // "Bonos de mensajes" card was here: SMS campaigns do not exist.)
       // No catalogue for a plan we could not read.
       const plan = failed.includes("subscription") ? null : ((s as any)?.plan ?? "esencial");
-      const [catalog, installed, ai, wallet] = await Promise.all([
+      const [catalog, installed, ai] = await Promise.all([
         plan ? soft("addOns", apiClient.getAvailableAddOns(plan), [] as any[]) : Promise.resolve([] as any[]),
         soft("installedAddOns", apiClient.getTenantAddOns(), [] as any[]),
         soft("aiUsage", apiClient.getAiUsage(), null as any),
-        soft("bundles", apiClient.getMessageBundlesBalance(), null as any),
       ]);
       setAddOns(catalog);
       setInstalledAddOns(installed);
       setAiUsage(ai);
-      setBundles(wallet);
+      setLocationsDraft(null);
       if (failed.length > 0) setError(t("billing.loadError"));
     } catch (e: any) {
       setError(e?.message || t("billing.loadError"));
@@ -201,12 +315,52 @@ function BillingPageContent() {
   };
 
   useEffect(() => {
-    load();
+    if (isOwner(role)) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [role]);
 
   const handleChoosePlan = async (planId: string) => {
-    if (!confirm(t("billing.checkoutConfirm", { plan: planId }))) return;
+    // What the salon must deactivate first (B9), asked before Stripe. If
+    // the check itself fails, the dialog goes on: the backend checks again.
+    setWorking(`check:${planId}`);
+    let blockers: PlanLimitBlocker[] = [];
+    try {
+      blockers = (await apiClient.getPlanCheck(planId))?.blockers ?? [];
+    } catch (err) {
+      console.error("Billing: plan check failed:", err);
+    } finally {
+      setWorking(null);
+    }
+    // A salon that already pays changes the plan of its subscription: a
+    // checkout would open a second one, billed on top.
+    setPendingPlan({ planId, change: paysSubscription(sub), blockers });
+  };
+
+  const performChoosePlan = async () => {
+    if (!pendingPlan) return;
+    const { planId, change, blockers } = pendingPlan;
+    if (blockers.length > 0) {
+      // Nothing to send to Stripe yet: take the owner to the first thing to deactivate.
+      setPendingPlan(null);
+      router.push(blockers[0].href);
+      return;
+    }
+    const plan = t(`plans.${planId}`);
+    if (change) {
+      setWorking(planId);
+      setError(null);
+      try {
+        await apiClient.changeSubscriptionPlan(planId);
+        await load();
+        setFlowBanner({ kind: "success", message: t("billing.switchDone", { plan }) });
+      } catch (e: any) {
+        setError(e?.message || t("billing.checkoutError"));
+      } finally {
+        setWorking(null);
+        setPendingPlan(null);
+      }
+      return;
+    }
     setWorking(planId);
     setError(null);
     try {
@@ -216,27 +370,63 @@ function BillingPageContent() {
       };
       const url = res.checkoutUrl || res.url;
       if (url) {
+        // The dialog stays up, busy, until Stripe's page loads.
         window.location.href = url;
-      } else {
-        alert(t("billing.checkoutDevNotice"));
+        return;
       }
+      setError(t("billing.checkoutDevNotice"));
     } catch (e: any) {
       setError(e?.message || t("billing.checkoutError"));
+    }
+    setWorking(null);
+    setPendingPlan(null);
+  };
+
+  const handleCancel = async () => {
+    setConfirmCancel(false);
+    setWorking("cancel");
+    try {
+      // A paid subscription ends with its period (cancelAt); until then
+      // the salon keeps everything (B3).
+      const res: any = await apiClient.cancelSubscription();
+      await load();
+      if (res?.cancelAt) {
+        toast({ title: t("billing.cancel.scheduledToast", { date: new Date(res.cancelAt).toLocaleDateString(dateLocale) }) });
+      }
+    } catch (e: any) {
+      setError(e?.message || t("billing.cancelError"));
     } finally {
       setWorking(null);
     }
   };
 
-  const handleCancel = async () => {
-    if (!confirm(t("billing.cancel.confirm"))) return;
-    setWorking("cancel");
+  const handleUndoCancel = async () => {
+    setWorking("undo-cancel");
+    setError(null);
     try {
-      await apiClient.cancelSubscription(false);
+      await apiClient.undoCancelSubscription();
       await load();
+      toast({ title: t("billing.cancel.undone") });
     } catch (e: any) {
-      setError(e?.message || t("billing.cancelError"));
+      setError(e?.message || t("billing.cancel.undoError"));
     } finally {
       setWorking(null);
+    }
+  };
+
+  const handleSaveLocations = async () => {
+    if (locationsDraft === null) return;
+    setWorking("locations");
+    setError(null);
+    try {
+      await apiClient.updateSubscriptionLocations(locationsDraft);
+      await load();
+      toast({ title: t("billing.locations.done", { count: locationsDraft }) });
+    } catch (e: any) {
+      setError(e?.message || t("billing.locations.error"));
+    } finally {
+      setWorking(null);
+      setConfirmLocations(false);
     }
   };
 
@@ -281,7 +471,7 @@ function BillingPageContent() {
         if (row?.status === "active") {
           setFlowBanner({
             kind: "success",
-            message: t("billing.addons.purchaseSuccess", { key }),
+            message: t("billing.addons.purchaseSuccess", { key: addOnDisplayName(key, addOns, installedAddOns) }),
           });
           if (
             pendingReturnTo &&
@@ -297,7 +487,7 @@ function BillingPageContent() {
         } else {
           setFlowBanner({
             kind: "warning",
-            message: t("billing.addons.purchasePending", { key }),
+            message: t("billing.addons.purchasePending", { key: addOnDisplayName(key, addOns, installedAddOns) }),
           });
         }
       } else {
@@ -329,7 +519,7 @@ function BillingPageContent() {
     }
   };
 
-  if (loading) {
+  if (loading || !isOwner(role)) {
     return (
       <div className="flex items-center gap-2 p-8 text-gray-500">
         <Loader2 className="h-4 w-4 animate-spin" /> {t("billing.loading")}
@@ -340,6 +530,37 @@ function BillingPageContent() {
   const currentPlan: PlanId = (sub?.plan as PlanId) || "esencial";
   const isCancelled = sub?.status === "cancelled";
   const isTrialing = sub?.status === "trialing";
+  // The plan the salon has now: Pro during the trial, though it is stored
+  // as Esencial until it subscribes.
+  const shownPlan: PlanId = (sub?.effectivePlan as PlanId) || currentPlan;
+  const inTrial: boolean =
+    sub?.inTrial ?? (isTrialing && !!sub?.trialEnd && new Date(sub.trialEnd).getTime() > Date.now());
+  const canBuyAddOns = canBuyAddOnsOf(sub);
+  // Cancelled at the end of the paid period: still everything until then (B3).
+  const cancelsOn = scheduledCancellation(sub);
+  const cancelsOnText = cancelsOn ? new Date(cancelsOn).toLocaleDateString(dateLocale) : null;
+  // Subscribed during the trial: the trial (Pro) goes on until it ends (B6).
+  const trialSubscribed = subscribedInTrial(sub);
+  // Empresa: paid locations against the ones open (B8).
+  const locations = empresaLocations(sub);
+  const locationsValue = locationsDraft ?? locations?.paid ?? 1;
+  const planById = (id: string) => plans?.find((p: any) => p.id === id);
+  // "49 €" or, on Empresa, "149 € por local": the copy adds "al mes". KiraRoom
+  // charges no VAT or IGIC: the price shown is the final price (D6).
+  const planPriceText = (id: string) => {
+    const p = planById(id);
+    if (!p) return "";
+    const amount = t("landing.pricing.price", { amount: p.price / 100 });
+    return p.pricePerLocation ? `${amount} ${t("landing.pricing.perLocation")}` : amount;
+  };
+  const empresaPriceText = (() => {
+    const p = planById("empresa");
+    return p ? t("landing.pricing.price", { amount: (p.pricePerLocation ?? p.price) / 100 }) : "";
+  })();
+  const confirmAddOnPrice = (() => {
+    const row = confirmAddOn ? addOns?.find((a) => a?.key === confirmAddOn.key) : null;
+    return row?.monthlyPriceCents ? formatSubscriptionAmount(row.monthlyPriceCents, row.currency) : "";
+  })();
 
   return (
     <div className="space-y-6 p-6">
@@ -350,7 +571,22 @@ function BillingPageContent() {
         </p>
       </header>
 
-      {ctx.inTrial && <TrialBanner />}
+      {/* KiraRoom's Stripe on test keys (audit 8 D8): nothing is charged. */}
+      {sub?.paymentsTestMode && (
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <FlaskConical className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
+          <div>
+            <p className="font-semibold">{t("billing.test_mode_title")}</p>
+            <p>{t(sub?.paymentsBlocked ? "billing.test_mode_blocked" : "billing.test_mode_internal")}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Already subscribed in the trial: nothing left to choose. */}
+      {ctx.inTrial && !paysSubscription(sub) && <TrialBanner />}
 
       {flowBanner && (
         <div
@@ -397,6 +633,11 @@ function BillingPageContent() {
                 ? t("billing.reactivate.doing")
                 : t("billing.reactivate.cta")}
             </button>
+            {!(sub?.trialEnd && new Date(sub.trialEnd).getTime() > Date.now()) && (
+              // Out of trial, reactivating is a payment (in trial it just
+              // returns to the trial).
+              <p className="mt-2 text-xs text-red-800">{t("billing.reactivate.hint")}</p>
+            )}
           </div>
         </div>
       )}
@@ -404,7 +645,7 @@ function BillingPageContent() {
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-700">
-            {t(`plans.${currentPlan}`)}
+            {t(`plans.${shownPlan}`)}
           </span>
           <StatusBadge status={sub?.status} t={t} />
           {sub?.trialEnd && isTrialing && (
@@ -414,16 +655,29 @@ function BillingPageContent() {
               })}
             </span>
           )}
-          {sub?.currentPeriodEnd && !isCancelled && (
+          {sub?.currentPeriodEnd && !isCancelled && !cancelsOn && !trialSubscribed && paysSubscription(sub) && (
             <span className="text-xs text-gray-500">
               {t("billing.nextCharge", {
                 date: new Date(sub.currentPeriodEnd).toLocaleDateString(dateLocale),
               })}
             </span>
           )}
-          {!isCancelled && (
+          {cancelsOnText && (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+              {t("billing.cancel.scheduled", { date: cancelsOnText })}
+            </span>
+          )}
+          {cancelsOn ? (
             <button
-              onClick={handleCancel}
+              onClick={handleUndoCancel}
+              disabled={working === "undo-cancel"}
+              className="ml-auto rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {working === "undo-cancel" ? t("billing.cancel.undoing") : t("billing.cancel.undo")}
+            </button>
+          ) : !isCancelled && (
+            <button
+              onClick={() => setConfirmCancel(true)}
               disabled={working === "cancel"}
               className="ml-auto text-xs text-red-600 underline hover:text-red-700"
             >
@@ -433,7 +687,59 @@ function BillingPageContent() {
             </button>
           )}
         </div>
+        {cancelsOnText && <p className="mt-2 text-xs text-gray-600">{t("billing.cancel.scheduledHint")}</p>}
       </section>
+
+      {locations && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
+            {t("billing.locations.title")}
+          </h2>
+          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+            <p className="text-sm text-gray-600">
+              {t("billing.locations.desc", {
+                price: empresaPriceText,
+                active: sub?.activeLocations ?? 0,
+                activeLabel: t((sub?.activeLocations ?? 0) === 1 ? "billing.locations.activeOne" : "billing.locations.activeMany"),
+                paid: locations.paid,
+              })}
+            </p>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="text-sm text-gray-700">
+                <span className="mb-1 block text-xs font-medium text-gray-600">{t("billing.locations.label")}</span>
+                <input
+                  type="number"
+                  min={locations.min}
+                  max={1000}
+                  step={1}
+                  value={locationsValue}
+                  onChange={(e) => {
+                    const n = Math.floor(Number(e.target.value));
+                    setLocationsDraft(Number.isFinite(n) ? n : locations.min);
+                  }}
+                  className="w-24 rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+                />
+              </label>
+              <button
+                onClick={() => setConfirmLocations(true)}
+                disabled={
+                  working !== null ||
+                  !!cancelsOn ||
+                  locationsValue === locations.paid ||
+                  locationsValue < locations.min ||
+                  locationsValue > 1000
+                }
+                className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                {working === "locations" ? t("billing.processing") : t("billing.locations.save")}
+              </button>
+            </div>
+            {locationsValue < locations.min && (
+              <p className="mt-2 text-xs text-red-700">{t("billing.locations.min", { min: locations.min })}</p>
+            )}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
@@ -446,22 +752,56 @@ function BillingPageContent() {
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
           {t("billing.changePlan")}
         </h2>
+        {isTrialing && !paysSubscription(sub) && sub?.trialEnd && (
+          <p className="mb-3 text-sm text-gray-600">
+            {t("billing.trialCheckoutNote", {
+              date: new Date(sub.trialEnd).toLocaleDateString(dateLocale),
+            })}
+          </p>
+        )}
+        {trialSubscribed && sub?.trialEnd && (
+          <p className="mb-3 text-sm text-gray-600">
+            {t("billing.trialSubscribedNote", {
+              plan: t(`plans.${currentPlan}`),
+              date: new Date(sub.trialEnd).toLocaleDateString(dateLocale),
+            })}
+          </p>
+        )}
+        <p className="mb-3 text-xs text-gray-500">{t("billing.finalPrice")}</p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans?.map((p: any) => {
-            const isCurrent = p.id === currentPlan;
+            // In trial the highlighted card is the Pro of the trial.
+            const isCurrent = p.id === (inTrial ? shownPlan : currentPlan);
+            const action = planAction(sub, p.id);
+            const isDesired = desiredPlan === p.id && !paysSubscription(sub);
             return (
               <div
                 key={p.id}
-                className={"rounded-lg border p-5 shadow-sm " + (isCurrent ? "border-violet-300 bg-violet-50/40" : "border-gray-200 bg-white")}
+                className={
+                  "rounded-lg border p-5 shadow-sm " +
+                  (isCurrent ? "border-violet-300 bg-violet-50/40" : "border-gray-200 bg-white") +
+                  (isDesired ? " ring-2 ring-violet-400" : "")
+                }
               >
+                {isDesired && (
+                  <span className="mb-2 inline-block rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                    {t("billing.desiredPlanBadge")}
+                  </span>
+                )}
                 <div className="flex items-baseline justify-between">
                   <h3 className="text-lg font-semibold text-gray-900">
                     {t(`plans.${p.id}`)}
                   </h3>
-                  {p.id === "pro" && (
-                    <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                      {t("landing.pricing.popular")}
+                  {inTrial && p.id === shownPlan ? (
+                    <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                      {t("billing.trialPlanBadge")}
                     </span>
+                  ) : (
+                    p.id === "pro" && (
+                      <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        {t("landing.pricing.popular")}
+                      </span>
+                    )
                   )}
                 </div>
                 <p className="mt-1 text-2xl font-bold text-gray-900">
@@ -485,14 +825,18 @@ function BillingPageContent() {
                 </ul>
                 <button
                   onClick={() => handleChoosePlan(p.id)}
-                  disabled={isCurrent || working === p.id}
-                  className={"mt-4 w-full rounded-md px-3 py-2 text-sm font-medium " + (isCurrent ? "bg-gray-100 text-gray-400" : "bg-violet-600 text-white hover:bg-violet-700") + " disabled:opacity-50"}
+                  disabled={action === "current" || working !== null || !!cancelsOn}
+                  className={"mt-4 w-full rounded-md px-3 py-2 text-sm font-medium " + (action === "current" ? "bg-gray-100 text-gray-400" : "bg-violet-600 text-white hover:bg-violet-700") + " disabled:opacity-50"}
                 >
-                  {isCurrent
+                  {action === "current"
                     ? t("billing.currentPlanLabel")
-                    : working === p.id
+                    : working === p.id || working === `check:${p.id}`
                       ? t("billing.processing")
-                      : t("billing.choosePlan")}
+                      : action === "subscribe"
+                        ? t("billing.subscribeCurrent")
+                        : action === "change"
+                          ? t("billing.switchPlan")
+                          : t("billing.choosePlan")}
                 </button>
               </div>
             );
@@ -520,6 +864,9 @@ function BillingPageContent() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
             {t("billing.addons.title")}
           </h2>
+          {!canBuyAddOns && (
+            <p className="mb-3 text-sm text-gray-600">{t("billing.addons.needsPaidPlan")}</p>
+          )}
           <AddOnGrid
             addOns={addOns}
             installed={installedAddOns ?? []}
@@ -527,17 +874,8 @@ function BillingPageContent() {
             onPurchase={handlePurchaseAddOn}
             onCancel={handleCancelAddOn}
             working={working}
+            canBuy={canBuyAddOns}
           />
-        </section>
-      )}
-
-      {/* P2A-receptionist-v2 -- message bundles balance (metered) */}
-      {bundles && (
-        <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-700">
-            {t("billing.bundles.title")}
-          </h2>
-          <BundlesBalanceCard bundles={bundles} t={t} />
         </section>
       )}
 
@@ -568,13 +906,94 @@ function BillingPageContent() {
       )}
 
       <ConfirmDialog
+        open={!!pendingPlan}
+        title={
+          !pendingPlan
+            ? ""
+            : pendingPlan.blockers.length > 0
+              ? t("billing.limits.title", { plan: t(`plans.${pendingPlan.planId}`) })
+              : t(pendingPlan.change ? "billing.switchConfirm" : "billing.checkoutConfirm", {
+                  plan: t(`plans.${pendingPlan.planId}`),
+                })
+        }
+        description={
+          !pendingPlan ? null : pendingPlan.blockers.length > 0 ? (
+            <div>
+              <p>{t("billing.limits.intro")}</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {pendingPlan.blockers.map((b) => (
+                  <li key={b.kind}>{b.message}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            t(pendingPlan.change ? "billing.switchDescription" : "billing.checkoutDescription", {
+              price: planPriceText(pendingPlan.planId),
+            })
+          )
+        }
+        confirmLabel={
+          pendingPlan && pendingPlan.blockers.length > 0
+            ? t("billing.limits.go")
+            : pendingPlan?.change
+              ? t("billing.switchPlan")
+              : t("billing.checkoutGo")
+        }
+        cancelLabel={t("billing.back")}
+        loading={!!pendingPlan && working === pendingPlan.planId}
+        onCancel={() => setPendingPlan(null)}
+        onConfirm={performChoosePlan}
+      />
+
+      <ConfirmDialog
+        open={confirmCancel}
+        title={t("billing.cancel.confirm")}
+        description={
+          // A paid subscription ends with its period (B3); without one
+          // (a trial that never subscribed) read-only starts now.
+          paysSubscription(sub) && (sub?.status === "active" || sub?.status === "trialing")
+            ? sub?.currentPeriodEnd && !trialSubscribed
+              ? t("billing.cancel.description", { date: new Date(sub.currentPeriodEnd).toLocaleDateString(dateLocale) })
+              : trialSubscribed && sub?.trialEnd
+                ? t("billing.cancel.description", { date: new Date(sub.trialEnd).toLocaleDateString(dateLocale) })
+                : t("billing.cancel.descriptionNoDate")
+            : t("billing.cancel.descriptionNow")
+        }
+        confirmLabel={t("billing.cancel.cta")}
+        cancelLabel={t("billing.cancel.keep")}
+        destructive
+        onCancel={() => setConfirmCancel(false)}
+        onConfirm={handleCancel}
+      />
+
+      <ConfirmDialog
+        open={confirmLocations}
+        title={t("billing.locations.confirm", { count: locationsValue })}
+        description={t("billing.locations.confirmDescription", { price: empresaPriceText })}
+        confirmLabel={t("billing.locations.save")}
+        cancelLabel={t("billing.back")}
+        loading={working === "locations"}
+        onCancel={() => setConfirmLocations(false)}
+        onConfirm={handleSaveLocations}
+      />
+
+      <ConfirmDialog
         open={!!confirmAddOn}
         title={
           confirmAddOn?.action === "purchase"
-            ? t("billing.addons.confirmPurchase", { key: confirmAddOn?.key ?? "" })
-            : t("billing.addons.confirmCancel", { key: confirmAddOn?.key ?? "" })
+            ? t("billing.addons.confirmPurchase", {
+                name: addOnDisplayName(confirmAddOn.key, addOns, installedAddOns),
+                price: confirmAddOnPrice,
+              })
+            : t("billing.addons.confirmCancel", {
+                name: confirmAddOn ? addOnDisplayName(confirmAddOn.key, addOns, installedAddOns) : "",
+              })
         }
-        description={t("billing.addons.confirmDescription")}
+        description={
+          confirmAddOn?.action === "cancel"
+            ? t("billing.addons.confirmCancelDescription")
+            : t("billing.addons.confirmDescription")
+        }
         confirmLabel={
           confirmAddOn?.action === "purchase"
             ? t("billing.addons.subscribe")
@@ -589,6 +1008,12 @@ function BillingPageContent() {
   );
 }
 
+/** Add-ons can be bought only on a paid subscription (AddOnsService.purchase). */
+function canBuyAddOnsOf(sub: any): boolean {
+  if (typeof sub?.canBuyAddOns === "boolean") return sub.canBuyAddOns;
+  return sub?.status === "active" && !!sub?.stripeSubscriptionId;
+}
+
 function StatusBadge({
   status,
   t,
@@ -601,6 +1026,7 @@ function StatusBadge({
     trialing: "bg-blue-100 text-blue-700",
     cancelled: "bg-red-100 text-red-700",
     past_due: "bg-amber-100 text-amber-700",
+    suspended: "bg-red-100 text-red-700",
   };
   return (
     <span
@@ -653,20 +1079,20 @@ function InvoicesList({
                     {inv.number || inv.id}
                   </td>
                   <td className="px-4 py-2 whitespace-nowrap font-medium text-gray-900">
-                    €{(inv.amount / 100).toFixed(2)}
+                    {formatSubscriptionAmount(inv.amount, inv.currency)}
                   </td>
                   <td className="px-4 py-2">
                     <InvoiceStatusBadge status={inv.status} t={t} />
                   </td>
                   <td className="px-4 py-2 text-right">
-                    {inv.invoiceUrl ? (
+                    {safeHttpUrl(inv.invoiceUrl) ? (
                       <a
-                        href={inv.invoiceUrl}
+                        href={safeHttpUrl(inv.invoiceUrl)!}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-violet-600 underline hover:text-violet-700"
                       >
-                        {t("billing.invoices.open")}
+                        {inv.pending ? t("billing.invoices.pay") : t("billing.invoices.open")}
                       </a>
                     ) : (
                       <span className="text-gray-400">{t("billing.invoices.dash")}</span>
@@ -743,7 +1169,11 @@ function AiUsageMeter({
       <div className="mb-2 flex items-baseline justify-between">
         <p className="text-sm font-medium text-gray-900">
           <span className="text-2xl font-bold text-gray-900">{ai.used}</span>
-          <span className="text-sm text-gray-500"> / {ai.cap}</span>
+          <span className="text-sm text-gray-500">
+            {" "}
+            / {ai.cap}{" "}
+            {t("billing.aiUsage.capConversations", { count: aiConversationsApprox(ai.cap) })}
+          </span>
         </p>
         {ai.resetsAt && (
           <p className="text-xs text-gray-500">
@@ -783,6 +1213,7 @@ function AddOnGrid({
   onPurchase,
   onCancel,
   working,
+  canBuy,
 }: {
   addOns: any[];
   installed: any[];
@@ -790,6 +1221,8 @@ function AddOnGrid({
   onPurchase: (key: string) => void;
   onCancel: (key: string) => void;
   working: string | null;
+  /** False in trial or without a paid subscription: no "Activar". */
+  canBuy: boolean;
 }) {
   const installedByKey = new Map(
     installed.map((i) => [i.addOn?.key ?? i.addOnKey, i]),
@@ -800,7 +1233,7 @@ function AddOnGrid({
         const inst = installedByKey.get(a.key);
         const isActive = inst?.status === "active";
         const price = a.monthlyPriceCents
-          ? `€${(a.monthlyPriceCents / 100).toFixed(2)} / ${t("billing.addons.perMonth")}`
+          ? `${formatSubscriptionAmount(a.monthlyPriceCents, a.currency)} / ${t("billing.addons.perMonth")}`
           : a.metered
             ? t("billing.addons.metered")
             : t("billing.addons.included");
@@ -869,6 +1302,13 @@ function AddOnGrid({
                 >
                   {t("billing.addons.comingSoon")}
                 </button>
+              ) : !canBuy ? (
+                <button
+                  disabled
+                  className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500"
+                >
+                  {t("billing.addons.withPaidPlan")}
+                </button>
               ) : (
                 <button
                   onClick={() => onPurchase(a.key)}
@@ -884,71 +1324,6 @@ function AddOnGrid({
           </article>
         );
       })}
-    </div>
-  );
-}
-
-/** Message-bundles wallet balance. Pure read-only. Top-up happens via
- *  the SaaS-admin / Stripe flow (Phase 4 webhook). */
-function BundlesBalanceCard({
-  bundles,
-  t,
-}: {
-  bundles: {
-    creditsRemaining: number;
-    creditsPurchasedTotal: number;
-    creditsUsedTotal: number;
-    lastTopupAt: string | null;
-  };
-  t: (key: string, params?: any) => string;
-}) {
-  const pct = bundles.creditsPurchasedTotal
-    ? Math.min(
-        100,
-        Math.round(
-          (bundles.creditsUsedTotal / bundles.creditsPurchasedTotal) * 100,
-        ),
-      )
-    : 0;
-  return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-baseline justify-between">
-        <p className="text-sm font-medium text-gray-900">
-          {t("billing.bundles.title")}
-        </p>
-        <p className="text-xs text-gray-500">
-          {t("billing.bundles.consumedFmt", {
-            used: bundles.creditsUsedTotal,
-            purchased: bundles.creditsPurchasedTotal,
-          })}
-        </p>
-      </div>
-      <div className="mb-2 flex items-baseline gap-2">
-        <p className="text-3xl font-bold text-gray-900">
-          {bundles.creditsRemaining}
-        </p>
-        <p className="text-sm text-gray-500">{t("billing.bundles.creditsRemaining")}</p>
-      </div>
-      {bundles.creditsPurchasedTotal > 0 && (
-        <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-          <div
-            className="h-full bg-indigo-500 transition-all"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-      )}
-      <p className="mt-3 text-xs text-gray-500">
-        {t("billing.bundles.desc")}
-      </p>
-      {bundles.lastTopupAt && (
-        <p className="mt-1 text-xs text-gray-400">
-          {t("billing.bundles.lastTopupFmt", {
-            date: new Date(bundles.lastTopupAt).toLocaleDateString(
-              t("billing.invoices.dateFmt") || "es-ES",
-            ),
-          })}
-        </p>
-      )}
     </div>
   );
 }

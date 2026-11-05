@@ -16,6 +16,8 @@ import {
   buildInvoiceBookRows,
   invoiceBookCsv,
 } from "./invoice-book.service";
+import { aggregateModelo420 } from "../invoices/tax-reports/modelo-420";
+import { effectiveTaxBreakdown } from "../invoices/invoice-calculator.service";
 
 const twoRates = {
   series: "A",
@@ -83,6 +85,28 @@ describe("invoiceBookCsv", () => {
     );
     expect(invoiceBookCsv(rows)).toContain(";-0,05;0,00;-0,05;");
   });
+
+  it("a client name that a spreadsheet would run as a formula stays text; the amounts stay numbers", () => {
+    const rows = buildInvoiceBookRows(
+      [
+        { ...simplified, recipientName: "=SUM(1)" },
+        { ...simplified, number: "000012", recipientName: "@SUM(1)", recipientTaxId: "-1" },
+        {
+          ...simplified,
+          number: "000013",
+          recipientName: "+1",
+          series: "R",
+          totalCents: -2140,
+          taxBreakdown: [{ rate: 7, baseCents: -2000, taxCents: -140 }],
+        },
+      ],
+      "IVA",
+    );
+    const lines = invoiceBookCsv(rows).slice(1).trimEnd().split("\r\n");
+    expect(lines[1]).toBe(`04/07/2026;A;000011;A000011;Simplificada (F2);;"'=SUM(1)";IVA;7;20,00;1,40;21,40;Emitida`);
+    expect(lines[2]).toBe(`04/07/2026;A;000012;A000012;Completa (F1);"'-1";"'@SUM(1)";IVA;7;20,00;1,40;21,40;Emitida`);
+    expect(lines[3]).toBe(`04/07/2026;R;000013;R000013;Rectificativa;;"'+1";IVA;7;-20,00;-1,40;-21,40;Emitida`);
+  });
 });
 
 describe("InvoiceBookService.build", () => {
@@ -130,5 +154,55 @@ describe("InvoiceBookService.build", () => {
     await expect(svc.build("t", "2026-02-30", "2026-03-01", "csv")).rejects.toThrow(/AAAA-MM-DD/);
     await expect(svc.build("t", "2026-03-01", "2026-02-01", "csv")).rejects.toThrow(/anterior/);
     await expect(svc.build("t", "2025-01-01", "2026-06-01", "csv")).rejects.toThrow(/un año/);
+  });
+});
+
+describe("the book reconciles with the Modelo 303/420 drafts", () => {
+  // Issued before rates were kept to two decimals: the stored breakdown says
+  // 10 %, the lines (what the 420 draft reads) say 9,5 %.
+  const oldIgic = {
+    ...simplified,
+    number: "000012",
+    subtotalCents: 3000,
+    totalCents: 3285,
+    taxBreakdown: [{ rate: 10, baseCents: 3000, taxCents: 285 }],
+    lines: [
+      { taxRate: "9.5", taxCents: 190, totalCents: 2190 },
+      { taxRate: "9.5", taxCents: 95, totalCents: 1095 },
+    ],
+  };
+
+  it("works the rows out from the lines, not the stored 9,5 -> 10 breakdown", () => {
+    const rows = buildInvoiceBookRows([oldIgic], "IGIC");
+    expect(rows.map((r) => [r.rate, r.baseCents, r.taxCents])).toEqual([[9.5, 3000, 285]]);
+  });
+
+  it("gives the same base and cuota per rate as the 420 draft", () => {
+    const fromBook = buildInvoiceBookRows([oldIgic, { ...simplified, lines: [{ taxRate: 7, taxCents: 140, totalCents: 2140 }] }], "IGIC");
+    const boxes = aggregateModelo420(
+      [oldIgic, simplified].map((inv) => ({ taxBreakdown: effectiveTaxBreakdown(inv as any) })),
+    );
+    // Rows low to high: 7 % then 9,5 %.
+    expect([boxes["01"], boxes["02"], boxes["03"]]).toEqual([2000, 7, 140]);
+    expect([boxes["04"], boxes["05"], boxes["06"]]).toEqual([3000, 9.5, 285]);
+    const byRate = new Map(fromBook.map((r) => [r.rate, [r.baseCents, r.taxCents]]));
+    expect(byRate.get(7)).toEqual([2000, 140]);
+    expect(byRate.get(9.5)).toEqual([3000, 285]);
+  });
+
+  it("asks the database for the lines", async () => {
+    const prisma: any = {
+      tenant: { findUnique: jest.fn(async () => ({ fiscalSettings: { taxRegime: "igic" } })) },
+      invoice: { findMany: jest.fn(async () => [oldIgic]) },
+    };
+    const file = await new InvoiceBookService(prisma).build("tenant-1", "2026-07-01", "2026-09-30", "csv");
+    expect(prisma.invoice.findMany.mock.calls[0][0].select.lines).toEqual({
+      select: { taxRate: true, taxCents: true, totalCents: true },
+    });
+    expect(String(file.body)).toContain(";IGIC;9,5;30,00;2,85;");
+  });
+
+  it("an invoice without lines keeps its stored breakdown", () => {
+    expect(buildInvoiceBookRows([{ ...twoRates, lines: [] }], "IVA").map((r) => r.rate)).toEqual([21, 10]);
   });
 });

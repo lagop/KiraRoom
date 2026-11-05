@@ -2,11 +2,23 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
+import { escapeHtml } from '../common/html-escape';
 import { EmailService } from '../notifications/services/email.service';
 import { CampaignType } from './dto';
-import { EmailCampaignsService } from './email-campaigns.service';
 import { EmailSuppressionService } from './email-suppression.service';
 import { EmailUnsubscribeService } from './email-unsubscribe.service';
+import { EmailPacer } from './email-pacer';
+import { campaignSender } from './email-campaign-sender.service';
+import { EmailQuotaService } from './email-quota.service';
+import {
+  plainTextPart,
+  promotionUsable,
+  subjectWithoutPromotion,
+  withPreheader,
+  withoutPromotion,
+} from './campaign-content';
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 @Injectable()
 export class EmailCampaignsScheduler {
@@ -15,58 +27,21 @@ export class EmailCampaignsScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
-    private readonly campaigns: EmailCampaignsService,
     private readonly suppressions: EmailSuppressionService,
     private readonly unsubscribes: EmailUnsubscribeService,
+    private readonly pacer: EmailPacer,
+    private readonly quota: EmailQuotaService,
   ) {}
 
-  /**
-   * Scheduled Campaigns Cron Job
-   * Runs every 5 minutes and sends the campaigns whose time has come.
-   *
-   * There used to be a second job that handed campaigns due in the next ten
-   * minutes to Resend's batch API with a `send_at` field. The batch API has
-   * no scheduling and the field name was wrong anyway, so those emails went
-   * out up to ten minutes early, their Resend ids were thrown away (no
-   * delivery, open or bounce could ever be matched back), and this job then
-   * found no pending recipients and marked the campaign sent with zero
-   * emails. One path now: up to five minutes late, fully tracked.
-   */
-  @Cron(CronExpression.EVERY_5_MINUTES)
-  async processScheduledCampaigns() {
-    try {
-      const due = await this.prisma.emailCampaign.findMany({
-        where: { status: 'scheduled', scheduledAt: { lte: new Date() } },
-        select: { id: true, tenantId: true },
-      });
-      if (due.length === 0) return;
-      if (!this.emailService.isConfigured()) {
-        // Left scheduled, not failed: they go out once RESEND_API_KEY is set.
-        this.logger.warn(`${due.length} scheduled campaign(s) due but email sending is not configured`);
-        return;
-      }
-
-      for (const campaign of due) {
-        try {
-          await this.campaigns.deliverCampaign(campaign.tenantId, campaign.id, ['scheduled']);
-        } catch (error) {
-          this.logger.error(`Failed to send scheduled campaign ${campaign.id}: ${error.message}`);
-          await this.prisma.emailCampaign.updateMany({
-            where: { id: campaign.id, status: 'sending' },
-            data: { status: 'failed' },
-          });
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Scheduled campaigns job failed: ${error.message}`);
-    }
-  }
+  // Scheduled one-shot campaigns are started by EmailCampaignSender, which
+  // sends every campaign in the background, in batches and at a pace.
 
   /**
    * Cleanup old campaign data
    * Runs daily to clean up analytics data older than 90 days
    */
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  @MonitoredJob("EmailCampaignsScheduler.cleanupOldCampaignData")
   async cleanupOldCampaignData() {
     this.logger.log('Cleaning up old campaign data...');
 
@@ -93,6 +68,7 @@ export class EmailCampaignsScheduler {
    * Finds clients who haven't visited in X days and sends them personalized emails
    */
   @Cron(CronExpression.EVERY_DAY_AT_6AM)
+  @MonitoredJob("EmailCampaignsScheduler.processReengagementCampaigns")
   async processReengagementCampaigns() {
     this.logger.log('Processing re-engagement campaigns...');
 
@@ -102,6 +78,8 @@ export class EmailCampaignsScheduler {
         where: {
           campaignType: 'reengagement' as CampaignType,
           status: 'active', // Campaigns must be activated manually
+          // Not for a deleted, blocked or read-only salon (audit 7 N7, audit 8 D5).
+          tenant: MARKETING_SENDS_TENANT_WHERE,
         },
         include: {
           linkedPromotion: true,
@@ -142,7 +120,11 @@ export class EmailCampaignsScheduler {
 
     // Find clients who:
     // 1. Are from the same tenant
-    // 2. Have no visit in the last X days OR have never visited
+    // 2. Came at least once (a completed visit) and not in the last X days.
+    //    A client who never came is not one to win back: the owner's rule
+    //    is that campaigns go only to clients with a completed visit. (A
+    //    null lastVisit used to count as inactive, and since nothing filled
+    //    it in, every client was.)
     // 3. Have an email address
     // 4. Haven't received a re-engagement email in the last 30 days
     const clients = await this.prisma.client.findMany({
@@ -150,10 +132,8 @@ export class EmailCampaignsScheduler {
         tenantId: campaign.tenantId,
         email: { not: null },
         status: 'active',
-        OR: [
-          { lastVisit: { lt: thresholdDate } },
-          { lastVisit: null },
-        ],
+        isTest: false,
+        lastVisit: { lt: thresholdDate },
       },
     });
 
@@ -180,27 +160,52 @@ export class EmailCampaignsScheduler {
 
     let sent = 0;
     let errors = 0;
+    let newRecipients = 0;
+    // Re-engagement emails are marketing emails: each takes one of the
+    // salon's month (or of its bono). None left: the campaign shows why and
+    // tries again at its next daily run; those not written to today are
+    // still away and are picked up then.
+    const limits = await this.quota.limits(campaign.tenantId);
+    let capped = false;
 
     for (const client of eligibleClients) {
+      const slot = await this.quota.reserve(limits);
+      if (!slot.ok) {
+        await this.quota.pause(campaign.id, limits);
+        capped = true;
+        break;
+      }
+      let delivered = false;
       try {
         // Build personalized email content
         const personalization = this.buildReengagementEmailContent(campaign, client);
 
-        // Send the email, with the client's unsubscribe link (LSSI art. 21.2)
+        // Send the email, with the client's unsubscribe link (LSSI art. 21.2),
+        // under the salon's name, replies to the salon, at the shared pace.
         const unsubscribe = this.unsubscribes.link({ kind: 'c', id: client.id });
+        const withFooter = this.unsubscribes.withFooter(
+          personalization.html,
+          campaign.tenant?.name || 'el salón',
+          unsubscribe.pageUrl,
+        );
+        const sender = campaignSender(campaign, campaign.tenant);
+        await this.pacer.wait();
         const result = await this.emailService.sendEmail({
           to: client.email,
           subject: personalization.subject,
-          html: this.unsubscribes.withFooter(
-            personalization.html,
-            campaign.tenant?.name || 'el salón',
-            unsubscribe.pageUrl,
-          ),
-          replyTo: campaign.replyTo,
+          html: withPreheader(withFooter, campaign.previewText),
+          text: plainTextPart(withFooter),
+          fromName: sender.fromName || undefined,
+          replyTo: sender.replyTo,
           headers: unsubscribe.headers,
+          tags: [
+            { name: 'tenant_id', value: campaign.tenantId },
+            { name: 'campaign_id', value: campaign.id },
+          ],
         });
 
         if (result.success) {
+          delivered = true;
           // Update client's lastReengagementSent date
           await this.prisma.client.update({
             where: { id: client.id },
@@ -208,18 +213,38 @@ export class EmailCampaignsScheduler {
           });
 
           // The recipient row carries Resend's id, which is how delivery,
-          // opens, clicks and bounces find their way back to this campaign.
-          await this.prisma.emailCampaignRecipient.create({
-            data: {
-              campaignId: campaign.id,
-              clientId: client.id,
-              email: client.email,
-              name: `${client.firstName} ${client.lastName}`,
-              status: 'sent',
-              sentAt: new Date(),
-              messageId: result.id,
-            },
-          });
+          // clicks and bounces find their way back to this campaign.
+          // A client is on a campaign's list once: a later re-engagement
+          // email to her updates her row to the latest send.
+          const key = { campaignId_clientId: { campaignId: campaign.id, clientId: client.id } };
+          const row = {
+            email: client.email,
+            name: `${client.firstName} ${client.lastName}`,
+            status: 'sent',
+            sentAt: new Date(),
+            messageId: result.id,
+          };
+          const existing = await this.prisma.emailCampaignRecipient.findUnique({ where: key, select: { id: true } });
+          if (existing) {
+            await this.prisma.emailCampaignRecipient.update({
+              where: { id: existing.id },
+              data: {
+                ...row,
+                deliveredAt: null,
+                openedAt: null,
+                clickedAt: null,
+                bouncedAt: null,
+                complainedAt: null,
+                unsubscribedAt: null,
+                errorMessage: null,
+              },
+            });
+          } else {
+            await this.prisma.emailCampaignRecipient.create({
+              data: { campaignId: campaign.id, clientId: client.id, ...row },
+            });
+            newRecipients++;
+          }
 
           sent++;
         } else {
@@ -229,7 +254,17 @@ export class EmailCampaignsScheduler {
       } catch (error) {
         errors++;
         this.logger.error(`Error sending re-engagement email to client ${client.id}: ${error.message}`);
+      } finally {
+        // Not sent: the email goes back to the month (or the bono).
+        if (!delivered) await this.quota.release(slot);
       }
+    }
+    // A run that was not stopped by the cap clears an earlier pause.
+    if (!capped && campaign.capPausedAt) {
+      await this.prisma.emailCampaign.updateMany({
+        where: { id: campaign.id, capPausedAt: { not: null } },
+        data: { capPausedAt: null, lastError: null },
+      });
     }
 
     // Only what is known now: how many Resend accepted. Delivered and
@@ -239,7 +274,7 @@ export class EmailCampaignsScheduler {
       await this.prisma.emailCampaign.update({
         where: { id: campaign.id },
         data: {
-          totalRecipients: { increment: sent },
+          totalRecipients: { increment: newRecipients },
           emailsSent: { increment: sent },
         },
       });
@@ -251,35 +286,42 @@ export class EmailCampaignsScheduler {
   /**
    * Build personalized email content for re-engagement
    */
-  private buildReengagementEmailContent(campaign: any, client: any) {
-    const clientName = `${client.firstName} ${client.lastName}`;
-    const salonName = campaign.tenant?.name || 'our salon';
-
-    let subject = campaign.subject;
-    let html = campaign.content;
-
-    // Replace placeholders
-    subject = subject.replace(/{{clientName}}/g, clientName);
-    subject = subject.replace(/{{salonName}}/g, salonName);
-
-    html = html.replace(/{{clientName}}/g, clientName);
-    html = html.replace(/{{salonName}}/g, salonName);
-
-    // If there's a linked promotion, add discount code
-    if (campaign.linkedPromotion) {
-      const discountCode = campaign.linkedPromotion.code;
-      const discountValue = campaign.linkedPromotion.type === 'PERCENTAGE'
-        ? `${campaign.linkedPromotion.value}%`
-        : `€${campaign.linkedPromotion.value}`;
-
-      html = html.replace(/{{discountCode}}/g, discountCode);
-      html = html.replace(/{{discountValue}}/g, discountValue);
-
-      // Also add to subject if placeholder exists
-      subject = subject.replace(/{{discountCode}}/g, discountCode);
-      subject = subject.replace(/{{discountValue}}/g, discountValue);
+  private buildReengagementEmailContent(campaign: any, client: any, now: Date = new Date()) {
+    const values: Record<string, string> = {
+      clientName: `${client.firstName ?? ''} ${client.lastName ?? ''}`.trim(),
+      salonName: campaign.tenant?.name || 'el salón',
+    };
+    // The promotion's code only while it can still be used. A promotion
+    // deleted (the link is then empty), switched off, used up or past its
+    // end date drops the promotion block from the email: the client never
+    // gets a code the salon will not honour, nor a literal {{discountCode}}.
+    const promotion = campaign.linkedPromotion;
+    let subject = String(campaign.subject ?? '');
+    let content = String(campaign.content ?? '');
+    if (promotionUsable(promotion, now)) {
+      values.discountCode = String(promotion.code ?? '');
+      values.discountValue = promotion.type === 'PERCENTAGE'
+        ? `${Number(promotion.value)}%`
+        : euros(Number(promotion.value));
+    } else {
+      subject = subjectWithoutPromotion(subject);
+      content = withoutPromotion(content);
     }
 
-    return { subject, html };
+    // The salon wrote the template; the values come from data (a client's
+    // name from sign-up or an import), so in the HTML they are escaped. The
+    // subject is plain text. A function replacer, so "$&" and the like in a
+    // value are inserted as typed.
+    const fill = (template: string, escape: boolean) =>
+      String(template ?? '').replace(/{{(clientName|salonName|discountCode|discountValue)}}/g, (placeholder, key: string) =>
+        key in values ? (escape ? escapeHtml(values[key]) : values[key]) : placeholder,
+      );
+
+    return { subject: fill(subject, false), html: fill(content, true) };
   }
+}
+
+/** 5 -> "5,00 €", as the client reads money. */
+function euros(value: number): string {
+  return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number.isFinite(value) ? value : 0);
 }

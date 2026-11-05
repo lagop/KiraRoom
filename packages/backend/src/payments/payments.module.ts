@@ -14,9 +14,13 @@ import { MessageBundlesModule } from "../message-bundles/message-bundles.module"
 import { BillingScheduler } from "./billing.scheduler";
 import { TrialExpiryScheduler } from "./trial-expiry.scheduler";
 import { GracePeriodScheduler } from "./grace-period.scheduler";
+import { ReadOnlyNoticeService } from "./read-only-notice.service";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { ProfessionalsModule } from "../professionals/professionals.module";
 import { LoyaltyModule } from "../loyalty/loyalty.module";
+import { PlatformModule } from "../platform/platform.module";
+import { GiftCardsModule } from "../gift-cards/gift-cards.module";
+import { AuditLogService } from "../saas/audit-log.service";
 
 @Module({
   imports: [
@@ -24,9 +28,13 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     ProfessionalsModule,
     // Payments and refunds move loyalty points (PaymentsService.loyaltyAfter).
     LoyaltyModule,
+    // A refund of a gift card payment goes back to the card (PaymentsService.refundPayment).
+    GiftCardsModule,
     NotificationsModule,
     forwardRef(() => MessageBundlesModule),
     ScheduleModule.forRoot(),
+    // KiraRoom's Stripe account, set in the platform console (else .env).
+    PlatformModule,
   ],
   controllers: [PaymentsController, WebhooksController, AddOnsAdminController, TenantAddOnsController],
   providers: [
@@ -38,6 +46,9 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     BillingScheduler,
     TrialExpiryScheduler,
     GracePeriodScheduler,
+    ReadOnlyNoticeService,
+    // Wallet top-ups are audit-logged (WalletService.topUp).
+    AuditLogService,
   ],
   exports: [
     PaymentsService,
@@ -45,6 +56,8 @@ import { LoyaltyModule } from "../loyalty/loyalty.module";
     WalletService,
     SubscriptionsService,
     AddOnsService,
+    // AppModule also mounts PaymentsController, which needs it.
+    ReadOnlyNoticeService,
   ],
 })
 export class PaymentsModule {}

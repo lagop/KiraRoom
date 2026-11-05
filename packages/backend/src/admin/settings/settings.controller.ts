@@ -6,10 +6,17 @@ import {
   ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../../auth/guards/roles.guard";
-import { Roles } from "../../auth/decorators/roles.decorator";
+import { Roles, SALON_TEAM } from "../../auth/decorators/roles.decorator";
 import { UserRole } from "@prisma/client";
 import { AdminSettingsService } from "./settings.service";
 import { Request } from "express";
+import { IsBoolean } from "class-validator";
+
+/** Was an inline type: a non-boolean reached the tenant update. */
+export class ProfessionalCrossBookingDto {
+  @IsBoolean()
+  allowProfessionalCrossBooking!: boolean;
+}
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -27,7 +34,13 @@ interface AuthenticatedRequest extends Request {
 export class AdminSettingsController {
   constructor(private readonly adminSettingsService: AdminSettingsService) {}
 
+  /**
+   * Read by the whole team: a professional's booking form lists their
+   * colleagues when the salon allows it (the backend checks it again when
+   * they book). Changing it stays with owner and admin (PATCH).
+   */
   @Get("professional-cross-booking")
+  @Roles(...SALON_TEAM)
   @ApiOperation({ summary: "Get professional cross-booking setting" })
   @ApiResponse({ status: 200, description: "Setting retrieved successfully" })
   @ApiResponse({ status: 403, description: "Forbidden" })
@@ -46,7 +59,7 @@ export class AdminSettingsController {
   @ApiResponse({ status: 404, description: "Tenant not found" })
   async updateProfessionalCrossBooking(
     @Req() req: AuthenticatedRequest,
-    @Body() body: { allowProfessionalCrossBooking: boolean },
+    @Body() body: ProfessionalCrossBookingDto,
   ) {
     return this.adminSettingsService.updateProfessionalCrossBooking(
       req.user.tenantId,

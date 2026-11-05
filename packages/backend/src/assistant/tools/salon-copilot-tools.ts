@@ -1,6 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
+import { AppointmentsService } from '../../appointments/appointments.service';
+import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
+import { VISIT_ROW_ORDER, minutesUntilFree } from '../../appointments/visit-totals';
+import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
+import { normalizePhone } from '../../common/phone';
+import { STANDARD_TEMPLATES } from '../../whatsapp/whatsapp-templates';
+import { addDays, salonToday } from '../../analytics/analytics-metrics';
+import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -191,7 +199,9 @@ export const COPILOT_TOOLS = [
       "Send a WhatsApp template message to ONE client. Requires the tenant to have an " +
       "active WhatsApp connection (WABA OAuth or manual). The text must come from a " +
       "pre-approved Meta template (you cannot send free-form WhatsApp outside the 24h " +
-      "customer-service window). Audit-logged. Always returns a pending_approval card; " +
+      "customer-service window). A promotional (MARKETING) template is refused for a " +
+      "client who has not opted in to WhatsApp promotions or replied BAJA. " +
+      "Audit-logged. Always returns a pending_approval card; " +
       "the actual send happens after the user clicks Approve.",
     input_schema: {
       type: 'object' as const,
@@ -251,14 +261,13 @@ export const COPILOT_TOOLS = [
   {
     name: 'create_coupon',
     description:
-      "Issue a single-use discount code for a specific client (or for any client " +
-      "if clientId is omitted). Owner / admin / saas_owner ONLY — receptionists " +
-      "cannot mint coupons. Always requires human approval. The code is unique " +
-      "per tenant.",
+      "Issue a general single-use percentage discount code (any client may bring it; " +
+      "it cannot be tied to one client). Staff apply it at the till (Caja); it is " +
+      "not usable for online booking. Owner / admin / saas_owner ONLY — receptionists " +
+      "cannot mint coupons. Always requires human approval. The code is unique per tenant.",
     input_schema: {
       type: 'object' as const,
       properties: {
-        clientId: { type: 'string', description: 'Optional. Restrict the coupon to one client.' },
         discountPercent: { type: 'number', description: 'Discount percent (1-100).' },
         expiresInDays: { type: 'number', description: 'Days until expiry. Default 30.' },
       },
@@ -274,7 +283,7 @@ export const COPILOT_TOOLS = [
       "sends each one the wait-list notice (email, the salon's WhatsApp or SMS, " +
       "with a booking link). A client counts as notified only when a channel " +
       "delivered; the result says, per client, what went out or why nothing did. " +
-      "Manager / receptionist only.",
+      "Salon owner / admin only.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -283,7 +292,7 @@ export const COPILOT_TOOLS = [
         windowStart: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         windowEnd: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         time: { type: 'string', description: 'Optional. Start time of the freed slot, HH:MM.' },
-        topN: { type: 'number', description: 'How many clients to notify. Default 5.' },
+        topN: { type: 'number', description: 'How many clients to notify, 1 to 10. Default 5.' },
       },
       required: ['serviceId', 'windowStart', 'windowEnd'],
     },
@@ -293,6 +302,12 @@ export const COPILOT_TOOLS = [
 /* -------------------------------------------------------------------------- */
 /*  Tool implementations                                                    */
 /* -------------------------------------------------------------------------- */
+
+/** A staff account linked to no professional: nothing of anyone's, not the whole salon's. */
+const STAFF_NOT_LINKED = {
+  error: 'forbidden',
+  message: 'Tu cuenta no está vinculada a ninguna ficha de profesional. Pide a quien gestiona el salón que lo revise.',
+} as const;
 
 @Injectable()
 export class SalonCopilotToolsService {
@@ -304,6 +319,9 @@ export class SalonCopilotToolsService {
     // resolves it from WaitListModule (no @Optional: a missing provider
     // must fail the boot, not silently skip the notices).
     private readonly waitList?: WaitListService,
+    // mark_no_show takes the appointment's own status path. Same rule:
+    // resolved from AppointmentsModule, optional only for the specs.
+    private readonly appointments?: AppointmentsService,
   ) {}
 
   async execute(
@@ -357,18 +375,23 @@ export class SalonCopilotToolsService {
     const date = this.parseDateOrToday(args.date);
     const requestedProfId = args.professionalId as string | undefined;
 
-    if (ctx.role === 'staff' && requestedProfId && requestedProfId !== ctx.userId) {
-      return {
-        error: 'forbidden',
-        message: 'No puedes ver la agenda de otro profesional.',
-      };
+    if (ctx.role === 'staff') {
+      // `ctx.userId` is the User id, not the Professional id: comparing the
+      // two refused a staff member their own agenda by id. And a staff
+      // account linked to no professional must not get the whole salon's
+      // (computeAgenda without a professional is every appointment).
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
+      if (requestedProfId && requestedProfId !== own) {
+        return {
+          error: 'forbidden',
+          message: 'No puedes ver la agenda de otro profesional.',
+        };
+      }
+      return this.computeAgenda(ctx, date, own);
     }
-    const professionalId =
-      ctx.role === 'staff'
-        ? await this.findStaffProfessionalId(ctx)
-        : requestedProfId;
 
-    return this.computeAgenda(ctx, date, professionalId);
+    return this.computeAgenda(ctx, date, requestedProfId);
   }
 
   /**
@@ -403,8 +426,11 @@ export class SalonCopilotToolsService {
 
     // Ownership check for `staff`.
     if (ctx.role === 'staff') {
+      // Their professional, not their user id (which never matched).
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
       const owns = await this.prisma.appointment.findFirst({
-        where: { clientId, professionalId: ctx.userId },
+        where: { clientId, professionalId: own },
         select: { id: true },
       });
       if (!owns) {
@@ -433,7 +459,8 @@ export class SalonCopilotToolsService {
         },
       }),
       this.prisma.appointment.findMany({
-        where: { clientId },
+        // The wizard's test booking is left out of everything the copilot reads (D27).
+        where: { clientId, isTest: false },
         orderBy: { scheduledDate: 'desc' },
         take: maxVisits,
         select: {
@@ -482,6 +509,7 @@ export class SalonCopilotToolsService {
       const agg = await this.prisma.appointment.aggregate({
         where: {
           clientId,
+          isTest: false,
           status: 'completed',
           scheduledDate: { gte: since },
         },
@@ -519,7 +547,7 @@ export class SalonCopilotToolsService {
    */
   private async findStaffProfessionalId(ctx: CopilotToolContext): Promise<string | null> {
     const professional = await this.prisma.professional.findFirst({
-      where: { user: { id: ctx.userId } },
+      where: { tenantId: ctx.tenantId, user: { id: ctx.userId } },
       select: { id: true },
     });
     return professional?.id ?? null;
@@ -543,6 +571,7 @@ export class SalonCopilotToolsService {
 
     const where: Record<string, unknown> = {
       tenantId: ctx.tenantId,
+      isTest: false,
       scheduledDate: { gte: dayStart, lt: dayEnd },
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
@@ -557,15 +586,22 @@ export class SalonCopilotToolsService {
         status: true,
         client: { select: { id: true, firstName: true } },
         professional: { select: { id: true, firstName: true, lastName: true } },
-        services: { select: { service: { select: { name: true } } } },
+        duration: true,
+        service: { select: { bufferTime: true } },
+        services: {
+          select: { type: true, status: true, service: { select: { name: true, bufferTime: true } } },
+          orderBy: VISIT_ROW_ORDER as any,
+        },
       },
     });
 
-    // Compute gaps ≥ 30 min between consecutive appointments.
+    // Compute gaps ≥ 30 min between consecutive appointments. A gap starts
+    // when the professional is free again: after the appointment and the
+    // cleanup time after it ("tiempo de limpieza").
     const gaps: Array<{ start: string; end: string; minutes: number }> = [];
     for (let i = 0; i + 1 < appointments.length; i++) {
       const endA = timeToMinutes(appointments[i].scheduledTime)
-        + this.estimateAppointmentDuration(appointments[i]);
+        + minutesUntilFree(appointments[i] as any, this.estimateAppointmentDuration(appointments[i]));
       const startB = timeToMinutes(appointments[i + 1].scheduledTime);
       const gap = startB - endA;
       if (gap >= 30) {
@@ -646,13 +682,22 @@ export class SalonCopilotToolsService {
     const horizon = new Date(today);
     horizon.setDate(today.getDate() + daysAhead);
 
+    // Staff: their own professional's appointments (this compared with the
+    // User id, which no appointment carries).
+    let ownProfessionalId: string | null = null;
+    if (ctx.role === 'staff') {
+      ownProfessionalId = await this.findStaffProfessionalId(ctx);
+      if (!ownProfessionalId) return STAFF_NOT_LINKED;
+    }
+
     // Fetch every appointment in the window, grouped per day.
     const appointments = await ctx.prisma.appointment.findMany({
       where: {
         tenantId: ctx.tenantId,
+        isTest: false,
         scheduledDate: { gte: today, lt: horizon },
         status: { in: ['confirmed', 'pending'] },
-        ...(ctx.role === 'staff' ? { professionalId: ctx.userId } : {}),
+        ...(ownProfessionalId ? { professionalId: ownProfessionalId } : {}),
       },
       orderBy: [{ scheduledDate: 'asc' }, { scheduledTime: 'asc' }],
       select: {
@@ -660,7 +705,12 @@ export class SalonCopilotToolsService {
         scheduledDate: true,
         scheduledTime: true,
         professionalId: true,
-        services: { select: { service: { select: { name: true, duration: true } } } },
+        duration: true,
+        service: { select: { bufferTime: true } },
+        services: {
+          select: { type: true, status: true, service: { select: { name: true, duration: true, bufferTime: true } } },
+          orderBy: VISIT_ROW_ORDER as any,
+        },
       },
     });
 
@@ -681,9 +731,10 @@ export class SalonCopilotToolsService {
     }> = [];
     for (const [date, list] of byDay.entries()) {
       for (let i = 0; i + 1 < list.length; i++) {
+        // Free again after the appointment and its cleanup time.
         const endA =
           timeToMinutes(list[i].scheduledTime) +
-          this.estimateAppointmentDuration(list[i]);
+          minutesUntilFree(list[i] as any, this.estimateAppointmentDuration(list[i]));
         const startB = timeToMinutes(list[i + 1].scheduledTime);
         const minutes = startB - endA;
         if (minutes < minGap) continue;
@@ -813,6 +864,7 @@ export class SalonCopilotToolsService {
     const candidates = await ctx.prisma.appointment.findMany({
       where: {
         tenantId: ctx.tenantId,
+        isTest: false,
         status: 'no_show',
         scheduledDate: { gte: since },
       },
@@ -889,8 +941,8 @@ export class SalonCopilotToolsService {
     // default — for "recency" we exclude not-yet-returned clients.
     const where =
       metric === 'recency'
-        ? { tenantId: ctx.tenantId, status: 'active' as const, lastVisit: { not: null } }
-        : { tenantId: ctx.tenantId, status: 'active' as const };
+        ? { tenantId: ctx.tenantId, status: 'active' as const, isTest: false, lastVisit: { not: null } }
+        : { tenantId: ctx.tenantId, status: 'active' as const, isTest: false };
 
     const clients = await ctx.prisma.client.findMany({
       where,
@@ -1017,7 +1069,37 @@ private async sendMessage(
     return { error: 'whatsapp_not_connected', message: 'Conexión WhatsApp incompleta.' };
   }
 
-  const token = decryptAes(conn.accessTokenEnc); // best-effort: see helper below
+  // A promotion (a campaign's kr_promo_* template, or any template Meta files
+  // as MARKETING) only to a client who opted in to WhatsApp promotions and
+  // has not replied BAJA since: Meta's policy, and the client's choice. This
+  // tool used to send any template to any client. A template whose category
+  // cannot be told counts as a promotion.
+  const kind = standardTemplateKind(templateName);
+  let token: string | null = null;
+  let promotion = kind === 'marketing';
+  if (kind === 'unknown') {
+    token = decryptAes(conn.accessTokenEnc);
+    promotion = (await templateCategory(token, conn.wabaId, templateName)) !== 'UTILITY';
+  }
+  if (promotion) {
+    const accepted = await clientsWhoAcceptedWhatsAppMarketing(this.prisma, ctx.tenantId, [client.id]);
+    if (!accepted.has(client.id)) {
+      return {
+        error: 'no_whatsapp_marketing_consent',
+        message:
+          'Esta clienta no ha aceptado recibir promociones por WhatsApp (o respondió BAJA). ' +
+          'Solo puedes enviarle avisos de sus citas.',
+      };
+    }
+  }
+
+  token = token ?? decryptAes(conn.accessTokenEnc); // best-effort: see helper below
+  // The number as Meta wants it: international, digits only ("600 111 222"
+  // in the client file is "34600111222"), as the other WhatsApp senders do.
+  const tenant = await this.prisma.tenant
+    ?.findUnique?.({ where: { id: ctx.tenantId }, select: { country: true } })
+    .catch(() => null);
+  const to = normalizePhone(client.phone, tenant?.country ?? 'ES').replace(/\D/g, '');
   const vars = (args.templateVars as Record<string, string>) ?? {};
   const languageCode = (args.languageCode as string) ?? 'es';
   const components = [
@@ -1039,7 +1121,7 @@ private async sendMessage(
       },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
-        to: client.phone,
+        to,
         type: 'template',
         template: {
           name: templateName,
@@ -1068,6 +1150,14 @@ private async sendMessage(
 /**
  * Reschedule an appointment. Owner / manager / receptionist can move
  * any appointment; staff can only move their own.
+ *
+ * Through the panel's own path (AppointmentsService.rescheduleVisit): the
+ * status must allow it, every professional in the visit must be free and on
+ * shift, the visit's services move with it, and the start the reminders
+ * read, the reminders and the notice to the client follow. It used to write
+ * the date and time straight into the row: on top of another booking,
+ * outside hours, on a cancelled appointment, with the reminders still set
+ * for the old time.
  */
 private async rescheduleAppointment(
   args: Record<string, unknown>,
@@ -1109,30 +1199,38 @@ private async rescheduleAppointment(
     }
   }
 
-  const updated = await this.prisma.appointment.update({
-    where: { id: appointmentId },
-    data: {
-      scheduledDate: new Date(`${newDate}T00:00:00`),
-      scheduledTime: newTime,
-      updatedAt: new Date(),
-    },
-    select: {
-      id: true,
-      scheduledDate: true,
-      scheduledTime: true,
-      client: { select: { firstName: true } },
-    },
-  });
+  if (!this.appointments) return { error: 'unavailable' };
+  try {
+    await this.appointments.rescheduleVisit(
+      { id: ctx.userId, tenantId: ctx.tenantId, role: ctx.role },
+      appointmentId,
+      newDate,
+      newTime,
+    );
+  } catch (err) {
+    if (err instanceof HttpException) {
+      const status = err.getStatus();
+      return {
+        error: status === 409 ? 'slot_unavailable' : status === 403 || status === 404 ? 'forbidden' : 'invalid_input',
+        message: err.message,
+      };
+    }
+    throw err;
+  }
 
+  const updated = await this.prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    select: { scheduledDate: true, scheduledTime: true },
+  });
   return {
     ok: true,
-    appointmentId: updated.id,
+    appointmentId,
     from: { date: appt.scheduledDate, time: appt.scheduledTime },
     to: {
-      date: updated.scheduledDate.toISOString().slice(0, 10),
-      time: updated.scheduledTime,
+      date: updated ? updated.scheduledDate.toISOString().slice(0, 10) : newDate,
+      time: updated?.scheduledTime ?? newTime,
     },
-    clientFirstName: updated.client?.firstName ?? null,
+    clientFirstName: appt.client?.firstName ?? null,
   };
 }
 
@@ -1171,22 +1269,32 @@ private async rescheduleAppointment(
     if (appt.tenantId !== ctx.tenantId) {
       return { error: 'forbidden', message: 'La cita no pertenece a tu salón.' };
     }
-    if (appt.status === 'no_show' || appt.status === 'completed' || appt.status === 'cancelled') {
-      return { error: 'invalid_status', message: `La cita ya está en estado ${appt.status}.` };
+    // The appointments' transition table decides, here as in the panel.
+    if (!canTransition(appt.status, 'no_show')) {
+      return { error: 'invalid_status', message: transitionRefusal(appt.status, 'no_show') };
     }
     if (applyFee && (Number.isNaN(feeAmount) || feeAmount <= 0)) {
       return { error: 'invalid_feeAmount' };
     }
+    if (!this.appointments) return { error: 'unavailable' };
 
-    const updated = await this.prisma.appointment.update({
-      where: { id: appointmentId },
-      data: {
-        status: 'no_show',
-        ...(applyFee ? { discount: { noShowFee: feeAmount } as any } : {}),
-        updatedAt: new Date(),
-      },
-      select: { id: true, status: true },
-    });
+    // The same path as the panel's "No se presentó": checked against the
+    // table again at the write, followed by the no-show notice and the
+    // activity entry. It used to be a bare status write.
+    let updated: { id: string; status: string };
+    try {
+      updated = await this.appointments.changeStatus(
+        { id: ctx.userId, tenantId: ctx.tenantId, role: ctx.role },
+        appointmentId,
+        'no_show',
+        applyFee ? { data: { discount: { noShowFee: feeAmount } } } : {},
+      );
+    } catch (err) {
+      if (err instanceof HttpException) {
+        return { error: 'invalid_status', message: err.message };
+      }
+      throw err;
+    }
 
     return {
       ok: true,
@@ -1199,8 +1307,11 @@ private async rescheduleAppointment(
   }
 
   /**
-   * Sprint 15: issue a single-use discount code (Promotion) for one
-   * client (or for any client if clientId is omitted).
+   * Sprint 15: issue a general single-use discount code (Promotion): any
+   * client may bring it, and it is applied at the till. It used to take a
+   * clientId and say "para una clienta específica" in the approval, while
+   * nothing tied the code to her: now it is what it says, a general code
+   * with one use, valid from today (the salon's day) for expiresInDays days.
    * Owner / admin / saas_owner ONLY — receptionists do not mint
    * coupons (per RFC §5).
    */
@@ -1215,11 +1326,13 @@ private async rescheduleAppointment(
     if (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100) {
       return { error: 'invalid_discountPercent' };
     }
-    const clientId = (args.clientId as string | undefined) ?? null;
-    const expiresInDays = Math.max(Number(args.expiresInDays ?? 30), 1);
-    const now = new Date();
-    const end = new Date(now);
-    end.setDate(now.getDate() + expiresInDays);
+    const expiresInDays = Math.min(Math.max(Math.round(Number(args.expiresInDays ?? 30)) || 30, 1), 365);
+    // Calendar days, stored as their UTC midnight like the panel's form: the
+    // till reads them in the salon's clock (promotion-at-till.ts).
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: ctx.tenantId }, select: { timezone: true } });
+    const today = salonToday(safeTimeZone(tenant?.timezone));
+    const startDate = new Date(`${today}T00:00:00.000Z`);
+    const endDate = new Date(`${addDays(today, expiresInDays - 1)}T00:00:00.000Z`);
 
     // Generate a unique code: 6-char random uppercase. Retries up to
     // 3 times if we hit the @@unique([tenantId, code]) constraint.
@@ -1228,13 +1341,13 @@ private async rescheduleAppointment(
     const created = await this.prisma.promotion.create({
       data: {
         tenantId: ctx.tenantId,
-        name: clientId ? 'Cupón personalizado' : 'Cupón general',
+        name: 'Cupón general',
         code,
         type: 'PERCENTAGE',
         value: discountPercent as any,
         maxUses: 1,
-        startDate: now,
-        endDate: end,
+        startDate,
+        endDate,
         isActive: true,
         applicableServiceIds: [],
         applicableProductIds: [],
@@ -1247,8 +1360,11 @@ private async rescheduleAppointment(
       couponId: created.id,
       code: created.code,
       discountPercent,
-      clientId,
+      maxUses: 1,
+      /** The last day it is valid (the salon's calendar day). */
+      validUntil: created.endDate?.toISOString().slice(0, 10) ?? null,
       expiresAt: created.endDate?.toISOString() ?? null,
+      usableAt: 'till',
     };
   }
 
@@ -1271,7 +1387,7 @@ private async rescheduleAppointment(
 
   /**
    * Sprint 15: pick the top N wait-list clients that match a freed slot
-   * and notify them. Manager / receptionist only.
+   * and notify them. Salon owner / admin only.
    *
    * This used to mark them 'notified' and send nothing: the description
    * said "the actual send is via send_message", which nothing chained, so
@@ -1286,13 +1402,15 @@ private async rescheduleAppointment(
     args: Record<string, unknown>,
     ctx: CopilotToolContext,
   ) {
-    if (!['owner', 'admin', 'manager', 'receptionist', 'saas_owner'].includes(ctx.role)) {
-      return { error: 'forbidden', message: 'Solo manager / recepcionista / owner pueden usar la lista de espera.' };
+    if (!['owner', 'admin', 'saas_owner'].includes(ctx.role)) {
+      return { error: 'forbidden', message: 'Solo el propietario o un administrador del salón pueden avisar a la lista de espera.' };
     }
     const serviceId = args.serviceId as string | undefined;
     const windowStart = args.windowStart as string | undefined;
     const windowEnd = args.windowEnd as string | undefined;
-    const topN = Math.max(Number(args.topN ?? 5), 1);
+    // 1 to 10: each one is a real message.
+    const requested = Math.floor(Number(args.topN ?? 5));
+    const topN = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 10) : 5;
     const professionalId = (args.professionalId as string | undefined) ?? null;
 
     if (!serviceId) return { error: 'missing_serviceId' };
@@ -1311,7 +1429,9 @@ private async rescheduleAppointment(
       where: {
         tenantId: ctx.tenantId,
         serviceId,
-        status: 'waiting',
+        // Told about an earlier slot is still waiting; blocked or removed clients are not told.
+        status: { in: ['waiting', 'notified'] },
+        client: { status: 'active' },
         ...(professionalId
           ? { OR: [{ professionalId: null }, { professionalId }] }
           : {}),
@@ -1468,4 +1588,32 @@ function decryptAes(cipher: string): string {
  */
 async function metaFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
+}
+
+/**
+ * What a template is, from its name alone: KiraRoom's standard appointment
+ * notices are UTILITY; a WhatsApp campaign's (kr_promo_*) are MARKETING.
+ * Anything else has to be asked of Meta (templateCategory).
+ */
+export function standardTemplateKind(name: string): 'utility' | 'marketing' | 'unknown' {
+  if (name.startsWith('kr_promo_')) return 'marketing';
+  if (STANDARD_TEMPLATES.some((t) => t.name === name && t.category === 'UTILITY')) return 'utility';
+  return 'unknown';
+}
+
+/** Meta's category of a template on the salon's account; null when it cannot be told. */
+async function templateCategory(token: string, wabaId: string | null | undefined, name: string): Promise<string | null> {
+  if (!wabaId) return null;
+  try {
+    const resp = await metaFetch(
+      `https://graph.facebook.com/v20.0/${wabaId}/message_templates?fields=name,category&name=${encodeURIComponent(name)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!resp.ok) return null;
+    const body: any = await resp.json();
+    const found = (body?.data ?? []).find((t: any) => t?.name === name);
+    return typeof found?.category === 'string' ? found.category.toUpperCase() : null;
+  } catch {
+    return null;
+  }
 }

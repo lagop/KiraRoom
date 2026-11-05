@@ -641,8 +641,13 @@ export class AccountingService {
     return !last || now.getTime() - last.getTime() >= delay;
   }
 
+  /**
+   * The Holded log for the settings page, with the number of each invoice
+   * (series + number): an id told the salon nothing. Connect / disconnect
+   * rows have no invoice ("connection") and no number.
+   */
   async recentLogs(tenantId: string, limit = 100) {
-    return this.prisma.accountingSyncLog.findMany({
+    const logs = await this.prisma.accountingSyncLog.findMany({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 200),
@@ -657,6 +662,15 @@ export class AccountingService {
         createdAt: true,
       },
     });
+    const invoiceIds = [...new Set(logs.map((l) => l.invoiceId).filter((id) => id && id !== "connection"))];
+    const invoices = invoiceIds.length
+      ? await this.prisma.invoice.findMany({
+          where: { tenantId, id: { in: invoiceIds } },
+          select: { id: true, series: true, number: true },
+        })
+      : [];
+    const numberOf = new Map(invoices.map((i) => [i.id, `${i.series}${i.number}`]));
+    return logs.map((l) => ({ ...l, invoiceNumber: numberOf.get(l.invoiceId) ?? null }));
   }
 
   private async writeLog(input: {

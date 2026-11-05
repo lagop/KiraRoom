@@ -6,7 +6,7 @@
  *
  * Required env:
  *   - RUN_LLM_E2E_TESTS=1
- *   - MINIMAX_API_KEY       (a fresh key, NOT the one shared in chat)
+ *   - ANTHROPIC_API_KEY       (a fresh key, NOT the one shared in chat)
  *   - DATABASE_URL          (Postgres reachable from this shell)
  *   - E2E_TENANT_ID         (optional; defaults to "e2e-tenant")
  *
@@ -52,7 +52,7 @@ async function main() {
   if (SKIP_E2E) {
     console.log(
       yellow(
-        'L-1 scenarios skipped. Set RUN_LLM_E2E_TESTS=1 with a valid MINIMAX_API_KEY to run them.',
+        'L-1 scenarios skipped. Set RUN_LLM_E2E_TESTS=1 with a valid ANTHROPIC_API_KEY to run them.',
       ),
     );
     process.exit(0);
@@ -60,7 +60,7 @@ async function main() {
 
   const only = pickScenarios();
   console.log(
-    bold(`\nRunning ${only.length} L-1 scenario${only.length === 1 ? '' : 's'} against MiniMax-M3\n`),
+    bold(`\nRunning ${only.length} L-1 scenario${only.length === 1 ? '' : 's'} against Claude\n`),
   );
 
   const { orchestrator, prisma, salonId, catalogIndex } = await buildHarness();

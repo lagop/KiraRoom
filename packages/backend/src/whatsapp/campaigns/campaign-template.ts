@@ -105,3 +105,24 @@ export function withinSendingHours(now: Date, timeZone: string): boolean {
   }
   return hour >= SEND_FROM_HOUR && hour < SEND_UNTIL_HOUR;
 }
+
+/**
+ * Campaigns also rest on Sundays where the salon is (the owner's rule: no
+ * promotions on a client's day off). Messages left pending on a Sunday wait
+ * for Monday at 9:00. Only campaigns: review requests, appointment notices
+ * and rebooking reminders keep their own hours.
+ */
+export function isSundayIn(now: Date, timeZone: string): boolean {
+  let day: string;
+  try {
+    day = new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone }).format(now);
+  } catch {
+    day = new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "Europe/Madrid" }).format(now);
+  }
+  return day === "Sun";
+}
+
+/** Whether a campaign may send now: 9:00 to 21:00, Monday to Saturday, salon's clock. */
+export function withinCampaignWindow(now: Date, timeZone: string): boolean {
+  return withinSendingHours(now, timeZone) && !isSundayIn(now, timeZone);
+}

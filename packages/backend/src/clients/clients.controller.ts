@@ -1,21 +1,33 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Req, ForbiddenException, HttpCode, HttpStatus } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, NotFoundException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
 } from "@nestjs/swagger";
-import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
-import { ClientsService, ClientFilters } from "./clients.service";
-import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
+import { ClientsService, ClientFilters, ClientScope } from "./clients.service";
+import { CreateClientDto, UpdateClientDto } from "./dto";
+import { parseClientListQuery } from "./client-search";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { User } from "@prisma/client";
 import { ProfessionalsService } from "../professionals/professionals.service";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 
+/**
+ * Who reaches which client here:
+ *
+ * - owner / admin: every client of their salon.
+ * - staff: only clients with at least one appointment (any status) with
+ *   their own professional record. The list shows only those; GET and PUT
+ *   on any other id answer 404. A staff user with no professional record
+ *   reaches no client at all (empty list, 404). Staff may edit those
+ *   clients' details but not their email or status (403), and every
+ *   client they create starts active.
+ */
 @ApiTags("clients")
 @Controller("clients")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,32 +38,64 @@ export class ClientsController {
     private readonly professionalsService: ProfessionalsService,
   ) {}
 
+  /**
+   * {} for owner/admin, the professional for staff, null for a staff user
+   * with no professional record (fail closed: no client).
+   */
+  private async scopeFor(user: any): Promise<ClientScope | null> {
+    if (user.role !== UserRole.staff) return {};
+    const professional = await this.professionalsService.getProfessionalByUserId(
+      user.id,
+      user.tenantId,
+    );
+    return professional ? { professionalId: professional.id } : null;
+  }
+
+  private async scopeOrNotFound(user: any): Promise<ClientScope> {
+    const scope = await this.scopeFor(user);
+    if (!scope) throw new NotFoundException("Cliente no encontrado");
+    return scope;
+  }
+
   @Post()
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Create a new client" })
   @ApiResponse({ status: 201, description: "Client created successfully" })
+  @ApiResponse({ status: 409, description: "The email is already used by another client of the salon" })
   async create(@CurrentUser() user: any, @Body() createClientDto: CreateClientDto) {
     // The tenant comes from the caller's token, never from the body: the
     // dashboard fell back to 'default-tenant' when localStorage had no user.
-    return this.clientsService.create({ ...createClientDto, tenantId: user.tenantId });
+    // Staff do not choose the status: a new client starts active.
+    const dto =
+      user.role === UserRole.staff ? { ...createClientDto, status: undefined } : createClientDto;
+    return this.clientsService.create(user.tenantId, dto);
   }
 
   @Get()
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Get all clients with optional filters" })
-  async findAll(@Req() req: any, @Query("tenantId") tenantId?: string) {
-    // Para Staff, filtrar solo clientes con los que tienen citas
-    let professionalId = null;
-    if (req.user.role === "staff") {
-      const professional =
-        await this.professionalsService.getProfessionalByUserId(
-          req.user.id,
-          req.user.tenantId,
-        );
-      professionalId = professional?.id;
-    }
-
-    return this.clientsService.findAll(tenantId, professionalId);
+  @ApiOperation({
+    summary: "The salon's clients (staff: only their own)",
+    description:
+      "Without `page`: every client, as an array. With `page`: { data, total, page, pageSize, totalPages }, " +
+      "searched by `q` (name or email, accents ignored; phone by its digits), filtered by `status`, " +
+      "sorted by `sort` (firstName, lastName, email, status, createdAt) and `dir` (asc, desc).",
+  })
+  // A `tenantId` query parameter is ignored: the tenant is the caller's.
+  async findAll(
+    @CurrentUser() user: any,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("sort") sort?: string,
+    @Query("dir") dir?: string,
+  ) {
+    // Without `page` the whole list, as every other caller reads it.
+    const query = page !== undefined ? parseClientListQuery({ page, pageSize, q, status, sort, dir }) : null;
+    const scope = await this.scopeFor(user);
+    if (!query) return scope ? this.clientsService.findAll(user.tenantId, scope) : [];
+    if (!scope) return { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
+    return this.clientsService.findPage(user.tenantId, scope, query);
   }
 
   @Get("filter")
@@ -86,59 +130,37 @@ export class ClientsController {
     return this.clientsService.findAllWithFilters(user.tenantId, filters);
   }
 
-  // Before ":id", which would capture it (see route-order.spec).
-  @Get("me")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "A client reads their own profile" })
-  async getMe(@CurrentUser() user: any) {
-    return this.clientsService.getSelf(user.tenantId, user.id);
-  }
-
   @Get(":id")
   // Was @Public(): an unauthenticated GET that returned any client by
-  // UUID, taxId included, with no tenant check. No frontend caller used
-  // it. Now authenticated, tenant-scoped, and a client may only read
-  // their own record.
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
-  @ApiOperation({ summary: "Get client by ID" })
+  // UUID, taxId included, with no tenant check. Now authenticated and
+  // tenant-scoped; staff only reach their own clients (see the class comment).
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "A client's file: details and visits" })
   @ApiResponse({ status: 200, description: "Client found" })
-  @ApiResponse({ status: 404, description: "Client not found" })
+  @ApiResponse({ status: 404, description: "Client not found (or not one of the staff member's clients)" })
   async findOne(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
-    if (user.role === UserRole.client && user.id !== id) {
-      throw new ForbiddenException("A client may only read their own record");
-    }
-    return this.clientsService.findOne(user.tenantId, id);
-  }
-
-  @Patch("me")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "A client updates their own profile" })
-  async updateMe(@CurrentUser() user: any, @Body() dto: UpdateMyProfileDto) {
-    return this.clientsService.updateSelf(user.tenantId, user.id, dto);
-  }
-
-  @Post("me/password")
-  @Roles(UserRole.client)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: "A client changes their own password" })
-  async changeMyPassword(@CurrentUser() user: any, @Body() dto: ChangeMyPasswordDto) {
-    await this.clientsService.changeOwnPassword(user.tenantId, user.id, dto);
+    const scope = await this.scopeOrNotFound(user);
+    return this.clientsService.findOne(user.tenantId, id, scope);
   }
 
   @Put(":id")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Update a client" })
+  @ApiOperation({ summary: "Update a client (staff: their own clients, not email or status)" })
   @ApiResponse({ status: 200, description: "Client updated successfully" })
-  @ApiResponse({ status: 404, description: "Client not found" })
+  @ApiResponse({ status: 403, description: "Staff changing the email or the status" })
+  @ApiResponse({ status: 404, description: "Client not found (or not one of the staff member's clients)" })
+  @ApiResponse({ status: 409, description: "The email is already used by another client of the salon" })
   async update(
     @CurrentUser() user: any,
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateClientDto: UpdateClientDto,
   ) {
-    return this.clientsService.update(user.tenantId, id, updateClientDto);
+    const scope = await this.scopeOrNotFound(user);
+    return this.clientsService.update(user.tenantId, id, updateClientDto, scope);
   }
 
   @Delete(":id")
+  @AllowWhenReadOnly()
   @Roles(UserRole.owner, UserRole.admin)
   @ApiOperation({ summary: "Delete a client" })
   @ApiResponse({ status: 200, description: "Client deleted successfully" })

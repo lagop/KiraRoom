@@ -11,14 +11,24 @@ declare module "qrcode" {
     text: string,
     opts?: { errorCorrectionLevel?: "L" | "M" | "Q" | "H"; width?: number }
   ): Promise<string>;
+  /** The symbol itself: `modules.data[row * size + col]` is 1 for a dark module. */
+  export function create(
+    text: string,
+    opts?: { errorCorrectionLevel?: "L" | "M" | "Q" | "H" }
+  ): { modules: { size: number; data: Uint8Array }; version: number };
 }
 
 declare module "ics" {
   export interface EventAttributes {
     uid?: string;
     title: string;
-    start: [number, number, number, number, number] | Date | number[];
-    end?: [number, number, number, number, number] | Date | number[];
+    /** A number is milliseconds since the epoch (an instant). */
+    start: [number, number, number, number, number] | Date | number[] | number;
+    end?: [number, number, number, number, number] | Date | number[] | number;
+    startInputType?: "local" | "utc";
+    startOutputType?: "local" | "utc";
+    endInputType?: "local" | "utc";
+    endOutputType?: "local" | "utc";
     description?: string;
     location?: string;
     url?: string;

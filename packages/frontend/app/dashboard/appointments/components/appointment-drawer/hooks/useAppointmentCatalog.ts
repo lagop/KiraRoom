@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import apiClient from "../../../../../../lib/api";
+import { DEFAULT_SALON_TIMEZONE } from "@kira/shared";
 import { getCurrentUser } from "../../../../../../lib/utils";
+import { staffOwnCatalog } from "../../appointment-drawer.utils";
+import { authStorage } from "@/lib/auth-storage";
 
 /**
  * Loads the appointment-creation catalog (services, professionals,
@@ -17,6 +20,12 @@ import { getCurrentUser } from "../../../../../../lib/utils";
  * The hook exposes setters for everything the drawer still mutates
  * (e.g. `setTimezone` is irrelevant to the catalog but used by the
  * date-picker downstream).
+ *
+ * A professional (role `staff`) gets their own professional and the
+ * services they perform, and `currentUser` carries that professional's id
+ * and name: the token has neither. When the salon lets professionals book
+ * for colleagues (read by every role; only managers change it), they get
+ * the whole team and every service. See staffOwnCatalog.
  */
 
 export interface CatalogService {
@@ -33,6 +42,8 @@ export interface CatalogProfessional {
   lastName: string;
   email: string;
   phone?: string;
+  /** The professional's panel login; present in the salon's own (staff) view. */
+  userId?: string | null;
   specialties: string[];
   profileImage?: string;
   services?: {
@@ -53,6 +64,7 @@ export interface CatalogClient {
 }
 
 export interface CatalogUser {
+  id?: string;
   role?: string;
   professionalId?: string;
   firstName?: string;
@@ -88,13 +100,15 @@ export interface UseAppointmentCatalogResult {
 export function useAppointmentCatalog(
   open: boolean,
 ): UseAppointmentCatalogResult {
-  const [services, setServices] = useState<CatalogService[]>([]);
-  const [professionals, setProfessionals] = useState<CatalogProfessional[]>([]);
+  const [allServices, setServices] = useState<CatalogService[]>([]);
+  const [allProfessionals, setProfessionals] = useState<CatalogProfessional[]>([]);
   const [clients, setClients] = useState<CatalogClient[]>([]);
-  const [currentUser, setCurrentUser] = useState<CatalogUser | null>(null);
+  const [user, setCurrentUser] = useState<CatalogUser | null>(null);
   const [allowProfessionalCrossBooking, setAllowProfessionalCrossBooking] =
     useState<boolean>(false);
-  const [timezone, setTimezone] = useState<string>("UTC");
+  // Until the salon's own zone arrives: the zone a salon starts on, not
+  // UTC, which put every time an hour or two off.
+  const [timezone, setTimezone] = useState<string>(DEFAULT_SALON_TIMEZONE);
 
   // Mount-time: load user + tenant settings
   useEffect(() => {
@@ -103,24 +117,19 @@ export function useAppointmentCatalog(
         const user = getCurrentUser();
         setCurrentUser(user);
 
-        // Load professional cross-booking setting (only for owners/admins)
-        if (user?.role === "owner" || user?.role === "admin") {
-          try {
-            const settings =
-              await apiClient.getProfessionalCrossBookingSetting();
-            setAllowProfessionalCrossBooking(
-              settings.allowProfessionalCrossBooking,
-            );
-          } catch (error) {
-            console.error(
-              "Error loading professional cross-booking settings:",
-              error,
-            );
-            // Default to false if API fails
-            setAllowProfessionalCrossBooking(false);
-          }
-        } else {
-          // Staff users always have cross-booking disabled by default
+        // The salon's "professionals may book for colleagues": every role
+        // reads it (staff, to be offered their colleagues). Off if it fails.
+        try {
+          const settings =
+            await apiClient.getProfessionalCrossBookingSetting();
+          setAllowProfessionalCrossBooking(
+            settings.allowProfessionalCrossBooking === true,
+          );
+        } catch (error) {
+          console.error(
+            "Error loading professional cross-booking settings:",
+            error,
+          );
           setAllowProfessionalCrossBooking(false);
         }
       } catch (error) {
@@ -135,38 +144,16 @@ export function useAppointmentCatalog(
   const fetchServices = async () => {
     try {
       const data = (await apiClient.getServices()) as any;
-      let servicesData = data.data || data;
+      const servicesData = data.data || data;
 
-      // Filter services based on user role and tenant settings
-      if (currentUser?.role === "staff" && currentUser.professionalId) {
-        // For staff users, check tenant settings
-        if (!allowProfessionalCrossBooking) {
-          // If cross-booking is NOT allowed, show only their assigned services
-          try {
-            const professionalData = await apiClient.getProfessional(
-              currentUser.professionalId,
-            );
-            const assignedServiceIds =
-              professionalData.services?.map(
-                (ps: any) => ps.serviceId,
-              ) || [];
-
-            // Filter services to only include those assigned to this professional
-            servicesData = servicesData.filter((service: any) =>
-              assignedServiceIds.includes(service.id),
-            );
-          } catch (error) {
-            console.error("Error fetching professional services:", error);
-            // If we can't fetch professional services, show no services
-            servicesData = [];
-          }
-        }
-        // If cross-booking IS allowed, staff users see all services (no filtering)
-      }
-      // Owners and admins always see all services regardless of settings
-
+      // A professional's own services are picked out below, from their
+      // professional record (staffOwnCatalog). This used to fetch it from
+      // /admin/professionals, which refuses staff: the list came out empty.
+      // A deactivated service is off the menu: not offered for a new
+      // booking or to add to one (the server refuses it for a new booking).
+      // An appointment that already has it keeps showing it (ServiceCard).
       setServices(
-        servicesData.map((s: any) => ({
+        servicesData.filter((s: any) => s.isActive !== false).map((s: any) => ({
           id: s.id,
           name: s.name,
           price: s.price,
@@ -184,7 +171,7 @@ export function useAppointmentCatalog(
       let tenantId = "default-tenant";
       const token =
         typeof window !== "undefined"
-          ? localStorage.getItem("kira_auth_token")
+          ? authStorage().getItem("kira_auth_token")
           : null;
       if (token) {
         try {
@@ -219,19 +206,39 @@ export function useAppointmentCatalog(
   const fetchTenantTimezone = async () => {
     try {
       const tenant = await apiClient.getTenant();
-      setTimezone(tenant.timezone || "UTC");
+      setTimezone(tenant.timezone || DEFAULT_SALON_TIMEZONE);
     } catch (error) {
       console.error("Error fetching tenant timezone:", error);
-      setTimezone("UTC");
+      setTimezone(DEFAULT_SALON_TIMEZONE);
     }
   };
 
   // Re-fetch services when user/setting/drawer-open changes (verbatim from line 852-856)
   useEffect(() => {
-    if (currentUser && open) {
+    if (user && open) {
       fetchServices();
     }
-  }, [currentUser, open, allowProfessionalCrossBooking]);
+  }, [user, open, allowProfessionalCrossBooking]);
+
+  // A professional books on their own agenda. Not linked to a professional
+  // of the salon: nothing to book with (the server refuses it too).
+  const { currentUser, professionals, services } = useMemo(() => {
+    if (user?.role !== "staff") {
+      return { currentUser: user, professionals: allProfessionals, services: allServices };
+    }
+    const own = staffOwnCatalog(user.id, allProfessionals, allServices, allowProfessionalCrossBooking);
+    if (!own) return { currentUser: user, professionals: [], services: [] };
+    return {
+      currentUser: {
+        ...user,
+        professionalId: own.me.id,
+        firstName: own.me.firstName,
+        lastName: own.me.lastName,
+      },
+      professionals: own.professionals,
+      services: own.services,
+    };
+  }, [user, allProfessionals, allServices, allowProfessionalCrossBooking]);
 
   return {
     services,

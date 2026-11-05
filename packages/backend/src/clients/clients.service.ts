@@ -2,13 +2,53 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  ConflictException,
+  ForbiddenException,
 } from "@nestjs/common";
-import * as bcrypt from "bcryptjs";
-import { hashPassword } from "../saas/saas.helpers";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { CreateClientDto, UpdateClientDto, UpdateMyProfileDto, ChangeMyPasswordDto } from "./dto";
-import { validateNif } from "../common/validation/nif.validator";
+import { CreateClientDto, UpdateClientDto } from "./dto";
+import { deleteClientKeepingHistory } from "../common/prisma/history-deletes";
+import {
+  CLIENT_APPOINTMENTS_LIMIT,
+  CLIENT_APPOINTMENTS_SELECT,
+  CLIENT_DETAIL_SELECT,
+  CLIENT_LIST_SELECT,
+} from "./client-select";
+import {
+  buildClientCreateData,
+  buildClientUpdateData,
+  rethrowClientWriteError,
+} from "./client-write";
+import {
+  birthDateRange,
+  clientListOrderBy,
+  clientSearchSql,
+  type ClientListQuery,
+  type ClientPage,
+} from "./client-search";
+import { countryForPhone, normalizeClientEmail } from "./client-contact";
+import { clientAsStaffSees, clientReachWhere } from "./client-reach";
+
+/**
+ * Whose clients a caller may reach. Owner/admin: {} (the whole salon).
+ * Staff: their professional id (see ClientsController.scopeFor).
+ */
+export interface ClientScope {
+  professionalId?: string;
+}
+
+/**
+ * The clients a scope reaches: staff only those they have served or will
+ * serve (client-reach.ts: not through a cancelled appointment). Shared with
+ * the copilot's briefing, so "clientas en riesgo" shows a professional the
+ * same clients Clientas does.
+ */
+export function clientScopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
+  return scope.professionalId ? clientReachWhere({ professionalId: scope.professionalId }) : {};
+}
+
+export const STAFF_MAY_NOT_CHANGE =
+  "Solo el propietario o un administrador pueden cambiar el email o el estado de un cliente";
 
 export interface ClientFilters {
   gender?: "male" | "female" | "other";
@@ -24,59 +64,93 @@ export interface ClientFilters {
   hasEmail?: boolean;
 }
 
+/**
+ * Clients with any of these tags. `tags` is a JSON array, and `hasSome`
+ * (a filter of Postgres array columns) made Prisma refuse the query: the
+ * campaign screen's tag filter answered 500. A JSON array is matched with
+ * `array_contains` (Postgres `@>`), one tag at a time, OR'ed. Blank and
+ * repeated tags are dropped; null when none is left.
+ */
+export function tagsFilter(tags?: string[] | null): Prisma.ClientWhereInput | null {
+  const wanted = [...new Set((tags ?? []).map((t) => String(t).trim()).filter(Boolean))];
+  if (wanted.length === 0) return null;
+  return { OR: wanted.map((tag) => ({ tags: { array_contains: [tag] } })) };
+}
+
 @Injectable()
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createClientDto: CreateClientDto) {
-    // Validate NIF format — AEAT / hacienda rejects malformed identifiers.
-    if (createClientDto.taxId) {
-      const v = validateNif(createClientDto.taxId);
-      if (!v.valid) {
-        throw new BadRequestException(
-          `taxId invalid (${v.error}): expected NIF/CIF/NIE in canonical form`,
-        );
-      }
-      createClientDto.taxId = v.normalized ?? createClientDto.taxId;
+  async create(tenantId: string, dto: CreateClientDto) {
+    const country = await countryForPhone(this.prisma, tenantId, dto.phone);
+    const data = buildClientCreateData(tenantId, dto, country);
+    try {
+      return await this.prisma.client.create({ data, select: CLIENT_DETAIL_SELECT });
+    } catch (error) {
+      rethrowClientWriteError(error);
     }
-    return this.prisma.client.create({
-      data: {
-        tenantId: createClientDto.tenantId,
-        firstName: createClientDto.firstName,
-        lastName: createClientDto.lastName,
-        email: createClientDto.email,
-        phone: createClientDto.phone,
-        dateOfBirth: createClientDto.dateOfBirth
-          ? new Date(createClientDto.dateOfBirth)
-          : null,
-        gender: createClientDto.gender,
-        profileImage: createClientDto.profileImage,
-        taxId: createClientDto.taxId,
-        taxIdType: createClientDto.taxIdType,
-        status: "active",
-      },
-    });
   }
 
-  async findAll(tenantId?: string, professionalId?: string) {
-    const where: any = {};
-
-    if (tenantId) {
-      where.tenantId = tenantId;
-    }
-
-    // Si se especifica professionalId (para Staff), filtrar solo clientes que tienen citas con ese profesional
-    if (professionalId) {
-      where.appointments = {
-        some: {
-          professionalId: professionalId,
-        },
-      };
-    }
-
-    return this.prisma.client.findMany({
-      where,
+  /**
+   * The panel's client list. `scope.professionalId` (staff) narrows it to
+   * the clients with at least one appointment with that professional.
+   */
+  async findAll(tenantId: string, scope: ClientScope = {}) {
+    const rows = await this.prisma.client.findMany({
+      where: { tenantId, ...this.scopeWhere(scope) },
+      select: CLIENT_LIST_SELECT,
     });
+    return this.asSeen(rows, scope);
+  }
+
+  /**
+   * One page of the panel's client list (see client-search.ts): search by
+   * name, email or phone, filter by status, sort. Staff get only their own
+   * clients, as in findAll.
+   */
+  async findPage(
+    tenantId: string,
+    scope: ClientScope,
+    query: ClientListQuery,
+  ): Promise<ClientPage<Prisma.ClientGetPayload<{ select: typeof CLIENT_LIST_SELECT }>>> {
+    // The wizard's test client is not counted among hers (D27); she still
+    // opens from the test booking until the cleanup job deletes both.
+    const where: Prisma.ClientWhereInput = { tenantId, isTest: false, ...this.scopeWhere(scope) };
+    if (query.status) where.status = query.status;
+    const empty = { data: [], total: 0, page: query.page, pageSize: query.pageSize, totalPages: 0 };
+    if (query.search || query.phoneDigits.length > 0) {
+      const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(clientSearchSql(tenantId, query));
+      if (rows.length === 0) return empty;
+      where.id = { in: rows.map((r) => r.id) };
+    }
+    const [data, total] = await Promise.all([
+      this.prisma.client.findMany({
+        where,
+        select: CLIENT_LIST_SELECT,
+        orderBy: clientListOrderBy(query),
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.client.count({ where }),
+    ]);
+    return {
+      data: this.asSeen(data, scope),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalPages: Math.ceil(total / query.pageSize),
+    };
+  }
+
+  /** Rows as the caller sees them: staff through clientAsStaffSees (client-reach.ts). */
+  private asSeen<T extends Record<string, any>>(rows: T[], scope: ClientScope): T[] {
+    const own = scope.professionalId;
+    return own ? rows.map((row) => clientAsStaffSees(row, own)) : rows;
+  }
+
+  /** Staff see only the clients they have served or will serve (client-reach.ts: not through a cancelled appointment). */
+  private scopeWhere(scope: ClientScope): Prisma.ClientWhereInput {
+    return clientScopeWhere(scope);
   }
 
   async findAllWithFilters(tenantId: string, filters: ClientFilters) {
@@ -115,32 +189,13 @@ export class ClientsService {
       where.gender = filters.gender;
     }
 
-    // Filter by age range (calculate from dateOfBirth)
-    if (filters.minAge !== undefined || filters.maxAge !== undefined) {
-      if (filters.minAge !== undefined) {
-        const maxBirthDate = new Date(
-          now.getFullYear() - filters.minAge,
-          now.getMonth(),
-          now.getDate(),
-        );
-        where.dateOfBirth = { ...where.dateOfBirth, lte: maxBirthDate };
-      }
-      if (filters.maxAge !== undefined) {
-        const minBirthDate = new Date(
-          now.getFullYear() - filters.maxAge - 1,
-          now.getMonth(),
-          now.getDate(),
-        );
-        where.dateOfBirth = { ...where.dateOfBirth, gte: minBirthDate };
-      }
-    }
+    // Filter by age range (from dateOfBirth; see birthDateRange).
+    const born = birthDateRange(now, filters.minAge, filters.maxAge);
+    if (born) where.dateOfBirth = born;
 
-    // Filter by tags
-    if (filters.tags && filters.tags.length > 0) {
-      where.tags = {
-        hasSome: filters.tags,
-      };
-    }
+    // Filter by tags: any of them.
+    const tagsWhere = tagsFilter(filters.tags);
+    if (tagsWhere) where.AND = [...(where.AND ?? []), tagsWhere];
 
     // Filter by loyalty tier
     if (filters.loyaltyTier) {
@@ -178,184 +233,87 @@ export class ClientsService {
 
     return this.prisma.client.findMany({
       where,
-    });
-  }
-
-  async findOne(tenantId: string, id: string) {
-    const client = await this.prisma.client.findUnique({
-      where: { id, tenantId },
-    });
-
-    if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
-    }
-
-    return client;
-  }
-
-  async update(tenantId: string, id: string, updateClientDto: UpdateClientDto) {
-    const client = await this.prisma.client.findUnique({
-      where: { id, tenantId },
-    });
-
-    if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
-    }
-
-    // Validate NIF format when supplied.
-    if (updateClientDto.taxId) {
-      const v = validateNif(updateClientDto.taxId);
-      if (!v.valid) {
-        throw new BadRequestException(
-          `taxId invalid (${v.error}): expected NIF/CIF/NIE in canonical form`,
-        );
-      }
-      updateClientDto.taxId = v.normalized ?? updateClientDto.taxId;
-    }
-
-    return this.prisma.client.update({
-      where: { id, tenantId },
-      data: {
-        firstName: updateClientDto.firstName,
-        lastName: updateClientDto.lastName,
-        email: updateClientDto.email,
-        phone: updateClientDto.phone,
-        preferredLanguage: updateClientDto.preferredLanguage,
-        preferredServices: updateClientDto.preferredServices,
-        preferredProfessionals: updateClientDto.preferredProfessionals,
-        preferredTimes: updateClientDto.preferredTimes,
-        communicationPreferences: updateClientDto.communicationPreferences,
-        status: updateClientDto.status,
-        taxId: updateClientDto.taxId,
-        taxIdType: updateClientDto.taxIdType,
-      },
-    });
-  }
-
-  async remove(tenantId: string, id: string) {
-    const client = await this.prisma.client.findUnique({
-      where: { id, tenantId },
-    });
-
-    if (!client) {
-      throw new NotFoundException(`Client with ID ${id} not found`);
-    }
-
-    return this.prisma.client.delete({
-      where: { id, tenantId },
+      select: CLIENT_LIST_SELECT,
     });
   }
 
   /**
-   * What the account page shows a client about themselves. It read
-   * /admin/clients/:id, which is owner/admin only, so it always failed and
-   * the page showed whatever the browser had kept since sign-in.
+   * One client's file: her details (health data included), and her visits
+   * with what each one cost. Staff (`scope.professionalId`) only reach
+   * clients they have an appointment with (not cancelled); any other id is
+   * a 404, as if it did not exist. They see their own visits whole and the
+   * other professionals' without price, payment or notes, and no spend
+   * totals (clientAsStaffSees).
    */
-  async getSelf(tenantId: string, clientId: string) {
+  async findOne(tenantId: string, id: string, scope: ClientScope = {}) {
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId, tenantId },
+      where: { id, tenantId, ...this.scopeWhere(scope) },
       select: {
-        id: true,
-        tenantId: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
-        preferredLanguage: true,
+        ...CLIENT_DETAIL_SELECT,
+        appointments: {
+          select: CLIENT_APPOINTMENTS_SELECT,
+          orderBy: [{ scheduledDate: "desc" }, { scheduledTime: "desc" }],
+          take: CLIENT_APPOINTMENTS_LIMIT,
+        },
       },
     });
-    if (!client) throw new NotFoundException("Cliente no encontrado");
-    return client;
+
+    if (!client) {
+      throw new NotFoundException("Cliente no encontrado");
+    }
+
+    return scope.professionalId ? clientAsStaffSees(client, scope.professionalId) : client;
   }
 
   /**
-   * A client editing their own profile from the salon site. The account
-   * page used to PATCH /clients/:id, a route that does not exist and whose
-   * PUT twin excludes the client role, so every save failed.
+   * Staff (`scope.professionalId`) may edit their own clients (see
+   * findOne) but not change their email (it is how the salon reaches her) or her
+   * status (blocking is the manager's call): 403 when either differs from
+   * what is stored. Sending the stored value back is fine.
    */
-  async updateSelf(tenantId: string, clientId: string, dto: UpdateMyProfileDto) {
-    const { currentPassword, ...fields } = dto;
-    const data: Record<string, string | null> = {};
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === undefined) continue;
-      data[key] = typeof value === "string" ? value.trim() : value;
-    }
-    // An emptied phone is "no phone", not an empty string the SMS sender
-    // would try.
-    if (data.phone === "") data.phone = null;
-    if (data.firstName === "") {
-      throw new BadRequestException("El nombre no puede quedar vacío");
-    }
-
-    if (data.email !== undefined) {
-      const current = await this.prisma.client.findFirst({
-        where: { id: clientId, tenantId },
-        select: { email: true, passwordHash: true },
-      });
-      if (!current) throw new NotFoundException("Cliente no encontrado");
-      if (data.email === current.email) {
-        delete data.email;
-      } else {
-        // Changing the sign-in address takes the password, like changing
-        // the password does (see changeOwnPassword).
-        if (!current.passwordHash || !currentPassword) {
-          throw new BadRequestException(
-            "Para cambiar el email escribe tu contraseña actual",
-          );
-        }
-        if (!(await bcrypt.compare(currentPassword, current.passwordHash))) {
-          throw new BadRequestException("La contraseña actual no es correcta");
-        }
-      }
-    }
-
-    try {
-      return await this.prisma.client.update({
-        where: { id: clientId, tenantId },
-        data,
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
-          preferredLanguage: true,
-        },
-      });
-    } catch (error: any) {
-      if (error?.code === "P2002") {
-        // @@unique([tenantId, email])
-        throw new ConflictException("Ese email ya está en uso en este salón");
-      }
-      if (error?.code === "P2025") {
-        throw new NotFoundException("Cliente no encontrado");
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * A client changing their own password. It needs the current one: a
-   * borrowed session must not be enough to lock the owner out. The account
-   * page used to say "Contraseña actualizada" without calling anything.
-   */
-  async changeOwnPassword(tenantId: string, clientId: string, dto: ChangeMyPasswordDto) {
+  async update(
+    tenantId: string,
+    id: string,
+    updateClientDto: UpdateClientDto,
+    scope: ClientScope = {},
+  ) {
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId, tenantId },
-      select: { passwordHash: true },
+      where: { id, tenantId, ...this.scopeWhere(scope) },
+      select: { email: true, status: true, taxId: true, taxIdType: true },
     });
-    if (!client?.passwordHash) {
-      throw new BadRequestException("Esta cuenta no tiene contraseña");
+
+    if (!client) {
+      throw new NotFoundException("Cliente no encontrado");
     }
-    const matches = await bcrypt.compare(dto.currentPassword, client.passwordHash);
-    if (!matches) {
-      // 400, not 401: the web client treats any 401 as an expired session
-      // and logs out, which would punish a typo by ending the session.
-      throw new BadRequestException("La contraseña actual no es correcta");
+
+    if (scope.professionalId) {
+      // Compared as stored (lower case): the same address in other capitals
+      // is not a change.
+      const email = normalizeClientEmail(updateClientDto.email);
+      if (email !== undefined && email !== normalizeClientEmail(client.email)) {
+        throw new ForbiddenException(STAFF_MAY_NOT_CHANGE);
+      }
+      if (updateClientDto.status !== undefined && updateClientDto.status !== client.status) {
+        throw new ForbiddenException(STAFF_MAY_NOT_CHANGE);
+      }
     }
-    await this.prisma.client.update({
-      where: { id: clientId, tenantId },
-      data: { passwordHash: await hashPassword(dto.newPassword) },
-    });
+
+    const country = await countryForPhone(this.prisma, tenantId, updateClientDto.phone);
+    const data = buildClientUpdateData(updateClientDto, client, country);
+    try {
+      const updated = await this.prisma.client.update({
+        where: { id, tenantId },
+        data,
+        select: CLIENT_DETAIL_SELECT,
+      });
+      return scope.professionalId ? clientAsStaffSees(updated, scope.professionalId) : updated;
+    } catch (error) {
+      rethrowClientWriteError(error);
+    }
+  }
+
+  /** History survives the delete: see common/prisma/history-deletes.ts. */
+  async remove(tenantId: string, id: string) {
+    return deleteClientKeepingHistory(this.prisma, tenantId, id);
   }
 }

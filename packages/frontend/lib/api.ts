@@ -1,6 +1,49 @@
 ﻿// Next.js API Client for Kira Room
 
 import type { TaxRegime } from "@kira/shared";
+import type { PublicSalonPage } from "./salon-seo";
+import type { WorkingHoursEntry } from "./weekly-schedule";
+import { requestBody } from "./time-off";
+import type {
+  FreeProfessionals,
+  TimeOff,
+  TimeOffConflict,
+  TimeOffInput,
+  TimeOffStatus,
+  UpcomingTimeOffConflict,
+} from "./time-off";
+import type { CreateClientPayload, UpdateClientPayload } from "./client-form";
+import type { RefundableSaleLine } from "./payments-format";
+import type { InvoiceIssuerStatus } from "./invoice-issuer";
+import type { InboxConversation, InboxFilters, InboxPage } from "./receptionist-inbox";
+import { inboxQuery } from "./receptionist-inbox";
+import { apiErrorMessage } from "./api-error-message";
+import { authStorage, endSupportTab, supportTab } from "./auth-storage";
+
+/** A GDPR request of a salon, for the console's history (audit 8 T12). */
+export interface SaasGdprRequest {
+  id: string;
+  action: "export" | "anonymize";
+  status: "processing" | "completed" | "failed";
+  actorId: string;
+  createdAt: string;
+  completedAt: string | null;
+  notes: string | null;
+}
+
+/** An invite in the console's list (audit 8 T15). */
+export interface SaasTenantInvite {
+  id: string;
+  email: string;
+  tenantName: string;
+  firstName: string | null;
+  lastName: string | null;
+  plan: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expiresAt: string;
+  acceptedAt: string | null;
+  createdAt: string;
+}
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1";
@@ -9,20 +52,39 @@ const API_BASE_URL =
 const TOKEN_KEY = "kira_auth_token";
 const REFRESH_TOKEN_KEY = "kira_refresh_token";
 
+/** The most professionals GET /admin/professionals answers at once (the server's cap). */
+const MAX_TEAM_PAGE = 200;
+
 // Custom error class that carries the HTTP status so callers can distinguish
 // 404 (resource not found) from other failures instead of parsing message text.
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** The server's machine-readable reason, when it sends one (e.g. "OUTSIDE_HOURS"). */
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
+}
+
+/** One row of GET /saas/audit-logs. */
+export interface SaasAuditLogRow {
+  id: string;
+  createdAt: string;
+  action: string;
+  actorRole: string;
+  tenantId: string | null;
+  metadata: Record<string, unknown> | null;
+  actor: { id: string; email: string; firstName: string | null; lastName: string | null; role: string } | null;
+  tenant: { id: string; name: string; slug: string } | null;
+  onBehalfOf: { id: string; email: string; firstName: string | null; lastName: string | null; role: string } | null;
 }
 
 export const getToken = () => {
   if (typeof window !== "undefined") {
-    return localStorage.getItem(TOKEN_KEY);
+    return authStorage().getItem(TOKEN_KEY);
   }
   return null;
 };
@@ -68,9 +130,15 @@ export const getToken = () => {
  */
 const CREDENTIAL_ENDPOINTS = [
   "/auth/login",
+  // The second step of a sign-in: a wrong code is an answer, not an expired session.
+  "/auth/2fa/verify",
   "/auth/register",
   "/auth/forgot-password",
   "/auth/reset-password",
+  // Opened from the welcome email, usually signed out. The endpoint is public
+  // and answers { verified } either way; should it ever answer 401, that is
+  // the link page's to show, not a reason to navigate to /login.
+  "/auth/verify-email",
 ];
 
 export function isCredentialEndpoint(endpoint: string): boolean {
@@ -101,14 +169,14 @@ export function loginRedirectTarget(
 
 export const setToken = (token: string) => {
   if (typeof window !== "undefined") {
-    localStorage.setItem(TOKEN_KEY, token);
+    authStorage().setItem(TOKEN_KEY, token);
   }
 };
 
 export const removeToken = () => {
   if (typeof window !== "undefined") {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    authStorage().removeItem(TOKEN_KEY);
+    authStorage().removeItem(REFRESH_TOKEN_KEY);
     if (proactiveRefreshTimer) {
       clearTimeout(proactiveRefreshTimer);
       proactiveRefreshTimer = null;
@@ -119,6 +187,18 @@ export const removeToken = () => {
 export function decodeJwtToken(token: string): any { try { const b = token.split('.')[1]; const j = JSON.parse(atob(b.replace(/-/g, '+').replace(/_/g, '/'))); return j; } catch { return null; } }
 
 /** Returns the JWT `exp` claim (in seconds) or `null` if unparseable. */
+/**
+ * The query string of the payments list, summary and CSV: only the
+ * filters that are set.
+ */
+function paymentQuery(params: object): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
+  }
+  return q.toString();
+}
+
 function getJwtExp(token: string): number | null {
   const claims = decodeJwtToken(token);
   if (claims && typeof claims.exp === "number") return claims.exp;
@@ -169,26 +249,97 @@ function scheduleProactiveRefresh(
 
 export const getRefreshToken = () => {
   if (typeof window !== "undefined") {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
+    return authStorage().getItem(REFRESH_TOKEN_KEY);
   }
   return null;
 };
 
 export const setRefreshToken = (token: string) => {
   if (typeof window !== "undefined") {
-    localStorage.setItem(REFRESH_TOKEN_KEY, token);
+    authStorage().setItem(REFRESH_TOKEN_KEY, token);
   }
 };
 
 export const removeRefreshToken = () => {
   if (typeof window !== "undefined") {
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    authStorage().removeItem(REFRESH_TOKEN_KEY);
   }
 };
 
+/**
+ * Deleting a client, professional or service. One with appointments or
+ * payments is history, so the server deactivates it instead of deleting it
+ * (`deactivated: true`): it stays in the list, marked inactive.
+ */
+export interface HistoryDeleteResult {
+  ok: boolean;
+  deactivated: boolean;
+}
+
+/** POST /admin/clients/:id/merge: what moved to the record kept, and the sentence to show. */
+export interface ClientMergeResult {
+  ok: true;
+  targetClientId: string;
+  sourceClientId: string;
+  moved: Record<string, number>;
+  message: string;
+}
+
+/** A row of GET /admin/clients: the list columns and how many appointments she has. */
+export type ClientSearchRow = Client & { _count?: { appointments: number } };
+
+/** The password was right and the account asks for a code from the app next. */
+export interface TwoFactorRequired {
+  twoFactorRequired: true;
+  /** Sent back with the code to verifyTwoFactor; valid 5 minutes. */
+  challenge: string;
+}
+
+/** The exports offered before deleting the salon (backend exports.controller). */
+export type SalonExportKind = "clients" | "appointments" | "payments" | "services" | "professionals" | "gift-cards";
+
+/** Audit 8 D15: the console's answer while it requires 2FA the platform owner has not set up. */
+export const SAAS_OWNER_2FA_REQUIRED_CODE = "SAAS_OWNER_2FA_REQUIRED";
+export const SAAS_OWNER_2FA_SETUP_PATH = "/saas/seguridad";
+
+/** Audit 8 D2: one support session in the salon, from the audit log. */
+export interface SupportSessionRow {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  reason: string | null;
+  supportName: string | null;
+  status: "active" | "ended" | "expired";
+}
+
+/** Ajustes > Seguridad: whether KiraRoom support may enter, and its recent sessions. */
+export interface SupportAccessStatus {
+  allowed: boolean;
+  sessions: SupportSessionRow[];
+}
+
+export interface SalonDeletionStatus {
+  pending: boolean;
+  requestedAt: string | null;
+  /** Until when the data can be exported. */
+  exportUntil: string | null;
+  /** When the salon's personal data is anonymised. */
+  anonymizeOn: string | null;
+  twoFactorRequired: boolean;
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  recoveryCodesLeft: number;
+}
+
+export function isTwoFactorRequired(r: unknown): r is TwoFactorRequired {
+  return !!r && typeof r === "object" && (r as TwoFactorRequired).twoFactorRequired === true;
+}
+
 interface LoginResponse {
   accessToken: string;
-  refreshToken: string;
   user: {
     id: string;
     email: string;
@@ -201,6 +352,7 @@ interface LoginResponse {
 export interface WidgetInstance {
   id: string;
   name: string;
+  /** The whole token: the embed code is built from it. */
   token?: string;
   allowedOrigins: string[];
   services: string[];
@@ -235,9 +387,17 @@ export interface ImportPreviewResult {
     invalidCount: number;
     skipCount?: number;
   };
-  errors: Array<{ row: number; fields: Array<{ col: string; msg: string }> }>;
+  /** Every row not imported, with the reason and the row as it came (for the CSV of errors). */
+  errors: ImportRowError[];
   /** Appointments: clients that will be (or were) created. */
   newClients?: number;
+  /** File-wide notices (e.g. dates read as month/day). */
+  warnings?: string[];
+}
+export interface ImportRowError {
+  row: number;
+  fields: Array<{ col: string; msg: string }>;
+  data?: Record<string, unknown>;
 }
 export interface ImportCommitResult {
   jobId: string;
@@ -248,6 +408,10 @@ export interface ImportCommitResult {
   errorRows: number;
   skippedRows: number;
   newClients?: number;
+  /** Clients: refusals of advertising recorded from the file. */
+  marketingRefusals?: number;
+  /** The rows not imported, as in the preview. */
+  errors?: ImportRowError[];
 }
 export interface ImportJob {
   id: string;
@@ -260,6 +424,14 @@ export interface ImportJob {
   dryRun: boolean;
   createdAt: string;
   completedAt?: string | null;
+}
+
+/** GET /ics/tokens and POST /ics/tokens/rotate. version 0 = never rotated. */
+export interface IcsFeedTokens {
+  version: number;
+  rotatedAt: string | null;
+  salon: { slug: string; token: string };
+  professionals: Array<{ id: string; name: string; token: string }>;
 }
 
 export interface ConsentFormField {
@@ -315,10 +487,175 @@ export interface Review {
   clientName?: string | null;
   professionalName?: string | null;
   serviceName?: string | null;
+  /** Why it was rejected (a listed reason, or "legacy_unspecified"), who and when it was moderated. */
+  moderationReason?: string | null;
+  moderationReasonLabel?: string | null;
+  moderatedById?: string | null;
+  moderatedByName?: string | null;
+  moderatedAt?: string | null;
+  /** granted | declined | legacy | anonymised: whether it may be listed on the salon's site. */
+  publishConsent?: string;
 }
+/**
+ * Completion, cancellation and no-show rates (GET /analytics/overview `rates`,
+ * GET /analytics/appointment-rates): over appointments with a closed status
+ * (completed, cancelled, no-show) scheduled up to yesterday, salon calendar.
+ * Rates are percents with one decimal, null when nothing closed.
+ */
+export interface AnalyticsAppointmentRates {
+  /** Last day counted ("YYYY-MM-DD"): yesterday in the salon. */
+  through: string;
+  closed: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
+/** GET /analytics/appointment-rates. `byMonth` only when asked with `months`. */
+export interface AnalyticsAppointmentRatesResponse extends AnalyticsAppointmentRates {
+  period: { start: string; end: string };
+  byMonth?: Array<AnalyticsAppointmentRates & { month: string }>;
+}
+
+/**
+ * What the till sold without an appointment in the period (overview
+ * `tillSales`): products and services, cents, VAT included, net of refunds.
+ */
+export interface AnalyticsTillSales {
+  totalCents: number;
+  servicesCents: number;
+  productsCents: number;
+  /** Till sales with something left after refunds. */
+  sales: number;
+  refundedCents: number;
+}
+
+/** A row of GET /analytics/professional-performance (and overview `topProfessionals`). Cents. */
+export interface AnalyticsProfessionalRow {
+  id: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  profileImage: string | null;
+  /** Visits they took part in, cancelled ones excluded. */
+  appointments: number;
+  /** Their share of appointments' revenue (multi-service visits split by list price). */
+  revenue: number;
+  /** Services they did that were sold at the till without an appointment, net of refunds. */
+  tillServicesCents: number;
+  /** revenue + tillServicesCents: "cobrado, IVA incluido". */
+  revenueCents: number;
+  closedAppointments: number;
+  completedAppointments: number;
+  cancelledAppointments: number;
+  noShowAppointments: number;
+  completionRate: number | null;
+  cancellationRate: number | null;
+  noShowRate: number | null;
+}
+
+/**
+ * What an analytics request asks for: a named `range` (this_month,
+ * last_month, last_30_days, 3_months, 6_months, 12_months... cut to the plan
+ * by the API) or the last `months`; and, on Empresa, one `locationId`.
+ */
+export interface AnalyticsQuery {
+  range?: string;
+  months?: number;
+  locationId?: string | null;
+}
+
+function analyticsQuery(q: AnalyticsQuery & { days?: number }): string {
+  return paymentQuery({
+    range: q.range,
+    months: q.range ? undefined : q.months,
+    days: q.days,
+    locationId: q.locationId ?? undefined,
+  });
+}
+
+/** GET /analytics/overview `stats`. Cents; changes in percent, null with nothing to compare. */
+export interface AnalyticsStats {
+  /** The appointments' revenue ("Ingresos de citas"), VAT included. */
+  totalRevenue: number;
+  /** totalRevenue + tillSales.totalCents ("Ingresos + caja"). */
+  totalRevenueWithTill: number;
+  /** Booked in the period, cancelled ones excluded. */
+  totalAppointments: number;
+  /** The appointments behind totalRevenue and avgOrderValue. */
+  paidAppointments: number;
+  /** First completed visit in the period. */
+  newClients: number;
+  avgOrderValue: number;
+  revenueChange: number | null;
+  appointmentsChange: number | null;
+  clientsChange: number | null;
+  orderValueChange: number | null;
+}
+
+export interface AnalyticsOccupancy {
+  bookedMinutes: number;
+  availableMinutes: number;
+  rate: number | null;
+  professionalsWithSchedule: number;
+}
+
+/** GET /analytics/overview. Money in cents; months "YYYY-MM", days "YYYY-MM-DD". */
+export interface AnalyticsOverviewResponse {
+  period: { start: string; end: string };
+  previousPeriod: { start: string; end: string };
+  /** The named range asked for; null when asked by months. */
+  range: string | null;
+  /** The location the figures are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
+  timezone: string;
+  currencyUnit: "cents";
+  stats: AnalyticsStats;
+  /** Closed appointments of the period up to yesterday. */
+  rates: AnalyticsAppointmentRates;
+  /** With a location: only its professionals' services (products have no location). */
+  tillSales: AnalyticsTillSales;
+  occupancy: AnalyticsOccupancy;
+  revenueData: { month: string; revenue: number }[];
+  servicePopularity: { name: string; count: number; percentage: number }[];
+  appointmentStatus: { status: string; name: string; count: number; color: string }[];
+  topServices: { name: string; count: number; revenue: number }[];
+  topProfessionals: AnalyticsProfessionalRow[];
+  dailyMetrics: { date: string; appointments: number; revenue: number }[];
+}
+
+/** GET /analytics/client-insights. */
+export interface AnalyticsClientInsights {
+  period: { start: string; end: string };
+  /** First completed visit in the period. */
+  newClients: number;
+  /** Distinct clients with a completed appointment in the period. */
+  clientsServed: number;
+  /** Served and came back in the period, or had come before. */
+  returningClients: number;
+  totalAppointments: number;
+  /** returningClients / clientsServed, percent. */
+  retentionRate: number;
+}
+
+/** GET /locations (Multi-local): the salon's locations. */
+export interface SalonLocation {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
 export interface ReviewAnalytics {
+  /** Every answered rating but the rejected ones, as on the salon's site. */
   averageRating: number;
   total: number;
+  answered?: number;
+  rejected?: number;
+  /** Rejected before a reason was required: worth looking at again. */
+  legacyRejections?: number;
   distribution: number[];
   topPerformers: Array<{
     professionalId: string;
@@ -337,14 +674,26 @@ export interface ReviewSettings {
   autoRequestsEnabled: boolean;
   /** The google_reviews_auto add-on (or a plan with it) is active. */
   addOnActive: boolean;
+  /**
+   * Email, and WhatsApp for clients who asked for their appointment notices
+   * by WhatsApp: the review template's state ("not_connected",
+   * "NOT_SUBMITTED", Meta's PENDING / APPROVED / REJECTED..., "unknown").
+   * Absent from older servers. No SMS.
+   */
   channels: {
     email: boolean;
-    sms: boolean;
-    /** "not_connected", "NOT_SUBMITTED", or Meta's template status (APPROVED, PENDING...). */
-    whatsapp: string;
+    whatsapp?: string;
   };
   googleApi: { available: boolean };
-  policy: { delayHours: number; clientCooldownDays: number; tokenTtlDays: number };
+  policy: {
+    delayHours: number;
+    windowHours?: number;
+    clientCooldownDays: number;
+    tokenTtlDays: number;
+    moderationGraceDays?: number;
+    /** The only reasons a review can be rejected or hidden for. */
+    rejectionReasons?: Array<{ key: string; label: string }>;
+  };
 }
 
 /** GET /virtual-receptionist/channels/config. Never carries a token. */
@@ -359,6 +708,8 @@ export interface ChannelsConfig {
     instagramUsername?: string;
     hasAccessToken: boolean;
     needsReconnect: boolean;
+    /** Facebook refused the Page token (expired or revoked): reconnect. */
+    accessLost?: boolean;
   } | null;
   metaPagesPending: boolean;
   telegram: {
@@ -366,6 +717,8 @@ export interface ChannelsConfig {
     botUsername?: string;
     hasBotToken: boolean;
     needsReconnect: boolean;
+    /** Telegram no longer accepts the bot token: reconnect. */
+    accessLost?: boolean;
   } | null;
   /** What the server can offer, and why not (e.g. "meta_app_not_configured"). */
   availability?: {
@@ -386,11 +739,46 @@ export interface WhatsAppConnection {
   qualityScore?: string | null;
   tokenExpiresAt?: string | null;
   isActive: boolean;
+  /** When Meta confirmed KiraRoom receives this number's messages (subscribed_apps). */
+  webhookSubscribedAt?: string | null;
+  /** Why the subscription failed, in Spanish, ready to show. */
+  webhookError?: string | null;
+  /** Last message or status Meta delivered for this number. */
+  lastInboundAt?: string | null;
+  /** When Meta refused the token (expired or revoked); null while it works. */
+  authErrorAt?: string | null;
+  /** What to tell the salon about the refused token, in Spanish; null while it works. */
+  accessProblem?: string | null;
 }
-/** A quarterly tax return draft (Modelo 303 / 420 / 130): box -> value. */
+/** GET /whatsapp/setup. */
+export interface WhatsAppSetupStatus {
+  receivingAvailable: boolean;
+  /** Why nothing can be received, in Spanish, ready to show. */
+  receivingProblem: string | null;
+}
+
+/** POST /whatsapp/connection/reception-test. */
+export interface WhatsAppReceptionTest extends WhatsAppSetupStatus {
+  startedAt: string;
+  /** An event at or after this time proves reception. */
+  since: string;
+  subscribed: boolean;
+  webhookError?: string | null;
+}
+
+/** GET /platform/meta-status (saas_owner). */
+export interface PlatformMetaStatus {
+  appIdSet: boolean;
+  appSecretSet: boolean;
+  verifyTokenSet: boolean;
+  receiving: boolean;
+  webhookUrls: { whatsapp: string; messengerInstagram: string } | null;
+}
+
+/** A quarterly tax return draft (Modelo 303 / 420): box -> value. */
 export interface TaxReportDraft {
   id: string;
-  type: "modelo_303" | "modelo_420" | "modelo_130";
+  type: "modelo_303" | "modelo_420";
   year: number;
   quarter: number;
   /** Amounts in cents; the tipo boxes of the 420 (02, 05...) are percentages. */
@@ -398,7 +786,23 @@ export interface TaxReportDraft {
   status: string;
 }
 
-export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "completed" | "failed" | "cancelled";
+/** GET /tax-reports/modelo-130-income/:year: an autónomo's income for the Modelo 130. Cents, tax not included. */
+export interface Modelo130Income {
+  /** False for a salon with a CIF, or with no NIF yet: no card. */
+  applies: boolean;
+  year: number;
+  taxIdType: string | null;
+  quarters: Array<{
+    quarter: number;
+    invoicedCents: number;
+    rectifiedCents: number;
+    incomeCents: number;
+    cumulativeCents: number;
+  }>;
+  note: string;
+}
+
+export type WhatsAppCampaignStatus = "draft" | "scheduled" | "sending" | "paused" | "completed" | "failed" | "cancelled";
 
 /** A WhatsApp promotion: the salon's text, reviewed by Meta as a template. */
 export interface WhatsAppCampaign {
@@ -420,11 +824,14 @@ export interface WhatsAppCampaign {
   lastError: string | null;
   createdAt: string;
   totalRecipients: number;
+  /** Counts worked out from the recipients when the campaign is read. */
   sent: number;
   delivered: number;
   read: number;
   failed: number;
   optedOut: number;
+  /** Recipients not sent yet (a sending or paused campaign). */
+  pending?: number;
   /** Recipients by status (detail only): pending, sent, delivered, read, failed, opted_out. */
   byStatus?: Record<string, number>;
 }
@@ -469,7 +876,32 @@ export interface Appointment {
   paymentStatus: "pending" | "paid" | "failed" | "refunded";
   notes?: string;
   services?: AppointmentService[];
+  /** The salon's location it is at (multi-local); null for most salons. */
+  locationId?: string | null;
+  /**
+   * The public booking's answer (POST /appointments): where it is, at a
+   * salon with several locations; null otherwise.
+   */
+  location?: { id: string; name: string; address: string } | null;
 }
+
+/**
+ * GET /appointments/booking-locations: the locations the panel books at and
+ * filters the agenda by, and where each professional works. Empty for a
+ * salon with fewer than two bookable locations (the panel shows no picker).
+ */
+export interface BookingLocations {
+  locations: Array<{ id: string; name: string; slug: string; address: string; phone: string | null }>;
+  professionals: Array<{ id: string; locationIds: string[]; primaryLocationId: string | null }>;
+}
+
+/**
+ * PATCH /appointments/:id. `locationId` null: back to the professional's
+ * own location.
+ */
+export type AppointmentUpdate = Partial<Omit<CreateAppointmentDto, "locationId">> & {
+  locationId?: string | null;
+};
 
 export interface AppointmentService {
   id: string;
@@ -491,6 +923,25 @@ export interface AppointmentService {
   professional?: Professional;
 }
 
+/** GET /clients?page=…: one page of the panel's client list. */
+export interface ClientListParams {
+  page: number;
+  pageSize?: number;
+  /** Name or email (accents ignored), or phone digits. */
+  q?: string;
+  status?: Client["status"];
+  sort?: "firstName" | "lastName" | "email" | "status" | "createdAt";
+  dir?: "asc" | "desc";
+}
+
+export interface ClientPage {
+  data: Client[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface Client {
   id: string;
   createdAt: string;
@@ -500,9 +951,9 @@ export interface Client {
   lastName: string;
   email?: string;
   phone?: string;
-  dateOfBirth?: string;
-  gender?: "male" | "female" | "other";
-  profileImage?: string;
+  dateOfBirth?: string | null;
+  gender?: "male" | "female" | "other" | "prefer_not_to_say" | null;
+  profileImage?: string | null;
   status: "active" | "inactive" | "blocked";
   preferredLanguage?: string;
   preferredServices?: string[];
@@ -512,12 +963,53 @@ export interface Client {
   lastVisit?: string | null;
   lastReengagementSent?: string | null;
   visitCount?: number;
-  totalSpent?: number;
+  /** Null for staff: the salon's money from every visit, not shown to a professional. */
+  totalSpent?: number | null;
   tags?: string[];
-  notes?: string;
+  notes?: string | null;
+  loyaltyPoints?: number;
+  loyaltyTier?: string;
   // P2A â€” Spanish tax compliance
   taxId?: string | null;
   taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
+}
+
+/** A visit in the client file (GET /clients/:id): what, with whom, what it cost. */
+export interface ClientAppointmentSummary {
+  id: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  duration: number;
+  status: "pending" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show";
+  /** Euros. Null in a visit with another professional, seen by staff (`restricted`). */
+  price: number | string | null;
+  /** Cents: every service and add-on, after discounts. Null when `restricted`. */
+  totalAmount: number | string | null;
+  /** Cents. Null when `restricted`. */
+  amountPaid: number | string | null;
+  paymentStatus: string | null;
+  notes?: string | null;
+  /**
+   * A professional (staff) looking at a visit with a colleague: only when,
+   * what and with whom (no price, payment or notes). Their own visits and
+   * every visit seen by a manager come whole.
+   */
+  restricted?: boolean;
+  service?: { id: string; name: string } | null;
+  professional?: { id: string; firstName: string; lastName: string } | null;
+  services?: Array<{
+    id: string;
+    order: number;
+    service?: { id: string; name: string } | null;
+    professional?: { id: string; firstName: string; lastName: string } | null;
+  }>;
+}
+
+/** GET /clients/:id: the list row plus health data and the visits. */
+export interface ClientDetail extends Client {
+  allergies?: string[];
+  medicalConditions?: string[];
+  appointments: ClientAppointmentSummary[];
 }
 
 export interface Service {
@@ -529,9 +1021,58 @@ export interface Service {
   description?: string;
   category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
   duration: number;
+  /** Euros. Arrives as a string ("25.00", a Decimal column): Number() it. */
   price: number;
   currency: string;
   isActive: boolean;
+  /** The salon's own view only (the public one leaves the settings out). */
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  /** Hours of notice an online booking needs. */
+  minAdvanceBooking?: number;
+  /** Days ahead an online booking may be made. */
+  maxAdvanceBooking?: number;
+}
+
+/** What the services panel sends; see lib/service-form.ts. */
+export interface ServiceWrite {
+  name: string;
+  description?: string;
+  category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
+  duration: number;
+  price: number;
+  currency: string;
+  isActive?: boolean;
+  isOnlineBookable?: boolean;
+  requiresApproval?: boolean;
+  minAdvanceBooking?: number;
+  maxAdvanceBooking?: number;
+}
+
+/** A commission payout, as the "Pagos" tab lists it. Amounts in cents. */
+export interface CommissionPayout {
+  id: string;
+  createdAt: string;
+  professionalId: string;
+  professionalName: string;
+  amountCents: number;
+  itemCount: number;
+  /** "YYYY-MM-DD" the payout ran up to; null when paid by ids. */
+  upTo: string | null;
+  createdByName: string | null;
+  undoneAt: string | null;
+  undoneByName: string | null;
+  /** The latest payout of its professional not undone: "Deshacer último pago" applies. */
+  canUndo: boolean;
+}
+
+/** The salon's commission terms (rates in percent). */
+export interface CommissionSettings {
+  defaultRate: number;
+  productDefaultRate: number;
+  /** "net": on the price without the tax; "gross": with it. */
+  base: "net" | "gross";
+  pricesIncludeTax: boolean;
 }
 
 export interface Professional {
@@ -554,8 +1095,21 @@ export interface Professional {
   // End of portfolio fields
   position?: string;
   commissionRate?: number;
+  /** "Comisión de productos" (percent); null: the salon default. */
+  productCommissionRate?: number | string | null;
   hireDate?: string;
   isActive: boolean;
+  /** The team member's user account, when the professional has one (managers see it). */
+  userId?: string | null;
+  /**
+   * One entry per shift, several per day for a split shift:
+   * `[{ day: "monday", openTime: "10:00", closeTime: "14:00" }, ...]`. Read it
+   * with scheduleFromWorkingHours (lib/weekly-schedule.ts); older rows may
+   * hold another shape.
+   */
+  workingHours?: unknown;
+  /** Multi-local: where they work (GET /admin/professionals). */
+  locations?: { locationId: string; isPrimary: boolean }[];
   // Services relation - populated by admin endpoints
   services?: {
     serviceId: string;
@@ -598,7 +1152,37 @@ export interface CreateAppointmentDto {
   notes?: string;
   depositRequired?: boolean;
   depositAmount?: number;
-  commissionRate?: number;
+  /** null clears the appointment's own rate (PATCH). */
+  commissionRate?: number | null;
+  /**
+   * Public booking only: she ticked "No quiero recibir promociones ni
+   * novedades del salón por email" / "Recibir los avisos de mi cita por
+   * WhatsApp" (lib/public-booking.ts, BOOKING_CHOICE_TEXT).
+   */
+  refusesMarketingEmail?: boolean;
+  wantsWhatsAppNotices?: boolean;
+  /** Public booking only: she ticked the optional WhatsApp promotions box. */
+  wantsWhatsAppPromotions?: boolean;
+  /** Public booking only: the hidden field people never see (HoneypotField). */
+  website?: string;
+  /**
+   * Public booking at one of the salon's locations, when it has several:
+   * the professional must work there.
+   */
+  locationId?: string;
+}
+
+/**
+ * POST /appointments/staff. A professional's own booking may leave out the
+ * professional (the server uses theirs). `services`: a visit of several,
+ * created with the appointment in one request; the server times them.
+ * `allowOutsideHours`: an owner or manager confirmed booking in the past or
+ * outside the hours (the server refuses with code OUTSIDE_HOURS otherwise).
+ */
+export interface StaffBookingRequest extends Omit<CreateAppointmentDto, "professionalId"> {
+  professionalId?: string;
+  services?: Array<{ serviceId: string; professionalId?: string; isParallel?: boolean }>;
+  allowOutsideHours?: boolean;
 }
 
 // Notification types
@@ -608,6 +1192,11 @@ export type NotificationType =
   | "appointment_cancelled"
   | "appointment_confirmed"
   | "appointment_completed"
+  | "appointment_rescheduled"
+  | "appointment_no_show"
+  | "appointment_reminder_24h"
+  | "appointment_reminder_1h"
+  | "waitlist_slot_available"
   | "review_request"
   | "payment_received"
   | "payment_failed"
@@ -654,6 +1243,9 @@ export interface NotificationPreferences {
 
 export type NotificationChannel = "email" | "sms" | "whatsapp" | "inApp";
 
+/** The preference key of the owner's and admins' online booking emails (backend salon-booking-alerts.service.ts). */
+export const SALON_BOOKING_ALERT = "salon_booking_alert";
+
 // Payment types
 export interface Payment {
   id: string;
@@ -670,15 +1262,11 @@ export interface Payment {
     | "gift_card"
     | "membership"
     | "other";
-  status:
-    | "pending"
-    | "processing"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "refunded"
-    | "partially_refunded";
-  method: "card" | "cash" | "bank_transfer" | "wallet" | "gift_card";
+  /** The server's PaymentStatus enum (a partial refund leaves it "paid"). */
+  status: "pending" | "paid" | "failed" | "refunded";
+  method: "card" | "cash" | "bizum" | "bank_transfer" | "wallet" | "gift_card" | "loyalty_points";
+  /** Cents given back so far (refunds). */
+  refundedAmount?: number;
   stripePaymentId?: string;
   stripeInvoiceId?: string;
   description?: string;
@@ -702,22 +1290,98 @@ export interface Payment {
     id: string;
     scheduledDate: string;
     status: string;
+    service?: { name: string } | null;
   };
 }
 
+/** The Pagos page's cards (GET /payments/stats/summary), in cents. */
 export interface PaymentSummary {
+  /** Paid, net of refunds. */
   totalRevenue: number;
   totalTransactions: number;
   pendingAmount: number;
   refundedAmount: number;
+  byMethod: { method: Payment["method"]; amount: number; count: number }[];
+}
+
+/** One appointment in Inicio's lists (GET /appointments/home). Money in cents. */
+export interface HomeAppointmentRow {
+  id: string;
+  /** "YYYY-MM-DD". */
+  scheduledDate: string;
+  scheduledTime: string;
+  status: string;
+  paymentStatus?: string;
+  /** What is still owed (money, tax included), for the visits to charge. */
+  amountDue?: number;
+  client: { id: string; firstName: string; lastName: string } | null;
+  professional: { id: string; firstName: string; lastName: string } | null;
+  service: { id: string; name: string } | null;
+}
+
+/** GET /appointments/home: Inicio's lists in the salon's day; staff get their own. */
+export interface HomeSummary {
+  /** The salon's calendar day, "YYYY-MM-DD". */
+  today: string;
+  /** The salon's clock, "HH:mm". */
+  now: string;
+  /** The location the lists are cut to (Empresa); null for the whole salon. */
+  location: { id: string; name: string } | null;
+  /** Today's pending, confirmed and in-progress appointments, by time. */
+  todayAppointments: HomeAppointmentRow[];
+  /** Active professionals (of the location), by name; a professional: themselves. */
+  professionals: { id: string; firstName: string; lastName: string }[];
+  /** Today's occupancy, Analítica's definition; null for staff. */
+  occupancy: AnalyticsOccupancy | null;
+  /** Pending from today on: the first five and how many there are. */
+  pendingConfirmations: { total: number; items: HomeAppointmentRow[] };
+  /** Visits up to today still owed: the five latest, how many and how much (cents). */
+  pendingPayments: { total: number; totalDue: number; items: HomeAppointmentRow[] };
+}
+
+/** The Pagos page's filters, sent to the list, the summary and the CSV. */
+export interface PaymentFilters {
+  status?: Payment["status"];
+  method?: Payment["method"];
+  clientId?: string;
+  /** YYYY-MM-DD (a salon day) or an ISO instant. */
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+/** POST /payments/:id/refund's body (cents). `lines`: units of a till sale given back (products return to stock). */
+export interface PaymentRefundBody {
+  amount?: number;
+  reason: string;
+  lines?: Array<{ lineId: string; quantity: number }>;
+}
+
+/** GET /payments/:id/refund-lines: null saleId when the payment is not a till sale's own. */
+export interface PaymentRefundLines {
+  saleId: string | null;
+  lines: RefundableSaleLine[];
+}
+
+/** POST /payments/:id/refund's answer. */
+export interface PaymentRefundResult {
+  refundedAmount: number;
+  refundableAmount: number;
+  /** Products back in stock. */
+  restocked?: Array<{ productId: string; description: string; quantity: number }>;
+  /** The appointment's issued invoice, which needs a rectificativa. */
+  invoice: { id: string; number: string } | null;
+  rectificationNeeded: boolean;
 }
 
 export interface StripeSettings {
   stripeMode: "test" | "live";
+  /** Masked by the server (sk_test_…1234); sent back as is, it is kept. */
   stripeTestSecretKey: string | null;
   stripeTestPublishableKey: string | null;
   stripeLiveSecretKey: string | null;
   stripeLivePublishableKey: string | null;
+  testSecretKeyConfigured?: boolean;
+  liveSecretKeyConfigured?: boolean;
   isConfigured: boolean;
 }
 
@@ -740,6 +1404,8 @@ export interface Subscription {
   id?: string;
   tenantId?: string;
   plan: string;
+  /** The plan the salon uses now: Pro during the trial, else its plan. */
+  effectivePlan?: string;
   legacyPlan?: string;
   subscriptionStatus?: string;
   status: "active" | "cancelled" | "past_due" | "trialing";
@@ -751,14 +1417,67 @@ export interface Subscription {
   maxLocations?: number;
   addons?: Record<string, any>;
   stripeSubscriptionId?: string;
+  /** Cancelled at the end of the paid period: full access until cancelAt. */
   cancelAtPeriodEnd: boolean;
+  cancelAt?: string | null;
+  /** Empresa: locations open now (maxLocations is how many are paid). */
+  activeLocations?: number | null;
+}
+
+/**
+ * The plan as the whole team sees it (GET /payments/subscription/context):
+ * open to owner, admin and staff, without Stripe ids. Billing itself
+ * (getCurrentSubscription) stays the owner's.
+ */
+export interface SubscriptionContext {
+  plan: string;
+  effectivePlan: string;
+  status: string;
+  inTrial: boolean;
+  trialEnd: string | null;
+  readOnlyUntil: string | null;
+  cancelledAt: string | null;
+  cancelAt: string | null;
+  /** A paid subscription exists (it may have been taken during the trial). */
+  subscribed: boolean;
+  /** Keys of the salon's active add-ons. */
+  addOns: string[];
+  /** Features those add-ons unlock on top of the plan. */
+  addOnFeatures: string[];
+}
+
+/** Back from a plan checkout: what Stripe says about the session. */
+export interface CheckoutSessionStatus {
+  status: "open" | "complete" | "expired" | null;
+  paymentStatus: "paid" | "unpaid" | "no_payment_required" | null;
+  plan: string;
+  /** Subscribed in the free trial: the day of the first charge. */
+  firstChargeAt: string | null;
+  /** The webhook has applied it. */
+  applied: boolean;
+}
+
+/** What the salon must deactivate before moving to a plan (B9). */
+export interface PlanLimitBlocker {
+  kind: "professionals" | "locations";
+  current: number;
+  limit: number;
+  /** In Spanish, ready to show. */
+  message: string;
+  /** The panel page where it is done. */
+  href: string;
 }
 
 export interface SubscriptionInvoice {
   id: string;
   number: string | null;
-  /** Amount in cents (Stripe amount_paid) */
+  /** Amount in cents: what was paid, or what is due while open / unpaid. */
   amount: number;
+  /** Stripe amount_due / amount_paid, in cents. */
+  amountDue?: number;
+  amountPaid?: number;
+  /** Open or uncollectible: still to be paid. */
+  pending?: boolean;
   currency: string;
   status: "draft" | "open" | "paid" | "void" | "uncollectible" | string;
   created: string;
@@ -836,9 +1555,39 @@ export interface EmailCampaign {
   unsubscribes: number;
   fromName?: string;
   replyTo?: string;
+  /** Archived campaigns only show under the "Archivadas" filter. */
+  archivedAt?: string | null;
+  /** Why the last send stopped or reached nobody. */
+  lastError?: string | null;
+  /** Set while paused at the month's marketing email cap (the reason is lastError). */
+  capPausedAt?: string | null;
+  /** Recipients still to be sent (the background sender works through them). */
+  pendingCount?: number;
+  /** Recipients whose email could not be sent ("Reintentar fallidos"). */
+  failedCount?: number;
   _count?: {
     recipients: number;
   };
+}
+
+/** Why a client cannot receive the salon's email campaigns. */
+export type CampaignExclusionReason = "inactive" | "no_email" | "refused" | "suppressed" | "no_visit";
+
+/** The salon's clients as the recipient picker sees them (GET /email-campaigns/audience). */
+export interface EmailCampaignAudience {
+  reachable: number;
+  excluded: Record<CampaignExclusionReason, number>;
+  /** The clients who cannot receive campaigns, with the reason. */
+  clients: Record<string, CampaignExclusionReason>;
+}
+
+/** What adding recipients did (POST /email-campaigns/:id/recipients). */
+export interface AddEmailCampaignRecipientsResult {
+  added: number;
+  /** Already on the list. */
+  alreadyAdded: number;
+  /** Asked for but not reachable (no visit, said no, unsubscribed...). */
+  excluded: number;
 }
 
 /**
@@ -852,13 +1601,57 @@ export interface EmailCampaignTrackingStatus {
   suppressedAddresses: number;
 }
 
+/**
+ * The month's marketing emails (GET /email-campaigns/quota): Pro 2.000,
+ * Empresa 5.000 per location, plus the bono de emails.
+ */
+/** D4: can a web address be used. */
+export interface WebAddressAvailability {
+  slug: string;
+  available: boolean;
+  problem: string | null;
+  /** Why not, in Spanish; null when it can. */
+  message: string | null;
+}
+
+/** D4: the salon's web address in Ajustes > Web. */
+export interface WebAddressInfo {
+  slug: string;
+  /** False once the owner has changed it (it can be changed once). */
+  canChange: boolean;
+  changedAt: string | null;
+  /** Old addresses still redirecting here, with when they stop. */
+  redirects: Array<{ oldSlug: string; expiresAt: string }>;
+}
+
+export interface EmailMarketingQuota {
+  /** "YYYY-MM" on the salon's clock. */
+  month: string;
+  cap: number;
+  planSent: number;
+  packSent: number;
+  sent: number;
+  planRemaining: number;
+  /** Bought emails left; they do not expire. */
+  packRemaining: number;
+  /** What can still be sent this month. */
+  remaining: number;
+  /** "YYYY-MM-DD": when the month's emails start again. */
+  resetsOn: string;
+  /** The bono on sale, or null while it has no price. */
+  pack: { emails: number; priceCents: number } | null;
+  /** The salon has not paid yet: the cap is the 200 a month of the trial. */
+  neverPaidCap?: boolean;
+}
+
+/**
+ * "Enviar": the campaign is claimed and sent in the background. What
+ * happened to each email shows on the card as it goes.
+ */
 export interface SendEmailCampaignResult {
   success: boolean;
-  sentCount: number;
-  failedCount: number;
-  suppressedCount: number;
-  /** Clients who said no to promotions in their account. */
-  skippedCount?: number;
+  /** Recipients queued to be sent. */
+  queued: number;
 }
 
 export interface EmailCampaignTemplate {
@@ -878,11 +1671,9 @@ export interface EmailCampaignAnalytics {
   campaign: EmailCampaign;
   totalSent: number;
   totalDelivered: number;
-  totalOpened: number;
   totalClicks: number;
   totalBounces: number;
   totalComplaints: number;
-  openRate: number;
   clickRate: number;
   bounceRate: number;
   complaintRate: number;
@@ -918,6 +1709,9 @@ export interface SubscriptionUsage {
     appointmentsPerMonth: number;
   };
 }
+
+/** How money goes into a wallet (top-up) or is handed back from it (withdrawal): real money. */
+export type WalletTopUpMethod = "cash" | "card" | "bizum" | "bank_transfer";
 
 export interface ClientWallet {
   id: string;
@@ -958,22 +1752,26 @@ export interface CatalogAddOn {
   sortOrder: number;
 }
 
-/** The salon site's account page: the signed-in client's own profile. */
-export interface MyClientProfile {
-  id: string;
-  tenantId: string;
-  firstName: string;
-  lastName: string;
-  email: string | null;
-  phone: string | null;
-  preferredLanguage: string;
-}
-
 /** A client's recorded choice about promotions by email (a signed Consent). */
 export interface MarketingConsentState {
   status: "granted" | "refused" | "none";
   decidedAt: string | null;
   text: string;
+  /** Where it was made: "booking", "widget", "salon"; null otherwise. */
+  source?: string | null;
+}
+
+export type NoticeChannel = "email" | "sms" | "whatsapp";
+
+/** How a client gets her appointment notices (GET /consent/clients/:id/notices). */
+export interface ClientNoticesState {
+  channels: Record<NoticeChannel, boolean>;
+  /** Her request for WhatsApp notices: when and where it was made. */
+  whatsappRequest: MarketingConsentState;
+  /** Can the salon send by each channel today? */
+  available: Record<NoticeChannel, boolean>;
+  /** Has she an email / a phone on file? */
+  contact: { email: boolean; phone: boolean };
 }
 
 /** P2A-receptionist-v2 â€” tenant add-on entitlement. */
@@ -986,14 +1784,6 @@ export interface TenantAddOnView {
   startedAt: string;
   currentPeriodEnd: string | null;
   cancelledAt: string | null;
-}
-
-/** P2A-receptionist-v2 â€” message bundles (metered) credit balance. */
-export interface MessageBundlesBalance {
-  creditsRemaining: number;
-  creditsPurchasedTotal: number;
-  creditsUsedTotal: number;
-  lastTopupAt: string | null;
 }
 
 export interface CreatePaymentDto {
@@ -1112,6 +1902,24 @@ export interface RebookingConfig {
   leadDays: number;
   channelFallback: "email" | "whatsapp" | "both";
   minVisits: number;
+  /** On a save: the clients' next reminder dates are being recomputed. */
+  recomputing?: boolean;
+}
+
+/** GET /rebooking/log: the salon's latest reminders, by name. */
+export interface RebookingTenantLog {
+  /** The salon's timezone, to show the dates in its day. */
+  timezone: string;
+  items: Array<{
+    id: string;
+    clientName: string | null;
+    serviceName: string | null;
+    channel: "email" | "whatsapp" | "both";
+    status: "scheduled" | "sent" | "cancelled" | "failed" | "booked";
+    scheduledAt: string;
+    sentAt: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface ClientCadenceByService {
@@ -1220,9 +2028,7 @@ export interface VerifactuStatus {
 /** Public data of the software's declaración responsable (GET /verifactu/declaracion). */
 export interface VerifactuDeclaration {
   system: { name: string; id: string; version: string; onlyVerifactu: boolean; multipleTaxpayers: boolean };
-  producer: { name: string; nif: string } | null;
-  address: string | null;
-  contactEmail: string | null;
+  producer: { name: string; nif: string };
   signedOn: string | null;
   signedAt: string | null;
   environment: "test" | "production";
@@ -1232,6 +2038,11 @@ export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
   /** False while sending invoices to the AEAT is not available (production). */
   submissionAvailable?: boolean;
+  /**
+   * The regime the salon's address calls for (igic in the Canaries, ipsi in
+   * Ceuta and Melilla) when it is on another one; null otherwise.
+   */
+  territoryTaxRegime?: "igic" | "ipsi" | null;
   fiscalSettings: {
     enabled?: boolean;
     syncOnIssue?: boolean;
@@ -1241,17 +2052,25 @@ export interface FiscalSettings {
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
+    /**
+     * The salon's prices already include the tax (true: an invoice splits
+     * them into base + tax) or have it added on top (false, or missing for a
+     * salon from before the setting).
+     */
+    pricesIncludeTax?: boolean;
     /** P2A â€” emitter NIF/CIF/NIE (mirrored to Tenant.taxId on the backend). */
     tenantNif?: string;
   };
-  taxId?: string;
-  taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
-  legalName?: string;
+  /** The issuer NIF (Tenant.taxId; the settings mirror when it is empty). */
+  taxId?: string | null;
+  taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
+  /** Razón social printed on the invoices. */
+  legalName?: string | null;
 }
 
+/** A certificate as the list sends it: metadata only, never the key. */
 export interface FiscalCertificate {
   id: string;
-  tenantId: string;
   provider: "p12" | "cloud_dnie";
   alias: string;
   fingerprint: string;
@@ -1303,11 +2122,16 @@ export interface AccountingSyncLog {
   externalId: string | null;
   errorMessage: string | null;
   createdAt: string;
+  /** Series + number of the invoice; null for connect / disconnect rows. */
+  invoiceNumber?: string | null;
 }
 
 /** GET /web-domain: the public page and the salon's own domain, if any. */
 export interface WebDomainStatus {
+  /** The free subdomain once live, otherwise the page on the app host. */
   publicUrl: string;
+  /** salon-lucia.kiraroom.net; active once the wildcard certificate is in place. */
+  subdomain?: null | { host: string; active: boolean };
   target: string;
   /** False until the operator serves customer domains over HTTPS. */
   servingEnabled: boolean;
@@ -1325,9 +2149,10 @@ export interface WebDomainStatus {
 
 export interface ApiClientInterface {
   request<T>(endpoint: string, options?: RequestInit): Promise<T>;
-  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse>;
+  login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse | TwoFactorRequired>;
   forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }>;
   resetPassword(token: string, password: string): Promise<{ message: string }>;
+  verifyEmail(token: string): Promise<{ verified: boolean }>;
   register(data: {
     email: string;
     password: string;
@@ -1369,11 +2194,15 @@ export interface ApiClientInterface {
   createAppointment(data: CreateAppointmentDto): Promise<Appointment>;
   updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment>;
+  getBookingLocations(): Promise<BookingLocations>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
+  completeAppointment(id: string, notes?: string): Promise<Appointment>;
+  markAppointmentNoShow(id: string): Promise<Appointment>;
   deleteAppointment(id: string): Promise<void>;
   getClients(tenantId?: string): Promise<Client[]>;
+  getClientsPage(params: ClientListParams): Promise<ClientPage>;
   filterClients(filters: {
     gender?: string;
     minAge?: number;
@@ -1386,62 +2215,46 @@ export interface ApiClientInterface {
     minVisits?: number;
     maxVisits?: number;
   }): Promise<Client[]>;
-  getClient(id: string): Promise<Client>;
-  createClient(data: {
-    tenantId: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    dateOfBirth?: string;
-    gender?: "male" | "female" | "other" | "prefer_not_to_say";
-    profileImage?: string;
-  }): Promise<Client>;
-  updateClient(
-    id: string,
-    data: Partial<{
-      firstName: string;
-      lastName: string;
-      email?: string;
-      phone?: string;
-      dateOfBirth?: string;
-      gender?: "male" | "female" | "other" | "prefer_not_to_say";
-      profileImage?: string;
-      preferredLanguage?: string;
-      preferredServices?: string[];
-      preferredProfessionals?: string[];
-      preferredTimes?: string[];
-      communicationPreferences?: Record<string, any>;
-      status: "active" | "inactive" | "blocked";
-    }>,
-  ): Promise<Client>;
-  deleteClient(id: string): Promise<void>;
+  getClient(id: string): Promise<ClientDetail>;
+  createClient(data: CreateClientPayload & { tenantId?: string }): Promise<Client>;
+  updateClient(id: string, data: UpdateClientPayload, options?: { asStaff?: boolean }): Promise<Client>;
+  deleteClient(id: string): Promise<HistoryDeleteResult>;
+  searchClientsForManager(query: string): Promise<ClientSearchRow[]>;
+  mergeClient(targetId: string, sourceClientId: string): Promise<ClientMergeResult>;
   getServices(tenantId?: string): Promise<Service[]>;
   getService(id: string): Promise<Service>;
-  createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service>;
-  updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service>;
-  deleteService(id: string): Promise<void>;
+  createService(data: ServiceWrite): Promise<Service>;
+  updateService(id: string, data: Partial<ServiceWrite>): Promise<Service>;
+  deleteService(id: string): Promise<HistoryDeleteResult>;
   getProfessionalsPublic(tenantId?: string): Promise<Professional[]>;
   getProfessionals(tenantId?: string): Promise<Professional[]>;
   getProfessional(id: string): Promise<Professional>;
+  getTimeOff(
+    from: string,
+    to: string,
+    professionalId?: string,
+    opts?: { includePending?: boolean },
+  ): Promise<TimeOff[]>;
+  previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
+  createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  deleteTimeOff(id: string): Promise<{ deleted: boolean }>;
+  previewUpdateTimeOff(id: string, input: Omit<TimeOffInput, "professionalId">): Promise<{ conflicts: TimeOffConflict[] }>;
+  updateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }>;
+  getFreeProfessionalsForAppointment(id: string): Promise<FreeProfessionals>;
+  cancelAppointmentForTimeOff(id: string, reason?: string | null): Promise<Appointment>;
+  previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }>;
+  getMyTimeOff(): Promise<TimeOff[]>;
+  previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }>;
+  createTimeOffRequest(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  cancelTimeOffRequest(id: string): Promise<{ deleted: boolean }>;
+  getTimeOffRequests(status?: TimeOffStatus): Promise<TimeOff[]>;
+  getTimeOffRequestCount(): Promise<{ count: number }>;
+  approveTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>;
+  rejectTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff }>;
   createProfessional(data: {
     firstName: string;
     lastName: string;
@@ -1456,8 +2269,12 @@ export interface ApiClientInterface {
     certifications?: string[];
     position?: string;
     commissionRate?: number;
+    productCommissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
   }): Promise<Professional>;
   updateProfessional(
     id: string,
@@ -1475,13 +2292,19 @@ export interface ApiClientInterface {
       languages: string[];
       certifications: string[];
       position?: string;
-      commissionRate?: number;
+      /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
+      commissionRate?: number | null;
+      /** "Comisión de productos": the same rules. */
+      productCommissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
     }>,
   ): Promise<Professional>;
-  deleteProfessional(id: string): Promise<void>;
+  deleteProfessional(id: string): Promise<HistoryDeleteResult>;
   changeProfessionalPassword(
     professionalId: string,
     data: { newPassword: string },
@@ -1491,7 +2314,10 @@ export interface ApiClientInterface {
     professionalId: string,
     serviceId: string,
     date: string,
+    professionalIds?: string[],
+    locationId?: string,
   ): Promise<{ time: string; isAvailable: boolean }[]>;
+  getBookingWindow(tenantId: string, serviceId: string): Promise<{ maxAdvanceDays: number; lastDay: string }>;
   getNotifications(params?: {
     limit?: number;
     offset?: number;
@@ -1506,45 +2332,11 @@ export interface ApiClientInterface {
   updateNotificationPreferences(
     preferences: Partial<NotificationPreferences>,
   ): Promise<NotificationPreferences>;
-  // Client notifications (for salon site)
-  getClientNotificationPreferences(clientId: string): Promise<any>;
-  updateClientNotificationPreferences(
-    clientId: string,
-    preferences: any,
-  ): Promise<any>;
-  updateMyProfile(clientId: string, data: any): Promise<any>;
-  getMyProfile(): Promise<MyClientProfile>;
-  getMyMarketingConsent(): Promise<MarketingConsentState>;
-  setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
-  getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState>;
-  setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState>;
-  getClientNotifications(
-    clientId: string,
-    params?: {
-      limit?: number;
-      offset?: number;
-      unreadOnly?: boolean;
-      type?: string;
-    },
-  ): Promise<{ data: Notification[]; total: number; unreadCount: number }>;
-  getClientUnreadNotificationCount(
-    clientId: string,
-  ): Promise<{ count: number }>;
-  markClientNotificationAsRead(
-    clientId: string,
-    id: string,
-  ): Promise<Notification>;
-  markAllClientNotificationsAsRead(
-    clientId: string,
-  ): Promise<{ success: boolean; count: number }>;
-  archiveClientNotification(clientId: string, id: string): Promise<void>;
 
   // Payments
-  getPayments(params?: {
-    tenantId?: string;
-    clientId?: string;
-    appointmentId?: string;
-    status?: string;
+  getPayments(params?: PaymentFilters & {
+    page?: number;
+    limit?: number;
     sortBy?: string;
     sortOrder?: "asc" | "desc";
   }): Promise<{
@@ -1560,21 +2352,12 @@ export interface ApiClientInterface {
   getTodayPayments(): Promise<any[]>;
   deletePayment(id: string): Promise<void>;
   createPayment(data: CreatePaymentDto): Promise<Payment>;
-  updatePaymentStatus(id: string, status: string): Promise<Payment>;
+  refundPayment(id: string, body: PaymentRefundBody): Promise<PaymentRefundResult>;
+  getPaymentRefundLines(id: string): Promise<PaymentRefundLines>;
   getPaymentByAppointment(appointmentId: string): Promise<Payment[]>;
-  processDeposit(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment>;
-  collectBalance(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment>;
   getPaymentByClient(clientId: string): Promise<Payment[]>;
-  getPaymentSummary(tenantId: string): Promise<PaymentSummary>;
-  confirmPayment(paymentIntentId: string): Promise<Payment>;
+  getPaymentSummary(filters?: PaymentFilters): Promise<PaymentSummary>;
+  downloadPaymentsCsv(filters?: PaymentFilters & { locationId?: string | null }): Promise<{ blob: Blob; filename: string }>;
   // Stripe Settings
   getStripeSettings(): Promise<StripeSettings>;
   updateStripeSettings(
@@ -1584,9 +2367,14 @@ export interface ApiClientInterface {
 
   // Subscriptions
   getCurrentSubscription(): Promise<Subscription | null>;
+  getSubscriptionContext(): Promise<SubscriptionContext | null>;
+  getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatus>;
   createSubscriptionCheckout(plan: string): Promise<{ url: string }>;
   changeSubscriptionPlan(plan: string): Promise<Subscription>;
-  cancelSubscription(immediately?: boolean): Promise<Subscription>;
+  cancelSubscription(): Promise<Subscription>;
+  undoCancelSubscription(): Promise<{ status: string; cancelAt: null }>;
+  getPlanCheck(plan: string): Promise<{ plan: string; blockers: PlanLimitBlocker[] }>;
+  updateSubscriptionLocations(locationCount: number): Promise<{ subscriptionId: string; locationCount: number }>;
   getSubscriptionInvoices(limit?: number): Promise<SubscriptionInvoice[]>;
   getBillingPortalUrl(): Promise<{ url: string }>;
   getSubscriptionUsage(): Promise<SubscriptionUsage>;
@@ -1602,17 +2390,34 @@ export interface ApiClientInterface {
   // P2A-receptionist-v2 â€” AI usage counter for the billing dashboard.
   getAiUsage(): Promise<{ used: number; cap: number | null; resetsAt: string | null }>;
 
-  // P2A-receptionist-v2 â€” message bundles (metered WhatsApp marketing + SMS).
-  getMessageBundlesBalance(): Promise<MessageBundlesBalance>;
-
   // Client Wallet
   getClientWallet(clientId: string): Promise<ClientWallet>;
+  depositToWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
+  withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown>;
 
   // POS
   getPosServices(): Promise<any[]>;
   getPosClients(search?: string): Promise<any[]>;
   getPosDashboard(date?: string): Promise<any>;
-  posCheckout(data: any): Promise<{ orderId: string }>;
+  posCheckout(data: any): Promise<PosSale>;
+  posQuote(data: any): Promise<PosQuote>;
+  getPosSaleProducts(search?: string): Promise<PosSaleProduct[]>;
+  getPosReceipt(saleId: string): Promise<PosReceipt>;
+  getPosSettings(): Promise<PosSettings>;
+  savePosSettings(settings: PosSettings): Promise<PosSettings>;
+  // The cash drawer (arqueo)
+  getCurrentCashSession(): Promise<CashSessionCurrent>;
+  openCashSession(body: { openingFloatCents: number; notes?: string }): Promise<CashSessionView>;
+  addCashMovement(
+    sessionId: string,
+    body: { type: CashMovementType; amountCents: number; reason: string },
+  ): Promise<CashMovementRow>;
+  closeCashSession(
+    sessionId: string,
+    body: { countedCashCents: number; breakdown?: Record<string, number>; notes?: string },
+  ): Promise<CashSessionView>;
+  getCashSessions(params?: { from?: string; to?: string; page?: number; limit?: number }): Promise<CashSessionList>;
+  getCashSession(sessionId: string): Promise<CashSessionView>;
   // Products
   getProducts(params?: {
     category?: string;
@@ -1622,7 +2427,7 @@ export interface ApiClientInterface {
   getProduct(id: string): Promise<any>;
   createProduct(data: any): Promise<any>;
   updateProduct(id: string, data: any): Promise<any>;
-  deleteProduct(id: string): Promise<void>;
+  deleteProduct(id: string): Promise<{ deleted?: boolean; deactivated?: boolean } | void>;
   getProductCategories(): Promise<any[]>;
   createProductCategory(data: any): Promise<any>;
   getInventoryTransactions(params?: {
@@ -1647,13 +2452,22 @@ export interface ApiClientInterface {
     serviceId: string;
     paymentMethod: string;
     clientId?: string;
-  }): Promise<{ id: string }>;
+    saleId?: string;
+    /** Who did the service (its commission). */
+    professionalId?: string;
+  }): Promise<PosSale>;
 
   // Email Campaigns
   getEmailCampaigns(
     status?: string,
     campaignType?: string,
+    archived?: boolean,
   ): Promise<EmailCampaign[]>;
+  getEmailCampaignAudience(): Promise<EmailCampaignAudience>;
+  archiveEmailCampaign(id: string): Promise<EmailCampaign>;
+  unarchiveEmailCampaign(id: string): Promise<EmailCampaign>;
+  unscheduleEmailCampaign(id: string): Promise<EmailCampaign>;
+  retryFailedEmailCampaign(id: string): Promise<SendEmailCampaignResult>;
   getEmailCampaign(id: string): Promise<EmailCampaign>;
   getEmailCampaignRecipients(id: string): Promise<any[]>;
   createEmailCampaign(data: CreateCampaignDto): Promise<EmailCampaign>;
@@ -1668,9 +2482,12 @@ export interface ApiClientInterface {
     scheduledAt: string,
   ): Promise<EmailCampaign>;
   sendEmailCampaignNow(id: string): Promise<SendEmailCampaignResult>;
-  addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any>;
+  sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult>;
+  addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult>;
   getEmailCampaignAnalytics(id: string): Promise<EmailCampaignAnalytics>;
   getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus>;
+  getEmailMarketingQuota(): Promise<EmailMarketingQuota>;
+  buyEmailPack(): Promise<{ url: string }>;
   getEmailCampaignTemplates(): Promise<EmailCampaignTemplate[]>;
   getEmailCampaignTemplate(id: string): Promise<EmailCampaignTemplate>;
   createEmailCampaignTemplate(
@@ -1709,6 +2526,7 @@ export interface ApiClientInterface {
   ): Promise<RebookingConfig>;
   getRebookingPrediction(clientId: string): Promise<ClientCadence | null>;
   getRebookingLog(clientId: string): Promise<RebookingReminder[]>;
+  getRebookingTenantLog(limit?: number): Promise<RebookingTenantLog>;
   optOutClientRebooking(clientId: string): Promise<{ ok: boolean }>;
   recomputeClientCadence(clientId: string): Promise<{ ok: boolean }>;
 
@@ -1737,17 +2555,40 @@ export interface ApiClientInterface {
       taxRate: number;
       productId?: string;
       serviceId?: string;
+      /**
+       * The unit price already includes the tax (the salon's pricesIncludeTax).
+       * Left out, the server adds the tax on top.
+       */
+      taxIncluded?: boolean;
     }>;
     notes?: string;
   }): Promise<{ id: string }>;
+  /** A page of GET /invoices (lib/invoice-list.ts builds the query and reads the answer). */
+  listInvoicesPage(query: Record<string, string>): Promise<unknown>;
   cancelInvoice(id: string, reason: string): Promise<Invoice>;
+  /** A rectificativa of the invoice (series R): the whole of it without lines. */
+  rectifyInvoice(
+    id: string,
+    body: {
+      reason: string;
+      lines?: Array<
+        | { originalLineId: string; quantity: number }
+        | { description: string; quantity: number; unitPriceCents: number; taxRate: number; taxIncluded: boolean }
+      >;
+    },
+  ): Promise<{ id: string }>;
+  /** Emails the invoice's PDF to its client, or to `to`. */
+  emailInvoice(id: string, to?: string): Promise<{ sent: boolean; to: string }>;
+  /**
+   * The invoice's PDF or fiscal XML, fetched with the session's token. The
+   * API's file name is not readable cross-origin: `filename` names the file.
+   */
+  downloadInvoiceFile(id: string, kind: "pdf" | "xml", filename?: string): Promise<{ blob: Blob; filename: string }>;
   resendFiscal(id: string): Promise<Invoice>;
   generateInvoiceFromOrder(orderId: string): Promise<{ id: string } | null>;
   generateInvoiceFromAppointment(
     appointmentId: string,
   ): Promise<{ id: string } | null>;
-  getInvoicePdfUrl(id: string): string;
-  getInvoiceXmlUrl(id: string): string;
 
   // P2A â€” Fiscal settings
   getFiscalSettings(): Promise<FiscalSettings>;
@@ -1759,6 +2600,7 @@ export interface ApiClientInterface {
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
+    pricesIncludeTax?: boolean;
     /** Emitter NIF/CIF/NIE â€” mirrored to Tenant.taxId on the backend. */
     tenantNif?: string;
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
@@ -1767,13 +2609,14 @@ export interface ApiClientInterface {
 
   // P2A â€” Certificates
   listFiscalCertificates(): Promise<FiscalCertificate[]>;
+  /** The .p12 / .pfx file as base64 and its password (UploadCertificateDto). */
   uploadFiscalCertificate(input: {
     alias: string;
-    /** The .p12 / .pfx file, base64. */
+    provider: "p12";
     pkcs12Base64: string;
     passphrase: string;
     certificateType?: "personal" | "seal";
-  }): Promise<{ id: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }>;
+  }): Promise<{ id: string; fingerprint: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }>;
   getVerifactuStatus(): Promise<VerifactuStatus>;
   getVerifactuDeclaration(): Promise<VerifactuDeclaration>;
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
@@ -1800,7 +2643,7 @@ export interface ApiClientInterface {
 
   // Appointments
   createAppointmentByStaff(
-    appointment: CreateAppointmentDto,
+    appointment: StaffBookingRequest,
   ): Promise<Appointment>;
 }
 
@@ -1821,6 +2664,9 @@ class ApiClient implements ApiClientInterface {
 
     const response = await fetch(url, {
       headers,
+      // The refresh token is an httpOnly cookie on the API's host: sign-in
+      // sets it and logout clears it only if the request carries credentials.
+      credentials: "include",
       ...options,
     });
 
@@ -1830,7 +2676,12 @@ class ApiClient implements ApiClientInterface {
     // navigated away from the form. See isCredentialEndpoint.
     if (response.status === 401 && isCredentialEndpoint(endpoint)) {
       const errorData = await response.json().catch(() => ({}));
-      throw new ApiError(errorData.message || "Invalid credentials", 401);
+      // The code says when the sign-in needs the captcha next (CAPTCHA_REQUIRED).
+      throw new ApiError(
+        errorData.message || "Email o contraseña incorrectos.",
+        401,
+        typeof errorData.code === "string" ? errorData.code : undefined,
+      );
     }
 
     if (response.status === 401 && retryCount === 0) {
@@ -1848,7 +2699,7 @@ class ApiClient implements ApiClientInterface {
         // Refresh failed, redirect to login
         removeToken();
       }
-      const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      const userJson = typeof window !== "undefined" ? authStorage().getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
       const isClient = user?.role === "client";
@@ -1856,18 +2707,26 @@ class ApiClient implements ApiClientInterface {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
         // A client is signed out where they are (see loginRedirectTarget).
-        if (isClient) localStorage.removeItem("user");
+        if (isClient) authStorage().removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
-        if (target) window.location.href = target;
+        // A support tab whose session ended (2-hour cap, the console signed
+        // out everywhere): it says so, and never falls back to the console's
+        // session (audit 8, C10).
+        if (supportTab()) {
+          endSupportTab();
+          window.location.href = "/login?support_ended=1";
+        } else {
+          const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
+          if (target) window.location.href = target;
+        }
       }
       // Throw a recognisable error so callers don't try to parse the
       // (already empty) body.
       throw new Error("Unauthorized");
     } else if (response.status === 401) {
       removeToken();
-      const userJson = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+      const userJson = typeof window !== "undefined" ? authStorage().getItem("user") : null;
       const user = userJson ? JSON.parse(userJson) : null;
       const isSaasUser = user?.role === "saas_owner";
       const isClient = user?.role === "client";
@@ -1875,11 +2734,19 @@ class ApiClient implements ApiClientInterface {
         // Clear SaaS user cookie
         document.cookie = "saas_user=; path=/; max-age=0";
         // A client is signed out where they are (see loginRedirectTarget).
-        if (isClient) localStorage.removeItem("user");
+        if (isClient) authStorage().removeItem("user");
         // null when we are already on that login page -- navigating there
         // again would reload it and loop. See loginRedirectTarget.
-        const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
-        if (target) window.location.href = target;
+        // A support tab whose session ended (2-hour cap, the console signed
+        // out everywhere): it says so, and never falls back to the console's
+        // session (audit 8, C10).
+        if (supportTab()) {
+          endSupportTab();
+          window.location.href = "/login?support_ended=1";
+        } else {
+          const target = loginRedirectTarget(window.location.pathname, isSaasUser, isClient);
+          if (target) window.location.href = target;
+        }
       }
       throw new Error("Unauthorized");
     }
@@ -1890,12 +2757,29 @@ class ApiClient implements ApiClientInterface {
       // offending field: ["website must be a URL address"]. Passed straight to
       // Error it was coerced to a comma-joined blob, so a form could report a
       // 400 without naming the field that caused it. Joining as sentences is
-      // what turns "Failed to update salon" into something actionable.
-      const raw = errorData.message;
-      const message = Array.isArray(raw)
-        ? raw.join(". ")
-        : raw || `API Error: ${response.status} ${response.statusText}`;
-      throw new ApiError(message, response.status);
+      // what turns "Failed to update salon" into something actionable. A
+      // role refusal's English default ("Forbidden resource") is said in
+      // Spanish (api-error-message.ts).
+      const message = apiErrorMessage(
+        response.status,
+        errorData.message,
+        `API Error: ${response.status} ${response.statusText}`,
+      );
+      // Audit 8 D15: the console requires 2FA and the platform owner has
+      // none yet: everything but setting it up sends her to Seguridad.
+      if (
+        response.status === 403 &&
+        errorData.code === SAAS_OWNER_2FA_REQUIRED_CODE &&
+        typeof window !== "undefined" &&
+        window.location.pathname !== SAAS_OWNER_2FA_SETUP_PATH
+      ) {
+        window.location.href = `${SAAS_OWNER_2FA_SETUP_PATH}?2fa=required`;
+      }
+      throw new ApiError(
+        message,
+        response.status,
+        typeof errorData.code === "string" ? errorData.code : undefined,
+      );
     }
     return response.json();
   }
@@ -1905,32 +2789,102 @@ class ApiClient implements ApiClientInterface {
    * `tenantSlug`: pass it when a client signs in on a salon's site, so a
    * client of two salons lands in this one.
    */
-  async login(email: string, password: string, tenantSlug?: string): Promise<LoginResponse> {
-    const response = await this.request<{ user: any; tokens: any }>(
+  async login(
+    email: string,
+    password: string,
+    tenantSlug?: string,
+    /** Cloudflare Turnstile token, once the server asks for it (CAPTCHA_REQUIRED). */
+    turnstileToken?: string,
+  ): Promise<LoginResponse | TwoFactorRequired> {
+    const response = await this.request<{ user: any; tokens: any } | TwoFactorRequired>(
       "/auth/login",
       {
         method: "POST",
-        body: JSON.stringify({ email, password, ...(tenantSlug && { tenantSlug }) }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          ...(tenantSlug && { tenantSlug }),
+          ...(turnstileToken && { turnstileToken }),
+        }),
       },
     );
+    // Two-step verification: no session yet, the code comes next.
+    if (isTwoFactorRequired(response)) return response;
+    return this.startSession(response);
+  }
 
-    // Store both tokens
+  /** Second step of a sign-in with two-step verification. */
+  async verifyTwoFactor(challenge: string, code: string): Promise<LoginResponse> {
+    const response = await this.request<{ user: any; tokens: any }>("/auth/2fa/verify", {
+      method: "POST",
+      body: JSON.stringify({ challenge, code: code.trim() }),
+    });
+    return this.startSession(response);
+  }
+
+  async getTwoFactorStatus(): Promise<TwoFactorStatus> {
+    return this.request("/auth/2fa");
+  }
+
+  async setupTwoFactor(): Promise<{ secret: string; otpauthUrl: string }> {
+    return this.request("/auth/2fa/setup", { method: "POST" });
+  }
+
+  /**
+   * Turning two-step verification on or off ends every other session; this
+   * one continues with the new tokens the server answers with.
+   */
+  async enableTwoFactor(code: string): Promise<{ recoveryCodes: string[] }> {
+    const response = await this.request<{ recoveryCodes: string[]; user?: any; tokens?: any }>("/auth/2fa/enable", {
+      method: "POST",
+      body: JSON.stringify({ code: code.trim() }),
+    });
+    if (response.tokens?.accessToken) this.startSession({ user: response.user, tokens: response.tokens });
+    return { recoveryCodes: response.recoveryCodes };
+  }
+
+  async disableTwoFactor(password: string, code: string): Promise<TwoFactorStatus> {
+    const response = await this.request<TwoFactorStatus & { user?: any; tokens?: any }>("/auth/2fa/disable", {
+      method: "POST",
+      body: JSON.stringify({ password, code: code.trim() }),
+    });
+    if (response.tokens?.accessToken) this.startSession({ user: response.user, tokens: response.tokens });
+    return { enabled: response.enabled, recoveryCodesLeft: response.recoveryCodesLeft };
+  }
+
+  async regenerateRecoveryCodes(code: string): Promise<{ recoveryCodes: string[] }> {
+    return this.request("/auth/2fa/recovery-codes", { method: "POST", body: JSON.stringify({ code: code.trim() }) });
+  }
+
+  /**
+   * The signed-in panel user changes their own password. Every other session
+   * ends; this one continues with the new tokens the server answers with.
+   */
+  async changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+    const response = await this.request<{ user: any; tokens: any }>("/auth/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    this.startSession(response);
+  }
+
+  private startSession(response: { user: any; tokens: any }): LoginResponse {
+    // The refresh token came as an httpOnly cookie; only the access token is ours.
     setToken(response.tokens.accessToken);
-    setRefreshToken(response.tokens.refreshToken);
+    removeRefreshToken();
     scheduleProactiveRefresh(response.tokens.accessToken);
 
     return {
       accessToken: response.tokens.accessToken,
-      refreshToken: response.tokens.refreshToken,
       user: response.user,
     };
   }
 
   /** Emails a reset link if the address has an account (same answer either way). */
-  async forgotPassword(email: string, tenantSlug?: string): Promise<{ message: string }> {
+  async forgotPassword(email: string, tenantSlug?: string, turnstileToken?: string): Promise<{ message: string }> {
     return this.request("/auth/forgot-password", {
       method: "POST",
-      body: JSON.stringify({ email, ...(tenantSlug && { tenantSlug }) }),
+      body: JSON.stringify({ email, ...(tenantSlug && { tenantSlug }), ...(turnstileToken && { turnstileToken }) }),
     });
   }
 
@@ -1940,6 +2894,40 @@ class ApiClient implements ApiClientInterface {
       method: "POST",
       body: JSON.stringify({ token, password }),
     });
+  }
+
+  /**
+   * Confirms an email address with the token from the welcome email. The
+   * answer is { verified: false } for an unknown, used or expired token
+   * rather than an error, so the server never says which.
+   */
+  async verifyEmail(token: string): Promise<{ verified: boolean }> {
+    return this.request(`/auth/verify-email?token=${encodeURIComponent(token)}`);
+  }
+
+  /** Whether the signed-in user's email is confirmed (the panel's notice). */
+  async getEmailVerification(): Promise<{
+    verified: boolean;
+    email: string | null;
+    /** The salon has an owner with a confirmed email (campaigns, mass sends and Stripe need it). Absent from older servers. */
+    salonVerified?: boolean;
+  }> {
+    return this.request("/auth/email-verification");
+  }
+
+  /** D3: whether the owner must accept the current terms (salons from before, or a new version). */
+  async getTermsStatus(): Promise<{ required: boolean; version: string; lastUpdated: string }> {
+    return this.request("/auth/terms");
+  }
+
+  /** D3: "He leído y acepto los términos actualizados". */
+  async acceptTerms(): Promise<{ accepted: true; version: string }> {
+    return this.request("/auth/terms/accept", { method: "POST", body: JSON.stringify({ accept: true }) });
+  }
+
+  /** A new confirmation link by email, for the signed-in user (3 an hour). */
+  async resendVerificationEmail(): Promise<{ sent: boolean; alreadyVerified: boolean }> {
+    return this.request("/auth/resend-verification", { method: "POST" });
   }
 
   /**
@@ -1962,8 +2950,16 @@ class ApiClient implements ApiClientInterface {
   }
 
   private async doRefreshAccessToken(): Promise<boolean> {
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) return false;
+    // Only a browser signed in before the cookie existed still has one here;
+    // the server accepts it once more and moves it to the cookie.
+    const legacyRefreshToken = getRefreshToken();
+    const isClient = (() => {
+      try {
+        return JSON.parse(authStorage().getItem("user") || "null")?.role === "client";
+      } catch {
+        return false;
+      }
+    })();
 
     try {
       // Use raw fetch here â€” NOT `this.request` â€” to bypass the 401
@@ -1974,25 +2970,54 @@ class ApiClient implements ApiClientInterface {
       const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
+        credentials: "include",
+        body: JSON.stringify({
+          ...(legacyRefreshToken && { refreshToken: legacyRefreshToken }),
+          // A client on a salon's site has its own cookie, apart from the panel's.
+          ...(isClient && { kind: "client" }),
+          // A support tab renews from its salon's own cookie (audit 8, C10).
+          ...(supportTab() && { kind: "support", tenantId: supportTab()!.tenantId }),
+        }),
       });
 
-      if (!response.ok) return false;
+      if (!response.ok) {
+        if (response.status === 401) removeRefreshToken();
+        return false;
+      }
       const data = (await response.json()) as {
         accessToken?: string;
-        refreshToken?: string;
         expiresIn?: number;
         tokenType?: string;
       };
-      if (!data.accessToken || !data.refreshToken) return false;
+      if (!data.accessToken) return false;
 
       setToken(data.accessToken);
-      setRefreshToken(data.refreshToken);
+      removeRefreshToken();
       scheduleProactiveRefresh(data.accessToken, data.expiresIn);
       return true;
     } catch {
       return false;
     }
+  }
+
+  /** D4: whether a web address can be used for a new salon (signup form; public). */
+  async checkWebAddressForSignup(slug: string): Promise<WebAddressAvailability> {
+    return this.request(`/web-address/availability?slug=${encodeURIComponent(slug)}`);
+  }
+
+  /** D4: Ajustes > Web: the salon's address and whether it can still be changed (owner). */
+  async getWebAddress(): Promise<WebAddressInfo> {
+    return this.request("/web-address");
+  }
+
+  /** D4: whether this salon could move to that address (owner). */
+  async checkWebAddress(slug: string): Promise<WebAddressAvailability> {
+    return this.request(`/web-address/check?slug=${encodeURIComponent(slug)}`);
+  }
+
+  /** D4: the once-only change; the old address redirects for 12 months. */
+  async changeWebAddress(slug: string): Promise<{ slug: string; previous: string; redirectsUntil: string }> {
+    return this.request("/web-address", { method: "PATCH", body: JSON.stringify({ slug }) });
   }
 
   async register(data: {
@@ -2003,6 +3028,12 @@ class ApiClient implements ApiClientInterface {
     ownerName: string;
     language?: string;
     acceptTerms: boolean;
+    /** The browser's IANA zone, a first guess at the salon's. */
+    timezone?: string;
+    /** Cloudflare Turnstile token, when the captcha is configured. */
+    turnstileToken?: string;
+    /** D4: the web address she chose; absent, the server makes one from the name. */
+    slug?: string;
   }): Promise<LoginResponse> {
     /*
      * Signing up did not log anyone in.
@@ -2034,26 +3065,32 @@ class ApiClient implements ApiClientInterface {
     );
 
     setToken(response.tokens.accessToken);
-    setRefreshToken(response.tokens.refreshToken);
+    removeRefreshToken();
     scheduleProactiveRefresh(response.tokens.accessToken);
 
     return {
       accessToken: response.tokens.accessToken,
-      refreshToken: response.tokens.refreshToken,
       user: response.user,
     };
   }
 
+  /**
+   * Signs this browser out on the server too: it revokes the session and
+   * clears the refresh cookie. Emptying localStorage alone is not enough any
+   * more, since the next page load would renew the session from the cookie.
+   */
   async logout(): Promise<void> {
-    removeToken();
+    try {
+      if (getToken()) await this.request("/auth/logout", { method: "POST" });
+    } catch {
+      // Offline or already signed out: the local tokens still go.
+    } finally {
+      removeToken();
+      removeRefreshToken();
+    }
   }
 
   // Appointments
-  /** The signed-in client's own appointments (GET /appointments is staff-only). */
-  async getMyAppointments(): Promise<Appointment[]> {
-    return this.request<Appointment[]>("/appointments/mine");
-  }
-
   async getAppointments(filters?: {
     tenantId?: string;
     professionalId?: string;
@@ -2094,7 +3131,7 @@ class ApiClient implements ApiClientInterface {
   }
 
   async createAppointmentByStaff(
-    data: CreateAppointmentDto,
+    data: StaffBookingRequest,
   ): Promise<Appointment> {
     return this.request<Appointment>("/appointments/staff", {
       method: "POST",
@@ -2104,7 +3141,7 @@ class ApiClient implements ApiClientInterface {
 
   async updateAppointment(
     id: string,
-    data: Partial<CreateAppointmentDto>,
+    data: AppointmentUpdate,
   ): Promise<Appointment> {
     return this.request<Appointment>(`/appointments/${id}`, {
       method: "PATCH",
@@ -2112,11 +3149,31 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  async getBookingLocations(): Promise<BookingLocations> {
+    return this.request<BookingLocations>("/appointments/booking-locations");
+  }
+
   async cancelAppointment(id: string, reason?: string): Promise<Appointment> {
     // PUT: the backend route is `@Put(":id/cancel")`; POST was a 404.
     return this.request<Appointment>(`/appointments/${id}/cancel`, {
       method: "PUT",
       body: JSON.stringify({ reason }),
+    });
+  }
+
+  // Completing and marking a no-show have their own routes, like cancelling:
+  // they set off the invoice, the cadence and the notices, which a PATCH of
+  // `status` used to skip (the server now routes that the same way too).
+  async completeAppointment(id: string, notes?: string): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/complete`, {
+      method: "PUT",
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async markAppointmentNoShow(id: string): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/no-show`, {
+      method: "PUT",
     });
   }
 
@@ -2245,6 +3302,19 @@ class ApiClient implements ApiClientInterface {
     );
   }
 
+  /**
+   * Drags one service of a multi-service appointment: the whole visit, or
+   * only this service (owners and managers). The server checks every
+   * professional's agenda and that the client is never in two places.
+   */
+  async moveAppointmentService(
+    id: string,
+    /** minutesDelta: how far it moves, not a clock time (see MoveVisitServiceDto). */
+    data: { scope: "visit" | "service"; minutesDelta: number; professionalId?: string },
+  ): Promise<{ appointmentId: string; moved: number; scheduledDate?: string; scheduledTime?: string; duration?: number }> {
+    return this.request(`/appointment-services/${id}/move`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
   async updateAppointmentServiceTiming(
     id: string,
     scheduledStart: string,
@@ -2278,6 +3348,17 @@ class ApiClient implements ApiClientInterface {
     return this.request<Client[]>(`/clients${params}`);
   }
 
+  /** One page of the clients list, searched and filtered by the server. */
+  async getClientsPage(params: ClientListParams): Promise<ClientPage> {
+    const query = new URLSearchParams({ page: String(params.page) });
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    if (params.q?.trim()) query.set("q", params.q.trim());
+    if (params.status) query.set("status", params.status);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.dir) query.set("dir", params.dir);
+    return this.request<ClientPage>(`/clients?${query.toString()}`);
+  }
+
   async filterClients(filters: {
     gender?: string;
     minAge?: number;
@@ -2309,54 +3390,60 @@ class ApiClient implements ApiClientInterface {
     return this.request<Client[]>(`/clients/filter?${params.toString()}`);
   }
 
-  async getClient(id: string): Promise<Client> {
-    return this.request<Client>(`/admin/clients/${id}`);
+  /**
+   * A client's file. /clients/:id, not /admin/clients/:id: staff may read
+   * the clients they serve (the server answers 404 for the others).
+   */
+  async getClient(id: string): Promise<ClientDetail> {
+    return this.request<ClientDetail>(`/clients/${id}`);
   }
 
-  async createClient(data: {
-    tenantId: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    dateOfBirth?: string;
-    gender?: "male" | "female" | "other" | "prefer_not_to_say";
-    profileImage?: string;
-  }): Promise<Client> {
+  /** The tenant is taken from the token; a `tenantId` here is ignored. */
+  async createClient(data: CreateClientPayload & { tenantId?: string }): Promise<Client> {
     return this.request<Client>("/clients", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
+  /**
+   * Owner/admin edit through /admin/clients/:id. Staff go through
+   * /clients/:id, which lets them edit the clients they serve (not the
+   * email or the status).
+   */
   async updateClient(
     id: string,
-    data: Partial<{
-      firstName: string;
-      lastName: string;
-      email?: string;
-      phone?: string;
-      dateOfBirth?: string;
-      gender?: "male" | "female" | "other" | "prefer_not_to_say";
-      profileImage?: string;
-      preferredLanguage?: string;
-      preferredServices?: string[];
-      preferredProfessionals?: string[];
-      preferredTimes?: string[];
-      communicationPreferences?: Record<string, any>;
-      status: "active" | "inactive" | "blocked";
-      notes?: string;
-    }>,
+    data: UpdateClientPayload,
+    options: { asStaff?: boolean } = {},
   ): Promise<Client> {
-    return this.request<Client>(`/admin/clients/${id}`, {
+    const path = options.asStaff ? `/clients/${id}` : `/admin/clients/${id}`;
+    return this.request<Client>(path, {
       method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
-  async deleteClient(id: string): Promise<void> {
-    return this.request<void>(`/admin/clients/${id}`, {
+  async deleteClient(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/admin/clients/${id}`, {
       method: "DELETE",
+    });
+  }
+
+  /** Owner/admin: the salon's clients matching a name, email or phone (10 at most). */
+  async searchClientsForManager(query: string): Promise<ClientSearchRow[]> {
+    const params = new URLSearchParams({ search: query, limit: "10", page: "1" });
+    const res = await this.request<{ data: ClientSearchRow[] }>(`/admin/clients?${params.toString()}`);
+    return res.data ?? [];
+  }
+
+  /**
+   * Owner/admin: everything `sourceClientId` has moves to `targetId`, and
+   * the source record is deleted (see the backend's client-merge.service).
+   */
+  async mergeClient(targetId: string, sourceClientId: string): Promise<ClientMergeResult> {
+    return this.request<ClientMergeResult>(`/admin/clients/${targetId}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ sourceClientId }),
     });
   }
 
@@ -2370,32 +3457,14 @@ class ApiClient implements ApiClientInterface {
     return this.request<Service>(`/services/${id}`);
   }
 
-  async createService(data: {
-    name: string;
-    description?: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-  }): Promise<Service> {
+  async createService(data: ServiceWrite): Promise<Service> {
     return this.request<Service>("/services", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async updateService(
-    id: string,
-    data: Partial<{
-      name: string;
-      description?: string;
-      category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-      duration: number;
-      price: number;
-      currency: string;
-      isActive: boolean;
-    }>,
-  ): Promise<Service> {
+  async updateService(id: string, data: Partial<ServiceWrite>): Promise<Service> {
     // PUT: the backend route is `@Put(":id")`; PATCH was a 404, so no
     // service could be edited or toggled from the dashboard.
     return this.request<Service>(`/services/${id}`, {
@@ -2404,8 +3473,8 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteService(id: string): Promise<void> {
-    return this.request<void>(`/services/${id}`, {
+  async deleteService(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/services/${id}`, {
       method: "DELETE",
     });
   }
@@ -2416,21 +3485,9 @@ class ApiClient implements ApiClientInterface {
     return this.request<Professional[]>(`/professionals${params}`);
   }
 
-  // Public tenant resolution (no auth required)
-  async getPublicTenant(slug: string): Promise<{
-    id: string;
-    name: string;
-    slug: string;
-    logo: string | null;
-    address: string | null;
-    city: string | null;
-    state: string | null;
-    country: string | null;
-    phone: string | null;
-    email: string | null;
-    description: string | null;
-  }> {
-    return this.request(`/public-site/tenant/${encodeURIComponent(slug)}`);
+  // Everything the salon's public page shows, opening hours included (no auth).
+  async getPublicSalonPage(slug: string): Promise<PublicSalonPage> {
+    return this.request<PublicSalonPage>(`/public-site/page/${encodeURIComponent(slug)}`);
   }
 
   // The salon's own domain (bring-your-own; nothing is bought here).
@@ -2454,20 +3511,187 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Professionals - Admin routes
-  async getProfessionals(tenantId?: string): Promise<Professional[]> {
-    const params = tenantId ? `?tenantId=${tenantId}` : "";
+  /**
+   * The whole team (the salon is the caller's, from the token; `tenantId`
+   * is ignored). Without a limit the server answered the first 10, so an
+   * 11th professional was missing from every screen that lists the team.
+   */
+  async getProfessionals(_tenantId?: string): Promise<Professional[]> {
     const response = await this.request<{
       data: Professional[];
       total: number;
       page: number;
       limit: number;
       totalPages: number;
-    }>(`/admin/professionals${params}`);
+    }>(`/admin/professionals?limit=${MAX_TEAM_PAGE}`);
     return response.data;
   }
 
   async getProfessional(id: string): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`);
+  }
+
+  /** Deactivates a professional; allowed while the salon is read-only (D8). */
+  async deactivateProfessional(id: string): Promise<Professional> {
+    return this.request<Professional>(`/admin/professionals/${id}/deactivate`, { method: "POST" });
+  }
+
+  /** Appointments still to happen (today on) of a professional: what deactivating leaves to reassign. */
+  async getProfessionalUpcomingCount(id: string): Promise<{ count: number }> {
+    return this.request<{ count: number }>(`/admin/professionals/${id}/upcoming-appointments`);
+  }
+
+  // Time off and salon closures. The salon is the caller's, from the token.
+  async getTimeOff(
+    from: string,
+    to: string,
+    professionalId?: string,
+    opts: { includePending?: boolean } = {},
+  ): Promise<TimeOff[]> {
+    const params = new URLSearchParams({ from, to });
+    if (professionalId) params.set("professionalId", professionalId);
+    // Owner and admin only; the server ignores it for staff.
+    if (opts.includePending) params.set("includePending", "true");
+    return this.request<TimeOff[]>(`/time-off?${params.toString()}`);
+  }
+
+  // The appointments a block would clash with; nothing is saved.
+  async previewTimeOff(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>("/time-off/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async createTimeOff(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>("/time-off", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteTimeOff(id: string): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/time-off/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  // The appointments an edit would clash with; nothing is saved. Who it is
+  // for is not editable, so the body never carries a professional.
+  async previewUpdateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateTimeOff(
+    id: string,
+    input: Omit<TimeOffInput, "professionalId">,
+  ): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+
+  // Appointments still booked inside approved time off and closures, from today on.
+  async getUpcomingTimeOffConflicts(): Promise<{ count: number; appointments: UpcomingTimeOffConflict[] }> {
+    return this.request<{ count: number; appointments: UpcomingTimeOffConflict[] }>("/time-off/conflicts");
+  }
+
+  // An appointment time off caught: who is free to take it (then PATCH it
+  // with their professionalId), or cancel it and tell the client with a
+  // link to book again (its slot is not offered to the wait list).
+  async getFreeProfessionalsForAppointment(id: string): Promise<FreeProfessionals> {
+    return this.request<FreeProfessionals>(`/appointments/${id}/free-professionals`);
+  }
+
+  async cancelAppointmentForTimeOff(id: string, reason?: string | null): Promise<Appointment> {
+    return this.request<Appointment>(`/appointments/${id}/cancel-for-time-off`, {
+      method: "PUT",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  }
+
+  // Time off requests. A professional asks for their own (who it is for comes
+  // from the session); the owner or a manager approves or rejects it.
+  async getMyTimeOff(): Promise<TimeOff[]> {
+    return this.request<TimeOff[]>("/time-off/requests/mine");
+  }
+
+  async previewTimeOffRequest(input: TimeOffInput): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>("/time-off/requests/preview", {
+      method: "POST",
+      body: JSON.stringify(requestBody(input)),
+    });
+  }
+
+  async createTimeOffRequest(input: TimeOffInput): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>("/time-off/requests", {
+      method: "POST",
+      body: JSON.stringify(requestBody(input)),
+    });
+  }
+
+  async cancelTimeOffRequest(id: string): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/time-off/requests/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async getTimeOffRequests(status: TimeOffStatus = "pending"): Promise<TimeOff[]> {
+    return this.request<TimeOff[]>(`/time-off/requests?status=${encodeURIComponent(status)}`);
+  }
+
+  async getTimeOffRequestCount(): Promise<{ count: number }> {
+    return this.request<{ count: number }>("/time-off/requests/count");
+  }
+
+  // Conversaciones: the receptionist's conversations (owner and admins).
+  async getReceptionistInbox(filters: InboxFilters = {}): Promise<InboxPage> {
+    return this.request<InboxPage>(`/virtual-receptionist/inbox${inboxQuery(filters)}`);
+  }
+
+  async getReceptionistInboxAttentionCount(): Promise<{ count: number }> {
+    return this.request<{ count: number }>("/virtual-receptionist/inbox/attention-count");
+  }
+
+  async getReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}`);
+  }
+
+  /** The assistant stops answering in this conversation, on every channel. */
+  async pauseReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/pause`, { method: "POST" });
+  }
+
+  async resumeReceptionistConversation(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/resume`, { method: "POST" });
+  }
+
+  async markReceptionistConversationAttended(id: string): Promise<InboxConversation> {
+    return this.request<InboxConversation>(`/virtual-receptionist/inbox/${encodeURIComponent(id)}/attended`, { method: "POST" });
+  }
+
+  // Before approving a request: its clashes (409 when it overlaps other time off).
+  async previewApproveTimeOff(id: string): Promise<{ conflicts: TimeOffConflict[] }> {
+    return this.request<{ conflicts: TimeOffConflict[] }>(`/time-off/${encodeURIComponent(id)}/approve/preview`, {
+      method: "POST",
+    });
+  }
+
+  async approveTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }> {
+    return this.request<{ timeOff: TimeOff; conflicts: TimeOffConflict[] }>(
+      `/time-off/${encodeURIComponent(id)}/approve`,
+      { method: "POST", body: JSON.stringify(note ? { note } : {}) },
+    );
+  }
+
+  async rejectTimeOff(id: string, note?: string | null): Promise<{ timeOff: TimeOff }> {
+    return this.request<{ timeOff: TimeOff }>(`/time-off/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {}),
+    });
   }
 
   async createProfessional(data: {
@@ -2484,8 +3708,16 @@ class ApiClient implements ApiClientInterface {
     certifications?: string[];
     position?: string;
     commissionRate?: number;
+    productCommissionRate?: number;
     hireDate?: string;
     serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
+    workingHours?: WorkingHoursEntry[];
+    /** "Mostrar en la web"; left out: name and initial, no photo. */
+    webNameDisplay?: "full" | "initial" | "hidden";
+    webShowPhoto?: boolean;
   }): Promise<Professional> {
     return this.request<Professional>("/admin/professionals", {
       method: "POST",
@@ -2509,10 +3741,21 @@ class ApiClient implements ApiClientInterface {
       languages: string[];
       certifications: string[];
       position?: string;
-      commissionRate?: number;
+      /** 0 is a rate; null clears it (the salon default applies); left out keeps it. */
+      commissionRate?: number | null;
+      /** "Comisión de productos": the same rules. */
+      productCommissionRate?: number | null;
       hireDate?: string;
       isActive: boolean;
       serviceIds?: string[];
+    /** Multi-local: the locations they work at and the main one; left out keeps them. */
+    locationIds?: string[];
+    primaryLocationId?: string | null;
+      /** Owners and admins only; leave it out to keep the current schedule. */
+      workingHours: WorkingHoursEntry[];
+      /** "Mostrar en la web" and "Mostrar foto". */
+      webNameDisplay: "full" | "initial" | "hidden";
+      webShowPhoto: boolean;
     }>,
   ): Promise<Professional> {
     return this.request<Professional>(`/admin/professionals/${id}`, {
@@ -2521,10 +3764,22 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteProfessional(id: string): Promise<void> {
-    return this.request<void>(`/admin/professionals/${id}`, {
+  async deleteProfessional(id: string): Promise<HistoryDeleteResult> {
+    return this.request<HistoryDeleteResult>(`/admin/professionals/${id}`, {
       method: "DELETE",
     });
+  }
+
+  /** Gives a professional their own login, with a first password (also: a new one, or back after removal). */
+  async grantProfessionalAccess(professionalId: string, password: string): Promise<{ active: boolean; email: string }> {
+    return this.request(`/admin/professionals/${professionalId}/access`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  async revokeProfessionalAccess(professionalId: string): Promise<{ active: boolean }> {
+    return this.request(`/admin/professionals/${professionalId}/access`, { method: "DELETE" });
   }
 
   async changeProfessionalPassword(
@@ -2547,6 +3802,8 @@ class ApiClient implements ApiClientInterface {
     serviceId: string,
     date: string,
     professionalIds?: string[],
+    /** One of the salon's locations (multi-local): only who works there. */
+    locationId?: string,
   ): Promise<{ time: string; isAvailable: boolean }[]> {
     let endpoint = `/appointments/available-slots?tenantId=${tenantId}&serviceId=${serviceId}&date=${date}`;
 
@@ -2556,8 +3813,20 @@ class ApiClient implements ApiClientInterface {
     } else if (professionalId) {
       endpoint += `&professionalId=${professionalId}`;
     }
+    if (locationId) {
+      endpoint += `&locationId=${encodeURIComponent(locationId)}`;
+    }
 
     return this.request<{ time: string; isAvailable: boolean }[]>(endpoint);
+  }
+
+  /**
+   * Until which day a service can be booked online (public): the booking
+   * page stops its date picker there and says so for a later day.
+   */
+  async getBookingWindow(tenantId: string, serviceId: string): Promise<{ maxAdvanceDays: number; lastDay: string }> {
+    const q = new URLSearchParams({ tenantId, serviceId });
+    return this.request<{ maxAdvanceDays: number; lastDay: string }>(`/appointments/booking-window?${q.toString()}`);
   }
 
   // Notifications
@@ -2570,7 +3839,8 @@ class ApiClient implements ApiClientInterface {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.append("limit", params.limit.toString());
     if (params?.offset) searchParams.append("offset", params.offset.toString());
-    if (params?.unreadOnly) searchParams.append("unreadOnly", "true");
+    // The API filters on isRead (NotificationFilterDto).
+    if (params?.unreadOnly) searchParams.append("isRead", "false");
     if (params?.type) searchParams.append("type", params.type);
 
     const query = searchParams.toString();
@@ -2624,59 +3894,21 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  // Client notification preferences. The client is the one in the token;
-  // `clientId` is kept in the signature for the existing callers. These
-  // used to hit /clients/:id/notifications/preferences, which does not
-  // exist, so every load fell back to defaults and every save was lost.
-  async getClientNotificationPreferences(_clientId: string): Promise<any> {
-    return this.request<any>(`/client/notifications/preferences`);
+  /**
+   * Whether the signed-in owner/admin gets an email for each online booking
+   * and each cancellation a client makes herself (audit 7 D12). On unless
+   * she turned it off.
+   */
+  async getSalonBookingAlerts(): Promise<boolean> {
+    const res = await this.request<{ preferences?: Record<string, { email?: boolean }> }>("/notifications/preferences");
+    return res?.preferences?.[SALON_BOOKING_ALERT]?.email !== false;
   }
 
-  async updateClientNotificationPreferences(
-    _clientId: string,
-    preferences: any,
-  ): Promise<any> {
-    return this.request<any>(`/client/notifications/preferences`, {
-      method: "PUT",
-      body: JSON.stringify({ preferences }),
-    });
-  }
-
-  // The client in the token; `clientId` stays for existing callers. This
-  // used to PATCH /clients/:id, which does not exist.
-  async updateMyProfile(_clientId: string, data: any): Promise<any> {
-    return this.request<any>(`/clients/me`, {
+  /** Turns those emails on or off for the signed-in user only (merged, her other choices stay). */
+  async setSalonBookingAlerts(email: boolean): Promise<void> {
+    await this.request("/notifications/preferences", {
       method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  }
-
-  // The account page read /admin/clients/:id, which a client may not read,
-  // and fell back to what the browser kept since sign-in.
-  async getMyProfile(): Promise<MyClientProfile> {
-    return this.request<MyClientProfile>(`/clients/me`);
-  }
-
-  async getMyMarketingConsent(): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/marketing`);
-  }
-
-  async setMyMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/marketing`, {
-      method: "PUT",
-      body: JSON.stringify({ accepts }),
-    });
-  }
-
-  /** The signed-in client's choice about promotions by WhatsApp. */
-  async getMyWhatsAppMarketingConsent(): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`);
-  }
-
-  async setMyWhatsAppMarketingConsent(accepts: boolean): Promise<MarketingConsentState> {
-    return this.request<MarketingConsentState>(`/consent/me/whatsapp-marketing`, {
-      method: "PUT",
-      body: JSON.stringify({ accepts }),
+      body: JSON.stringify({ preferences: { [SALON_BOOKING_ALERT]: { email } } }),
     });
   }
 
@@ -2685,6 +3917,19 @@ class ApiClient implements ApiClientInterface {
     clientId: string,
   ): Promise<{ email: MarketingConsentState; whatsapp: MarketingConsentState }> {
     return this.request(`/consent/clients/${clientId}/marketing`);
+  }
+
+  /**
+   * Everything the salon holds about a client (RGPD arts. 15 and 20), as the
+   * JSON document to hand her. Owner / admin only.
+   */
+  async exportClientData(clientId: string): Promise<Record<string, unknown> & { generatedAt: string }> {
+    return this.request(`/admin/clients/${clientId}/export`);
+  }
+
+  /** Erase a client's personal data, keeping visits and invoices (RGPD art. 17). */
+  async anonymizeClient(clientId: string): Promise<{ ok: true }> {
+    return this.request(`/admin/clients/${clientId}/anonymize`, { method: "POST" });
   }
 
   /** The salon records a WhatsApp choice the client made in person. */
@@ -2699,60 +3944,40 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
-    return this.request<void>(`/clients/me/password`, {
-      method: "POST",
-      body: JSON.stringify({ currentPassword, newPassword }),
+  /**
+   * The salon writes down that the client does not want promotions by
+   * email. Only a refusal: the server never takes an acceptance from the salon.
+   */
+  async recordClientEmailMarketingRefusal(clientId: string): Promise<MarketingConsentState> {
+    return this.request<MarketingConsentState>(`/consent/clients/${clientId}/marketing`, {
+      method: "PUT",
+      body: JSON.stringify({ accepts: false }),
     });
   }
 
-  // Client Notifications (for salon site)
-  async getClientNotifications(
-    clientId: string,
-    params?: {
-      limit?: number;
-      offset?: number;
-      unreadOnly?: boolean;
-      type?: string;
-    },
-  ): Promise<{ data: Notification[]; total: number; unreadCount: number }> {
-    const searchParams = new URLSearchParams();
-    searchParams.append("clientId", clientId);
-    if (params?.limit) searchParams.append("limit", params.limit.toString());
-    if (params?.offset) searchParams.append("offset", params.offset.toString());
-    if (params?.unreadOnly) searchParams.append("unreadOnly", "true");
-    if (params?.type) searchParams.append("type", params.type);
-
-    const query = searchParams.toString();
-    return this.request<{
-      data: Notification[];
-      total: number;
-      unreadCount: number;
-    }>(`/client/notifications?${query}`);
+  /** How the client gets her appointment notices, for the client file. */
+  async getClientNotices(clientId: string): Promise<ClientNoticesState> {
+    return this.request<ClientNoticesState>(`/consent/clients/${clientId}/notices`);
   }
 
-  async getClientUnreadNotificationCount(
+  /**
+   * Turns channels of her appointment notices on or off. WhatsApp on needs
+   * `clientAsked`: the team member confirms she asked for it.
+   */
+  async setClientNotices(
     clientId: string,
-  ): Promise<{ count: number }> {
-    return this.request<{ count: number }>(
-      `/client/notifications/unread-count?clientId=${clientId}`,
-    );
-  }
-
-  async markClientNotificationAsRead(
-    clientId: string,
-    id: string,
-  ): Promise<Notification> {
-    return this.request<Notification>(
-      `/client/notifications/${id}/read?clientId=${clientId}`,
-      {
-        method: "PUT",
-      },
-    );
+    changes: Partial<Record<NoticeChannel, boolean>> & { clientAsked?: boolean },
+  ): Promise<ClientNoticesState> {
+    return this.request<ClientNoticesState>(`/consent/clients/${clientId}/notices`, {
+      method: "PUT",
+      body: JSON.stringify(changes),
+    });
   }
 
   async sendVirtualReceptionistMessage(data: {
     clientId: string;
+    /** The signed visitor id the previous answer issued (lib/chat-visitor.ts). */
+    visitorToken?: string;
     salonId: string;
     message: string;
     channel: "whatsapp" | "web";
@@ -2765,6 +3990,7 @@ class ApiClient implements ApiClientInterface {
     responseTime: number;
     requiresHandoff: boolean;
     intent: string;
+    visitorToken?: string;
   }> {
     return this.request("/virtual-receptionist/messages", {
       method: "POST",
@@ -2772,36 +3998,12 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async markAllClientNotificationsAsRead(
-    clientId: string,
-  ): Promise<{ success: boolean; count: number }> {
-    return this.request<{ success: boolean; count: number }>(
-      `/client/notifications/read-all?clientId=${clientId}`,
-      {
-        method: "PUT",
-      },
-    );
-  }
-
-  async archiveClientNotification(clientId: string, id: string): Promise<void> {
-    return this.request<void>(
-      `/client/notifications/${id}?clientId=${clientId}`,
-      {
-        method: "DELETE",
-      },
-    );
-  }
-
   // Payments
-  async getPayments(params?: {
-    tenantId?: string;
-    clientId?: string;
-    appointmentId?: string;
-    status?: string;
+  async getPayments(params?: PaymentFilters & {
+    page?: number;
+    limit?: number;
     sortBy?: string;
     sortOrder?: "asc" | "desc";
-    dateFrom?: string;
-    dateTo?: string;
   }): Promise<{
     payments: Payment[];
     pagination: {
@@ -2811,9 +4013,7 @@ class ApiClient implements ApiClientInterface {
       totalPages: number;
     };
   }> {
-    const query = new URLSearchParams(
-      params as Record<string, string>,
-    ).toString();
+    const query = paymentQuery(params ?? {});
     return this.request<{
       payments: Payment[];
       pagination: {
@@ -2825,17 +4025,19 @@ class ApiClient implements ApiClientInterface {
     }>(`/payments${query ? `?${query}` : ""}`);
   }
 
-  // Get today's payments for POS
-  // An array: PaymentsService.getTodayPayments returns the rows themselves.
-  // This was typed as { payments, totals }, which nothing returns.
   /** Signed ICS feed tokens for the caller's salon (owner/admin). */
-  async getIcsTokens(): Promise<{
-    salon: { slug: string; token: string };
-    professionals: Array<{ id: string; name: string; token: string }>;
-  }> {
+  async getIcsTokens(): Promise<IcsFeedTokens> {
     return this.request("/ics/tokens");
   }
 
+  /** Revokes every calendar link of the salon and returns the new ones. */
+  async rotateIcsTokens(): Promise<IcsFeedTokens> {
+    return this.request("/ics/tokens/rotate", { method: "POST" });
+  }
+
+  // Get today's payments for POS
+  // An array: PaymentsService.getTodayPayments returns the rows themselves.
+  // This was typed as { payments, totals }, which nothing returns.
   async getTodayPayments(): Promise<any[]> {
     return this.request<any[]>("/payments/today");
   }
@@ -2858,43 +4060,27 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async updatePaymentStatus(id: string, status: string): Promise<Payment> {
-    return this.request<Payment>(`/payments/${id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
+  /** Gives back all or part of a charge (owner/admin). No amount: all that is left (or what the lines are worth). */
+  async refundPayment(id: string, body: PaymentRefundBody): Promise<PaymentRefundResult> {
+    return this.request<PaymentRefundResult>(`/payments/${id}/refund`, {
+      method: "POST",
+      body: JSON.stringify(body),
     });
+  }
+
+  /** The lines of the till sale a payment paid, with what is left to give back of each (owner/admin). */
+  async getPaymentRefundLines(id: string): Promise<PaymentRefundLines> {
+    return this.request<PaymentRefundLines>(`/payments/${id}/refund-lines`);
   }
 
   async getPaymentByAppointment(appointmentId: string): Promise<Payment[]> {
     return this.request<Payment[]>(`/payments/appointment/${appointmentId}`);
   }
 
-  async processDeposit(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment> {
-    return this.request<Payment>(
-      `/payments/appointments/${appointmentId}/deposit`,
-      {
-        method: "POST",
-        body: JSON.stringify({ amount, method }),
-      },
-    );
-  }
-
-  async collectBalance(
-    appointmentId: string,
-    amount: number,
-    method: "card" | "cash",
-  ): Promise<Payment> {
-    return this.request<Payment>(
-      `/payments/appointments/${appointmentId}/collect-balance`,
-      {
-        method: "POST",
-        body: JSON.stringify({ amount, method }),
-      },
-    );
+  /** Inicio's lists: today, to confirm and to charge, with their totals. */
+  async getHomeSummary(locationId?: string | null): Promise<HomeSummary> {
+    const query = locationId ? `?locationId=${encodeURIComponent(locationId)}` : "";
+    return this.request<HomeSummary>(`/appointments/home${query}`);
   }
 
   async getPendingPaymentAppointments(params?: {
@@ -2952,6 +4138,13 @@ class ApiClient implements ApiClientInterface {
     return this.request("/loyalty/tiers", { method: "POST", body: JSON.stringify(data) });
   }
 
+  async updateLoyaltyTier(
+    id: string,
+    data: Partial<{ name: string; minPoints: number; pointsMultiplier: number }>,
+  ): Promise<LoyaltyTier> {
+    return this.request(`/loyalty/tiers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
   async deleteLoyaltyTier(id: string): Promise<{ ok: boolean }> {
     return this.request(`/loyalty/tiers/${id}`, { method: "DELETE" });
   }
@@ -2974,15 +4167,6 @@ class ApiClient implements ApiClientInterface {
 
   async getClientLoyalty(clientId: string): Promise<ClientLoyaltySummary> {
     return this.request(`/loyalty/clients/${clientId}`);
-  }
-
-  /** The signed-in client's own balance (client portal). */
-  async getMyLoyalty(): Promise<MyLoyalty> {
-    return this.request("/loyalty/me");
-  }
-
-  async joinMyLoyalty(): Promise<MyLoyalty> {
-    return this.request("/loyalty/me/join", { method: "POST" });
   }
 
   // Wait-list
@@ -3067,7 +4251,10 @@ class ApiClient implements ApiClientInterface {
     recipientEmail?: string;
     recipientName?: string;
     message?: string;
-    expiresAt?: string;
+    /** Last valid day ("YYYY-MM-DD"); left out: two years; null: never expires. */
+    expiresAt?: string | null;
+    /** Email the card to `recipientEmail` (server default: yes). */
+    sendEmail?: boolean;
   }): Promise<any> {
     return this.request<any>("/gift-cards", {
       method: "POST",
@@ -3104,35 +4291,19 @@ class ApiClient implements ApiClientInterface {
   }
 
   // Analytics
-  async getAnalyticsOverview(months: number = 6): Promise<any> {
-    return this.request<any>(`/analytics/overview?months=${months}`);
+  /**
+   * The overview: the last `months` (a number, as the dashboard home asks) or
+   * an AnalyticsQuery with a named range and, on Empresa, a location.
+   */
+  async getAnalyticsOverview(window: number | AnalyticsQuery = 6): Promise<AnalyticsOverviewResponse> {
+    const q = analyticsQuery(typeof window === "number" ? { months: window } : window);
+    return this.request<AnalyticsOverviewResponse>(`/analytics/overview?${q}`);
   }
 
-  async getRevenueReport(startDate: string, endDate: string): Promise<any> {
-    return this.request<any>(
-      `/analytics/revenue?startDate=${startDate}&endDate=${endDate}`,
-    );
-  }
-
-  async getAppointmentsReport(
-    startDate: string,
-    endDate: string,
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/appointments?startDate=${startDate}&endDate=${endDate}`,
-    );
-  }
-
-  async getAppointmentStatusEvolution(
-    status: string,
+  async getAppointmentStatusesEvolution(
     months: number = 6,
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/appointment-status-evolution?status=${encodeURIComponent(status)}&months=${months}`,
-    );
-  }
-
-  async getAppointmentStatusesEvolution(months: number = 6): Promise<
+    locationId?: string | null,
+  ): Promise<
     {
       period: string;
       Completed: number;
@@ -3144,51 +4315,80 @@ class ApiClient implements ApiClientInterface {
     }[]
   > {
     return this.request(
-      `/analytics/appointment-statuses-evolution?months=${months}`,
+      `/analytics/appointment-statuses-evolution?${analyticsQuery({ months, locationId })}`,
     );
   }
 
-  async getAppointmentStatusByDays(days: number = 7): Promise<
+  async getAppointmentStatusByDays(
+    days: number = 7,
+    locationId?: string | null,
+  ): Promise<
     {
       name: string;
       count: number;
       color: string;
     }[]
   > {
-    return this.request(`/analytics/appointment-status-by-days?days=${days}`);
+    return this.request(`/analytics/appointment-status-by-days?${analyticsQuery({ days, locationId })}`);
+  }
+
+  /** The one definition of the closing rates: the last `days` days, or `months` months with byMonth. */
+  async getAppointmentRates(
+    window: { days?: number; months?: number; locationId?: string | null } = {},
+  ): Promise<AnalyticsAppointmentRatesResponse> {
+    const q = window.months
+      ? analyticsQuery({ months: window.months, locationId: window.locationId })
+      : analyticsQuery({ days: window.days ?? 7, locationId: window.locationId });
+    return this.request<AnalyticsAppointmentRatesResponse>(`/analytics/appointment-rates?${q}`);
   }
 
   // Analytics Feature Flags
+  /**
+   * What the analytics page may show: the effective plan (a trial counts as
+   * Pro). Owner and admins only: staff get a 403.
+   */
   async getAnalyticsFeatures(): Promise<{
     hasAdvancedAnalytics: boolean;
-    hasDetailedReports: boolean;
-    hasForecasting: boolean;
-    hasExport: boolean;
     maxMonths: number;
   }> {
     return this.request("/analytics/features");
   }
 
-  // Advanced Analytics (paid feature)
-  async getDetailedReport(
-    startDate: string,
-    endDate: string,
-    type: string = "both",
-  ): Promise<any> {
-    return this.request<any>(
-      `/analytics/detailed-report?startDate=${startDate}&endDate=${endDate}&type=${type}`,
-    );
+  /** Per professional over a named range (Pro), optionally one location (Empresa). */
+  async getProfessionalPerformance(
+    range?: string,
+    locationId?: string | null,
+  ): Promise<AnalyticsProfessionalRow[]> {
+    const q = analyticsQuery({ range, locationId });
+    return this.request<AnalyticsProfessionalRow[]>(`/analytics/professional-performance${q ? `?${q}` : ""}`);
   }
 
-  async getProfessionalPerformance(range?: string): Promise<any> {
-    const queryParams = range ? `?range=${range}` : "";
-    return this.request<any>(
-      `/analytics/professional-performance${queryParams}`,
-    );
+  async getClientInsights(window: number | AnalyticsQuery = 6): Promise<AnalyticsClientInsights> {
+    const q = analyticsQuery(typeof window === "number" ? { months: window } : window);
+    return this.request<AnalyticsClientInsights>(`/analytics/client-insights?${q}`);
   }
 
-  async getClientInsights(months: number = 6): Promise<any> {
-    return this.request<any>(`/analytics/client-insights?months=${months}`);
+  /** The salon's locations (Multi-local, owner and admin). */
+  async getLocations(): Promise<SalonLocation[]> {
+    return this.request<SalonLocation[]>("/locations");
+  }
+
+  /**
+   * The appointments of a period as a CSV (owner/admin): salon days, both
+   * inclusive. A file download needs the bearer token, so it cannot be a
+   * plain link.
+   */
+  /** `locationId` (Empresa): only that location's appointments. */
+  async downloadAppointmentsCsv(
+    dateFrom: string,
+    dateTo: string,
+    locationId?: string | null,
+  ): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ dateFrom, dateTo, ...(locationId ? { locationId } : {}) });
+    return this.downloadWithToken(
+      `${API_BASE_URL}/exports/appointments.csv?${qs}`,
+      `citas_${dateFrom}_${dateTo}.csv`,
+    );
   }
 
   /** Per-location KPIs (plan Empresa). Money in cents. */
@@ -3227,51 +4427,93 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /** Whether a code can be used today (nothing is written: the till applies codes, POST /pos/quote and /pos/checkout). */
   async validatePromotionCode(code: string): Promise<any> {
-    return this.request<any>(`/promotions/validate/${code}`);
+    return this.request<any>(`/promotions/validate/${encodeURIComponent(code)}`);
   }
 
-  async applyPromotionCode(
-    code: string,
-    clientId: string,
-    orderValue: number,
-  ): Promise<any> {
-    return this.request<any>("/promotions/apply", {
-      method: "POST",
-      body: JSON.stringify({ code, clientId, orderValue }),
-    });
-  }
-
-  async getPromotionStatistics(promotionId?: string): Promise<any[]> {
+  /** Each promotion's uses at the till that still count, and what they took off (euros). */
+  async getPromotionStatistics(promotionId?: string): Promise<PromotionStats[]> {
     const query = promotionId ? `?promotionId=${promotionId}` : "";
-    return this.request<any[]>(`/promotions/statistics${query}`);
+    return this.request<PromotionStats[]>(`/promotions/statistics${query}`);
   }
 
   async getAllCommissionSummaries(): Promise<any[]> {
     return this.request<any[]>("/commissions/all");
   }
 
-  async calculateCommission(
-    appointmentId: string,
-    amount?: number,
-    rate?: number,
-  ): Promise<any> {
-    return this.request<any>(`/commissions/calculate/${appointmentId}`, {
-      method: "POST",
-      body: JSON.stringify({ amount, rate }),
+  /**
+   * A professional's pending commission, up to today or to `upTo` ("Pagar
+   * hasta", "YYYY-MM-DD"): the figure the "Pagar" dialog shows and sends.
+   */
+  async getCommissionSummary(professionalId: string, upTo?: string): Promise<any> {
+    const qs = upTo ? `?upTo=${encodeURIComponent(upTo)}` : "";
+    return this.request<any>(`/commissions/summary/${professionalId}${qs}`);
+  }
+
+  /** "Mis comisiones" (staff): their own summary and payouts, read-only. */
+  async getMyCommissions(): Promise<any> {
+    return this.request<any>("/commissions/me");
+  }
+
+  /** The payout history ("Pagos"), newest first. */
+  async getCommissionPayouts(professionalId?: string): Promise<CommissionPayout[]> {
+    const qs = professionalId ? `?professionalId=${professionalId}` : "";
+    return this.request<CommissionPayout[]>(`/commissions/payouts${qs}`);
+  }
+
+  /** "Deshacer último pago": only a professional's latest payout (409 otherwise). */
+  async undoCommissionPayout(payoutId: string): Promise<{ payoutId: string; amountCents: number; itemCount: number }> {
+    return this.request(`/commissions/payouts/${payoutId}/undo`, { method: "POST" });
+  }
+
+  /** "Ver extracto": one professional's period, line by line. */
+  async getCommissionStatement(professionalId: string, startDate: string, endDate: string): Promise<any> {
+    const qs = new URLSearchParams({ startDate, endDate });
+    return this.request<any>(`/commissions/statement/${professionalId}?${qs}`);
+  }
+
+  /** The payroll report as a CSV file (the server escapes every cell). */
+  async downloadPayrollCsv(startDate: string, endDate: string): Promise<{ blob: Blob; filename: string }> {
+    const qs = new URLSearchParams({ startDate, endDate });
+    return this.downloadWithToken(
+      `${API_BASE_URL}/commissions/payroll.csv?${qs}`,
+      `comisiones_${startDate}_${endDate}.csv`,
+    );
+  }
+
+  /** "Comisión por defecto", products by default and "Comisión sobre". */
+  async getCommissionSettings(): Promise<CommissionSettings> {
+    return this.request<CommissionSettings>("/commissions/settings");
+  }
+
+  async updateCommissionSettings(
+    patch: Partial<Pick<CommissionSettings, "defaultRate" | "productDefaultRate" | "base">>,
+  ): Promise<CommissionSettings> {
+    return this.request<CommissionSettings>("/commissions/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
     });
   }
 
+  /**
+   * Marks a professional's commission paid and records the payout. Without
+   * dates or ids: all that is pending up to the end of today; with
+   * `endDate` ("Pagar hasta"), up to that day. `expectedAmount` is the
+   * figure the dialog showed, in cents: if it is no longer what is pending
+   * the server pays nothing and answers 409.
+   */
   async payCommission(
     professionalId: string,
-    appointmentIds?: string[],
-    startDate?: string,
-    endDate?: string,
-  ): Promise<any> {
-    return this.request<any>(`/commissions/pay/${professionalId}`, {
-      method: "POST",
-      body: JSON.stringify({ appointmentIds, startDate, endDate }),
-    });
+    opts: { appointmentIds?: string[]; startDate?: string; endDate?: string; expectedAmount?: number } = {},
+  ): Promise<{ count: number; totalAmount: number; payoutId?: string | null }> {
+    return this.request<{ count: number; totalAmount: number; payoutId?: string | null }>(
+      `/commissions/pay/${professionalId}`,
+      {
+        method: "POST",
+        body: JSON.stringify(opts),
+      },
+    );
   }
 
   async getPayrollReport(startDate: string, endDate: string): Promise<any> {
@@ -3284,16 +4526,37 @@ class ApiClient implements ApiClientInterface {
     return this.request<Payment[]>(`/payments/client/${clientId}`);
   }
 
-  async getPaymentSummary(tenantId: string): Promise<PaymentSummary> {
-    return this.request<PaymentSummary>(
-      `/payments/stats/summary?tenantId=${tenantId}`,
-    );
+  /** The Pagos page's cards, for the list's filters (status aside). */
+  async getPaymentSummary(filters: PaymentFilters = {}): Promise<PaymentSummary> {
+    const { status: _status, ...rest } = filters;
+    const query = paymentQuery(rest);
+    return this.request<PaymentSummary>(`/payments/stats/summary${query ? `?${query}` : ""}`);
   }
 
-  async confirmPayment(paymentIntentId: string): Promise<Payment> {
-    return this.request<Payment>(`/payments/confirm/${paymentIntentId}`, {
-      method: "POST",
-    });
+  /**
+   * The Pagos list as a CSV (owner/admin), with the page's filters. A file
+   * download needs the bearer token, so it cannot be a plain link.
+   */
+  /** `locationId` (Empresa): only the payments of that location's appointments. */
+  async downloadPaymentsCsv(
+    filters: PaymentFilters & { locationId?: string | null } = {},
+  ): Promise<{ blob: Blob; filename: string }> {
+    const query = paymentQuery(filters);
+    const url = `${API_BASE_URL}/exports/payments.csv${query ? `?${query}` : ""}`;
+    const get = () => {
+      const token = getToken();
+      return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: "include" });
+    };
+    let res = await get();
+    if (res.status === 401 && (await this.refreshAccessToken())) res = await get();
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const raw = (body as { message?: unknown }).message;
+      throw new ApiError(apiErrorMessage(res.status, raw, `Error ${res.status}`), res.status);
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "pagos.csv";
+    return { blob: await res.blob(), filename };
   }
 
   // Stripe Settings
@@ -3324,6 +4587,16 @@ class ApiClient implements ApiClientInterface {
     return this.request<Subscription | null>("/payments/subscription/current");
   }
 
+  async getSubscriptionContext(): Promise<SubscriptionContext | null> {
+    return this.request<SubscriptionContext | null>("/payments/subscription/context");
+  }
+
+  async getCheckoutSessionStatus(sessionId: string): Promise<CheckoutSessionStatus> {
+    return this.request<CheckoutSessionStatus>(
+      `/payments/subscription/checkout-session/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
   async createSubscriptionCheckout(plan: string): Promise<{ url: string }> {
     return this.request<{ url: string }>("/payments/subscription/checkout", {
       method: "POST",
@@ -3338,10 +4611,29 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async cancelSubscription(immediately?: boolean): Promise<Subscription> {
+  async cancelSubscription(): Promise<Subscription> {
     return this.request<Subscription>("/payments/subscription/cancel", {
       method: "POST",
-      body: JSON.stringify({ immediately }),
+    });
+  }
+
+  /** "Anular cancelación": the subscription renews again. */
+  async undoCancelSubscription(): Promise<{ status: string; cancelAt: null }> {
+    return this.request("/payments/subscription/undo-cancel", { method: "POST" });
+  }
+
+  /** What to deactivate before moving to `plan`; empty when the salon fits. */
+  async getPlanCheck(plan: string): Promise<{ plan: string; blockers: PlanLimitBlocker[] }> {
+    return this.request(`/payments/subscription/plan-check?plan=${encodeURIComponent(plan)}`);
+  }
+
+  /** Empresa: how many locations the subscription pays for (prorated by Stripe). */
+  async updateSubscriptionLocations(
+    locationCount: number,
+  ): Promise<{ subscriptionId: string; locationCount: number }> {
+    return this.request("/payments/subscription/update-locations", {
+      method: "POST",
+      body: JSON.stringify({ locationCount }),
     });
   }
 
@@ -3408,10 +4700,9 @@ class ApiClient implements ApiClientInterface {
     return this.request("/virtual-receptionist/ai-usage");
   }
 
-  async getMessageBundlesBalance(): Promise<MessageBundlesBalance> {
-    return this.request<MessageBundlesBalance>(
-      "/message-bundles/tenants/current/balance",
-    );
+  /** The salon page address, name and logo, for sharing and printing (QrController.share). */
+  async getShareInfo(): Promise<import("./share-page").ShareInfo> {
+    return this.request("/qr/share");
   }
 
   async getSubscriptionInvoices(
@@ -3440,6 +4731,28 @@ class ApiClient implements ApiClientInterface {
     return this.request<ClientWallet>(`/payments/wallet/${clientId}`);
   }
 
+  /**
+   * A wallet top-up (owner/admin) and how the client paid it; the first one
+   * creates the wallet. Cash needs the cash drawer open (409 CASH_SESSION_CLOSED).
+   */
+  async depositToWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown> {
+    return this.request(`/payments/wallet/${clientId}/deposit`, {
+      method: "POST",
+      body: JSON.stringify({ amount: amountCents, method, ...(description ? { description } : {}) }),
+    });
+  }
+
+  /**
+   * Money handed back from a client's wallet (owner/admin) and how, never
+   * past its balance. Cash needs the cash drawer open (409 CASH_SESSION_CLOSED).
+   */
+  async withdrawFromWallet(clientId: string, amountCents: number, method: WalletTopUpMethod, description?: string): Promise<unknown> {
+    return this.request(`/payments/wallet/${clientId}/withdraw`, {
+      method: "POST",
+      body: JSON.stringify({ amount: amountCents, method, ...(description ? { description } : {}) }),
+    });
+  }
+
   // POS
   async getPosServices(): Promise<any[]> {
     return this.request<any[]>("/pos/services");
@@ -3455,19 +4768,92 @@ class ApiClient implements ApiClientInterface {
     return this.request<any>(`/pos/dashboard${query}`);
   }
 
-  async posCheckout(data: any): Promise<{ orderId: string }> {
-    return this.request<{ orderId: string }>("/pos/checkout", {
+  /** A sale at the till. Send the same `saleId` on a retry: the server records it once. */
+  async posCheckout(data: any): Promise<PosSale> {
+    return this.request<PosSale>("/pos/checkout", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  /** The ticket priced by the server (money, tax included): what the checkout will charge. */
+  async posQuote(data: any): Promise<PosQuote> {
+    return this.request<PosQuote>("/pos/quote", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  /** Products the till sells: active, with their price in money and their stock. */
+  async getPosSaleProducts(search?: string): Promise<PosSaleProduct[]> {
+    const query = search ? `?search=${encodeURIComponent(search)}` : "";
+    return this.request<PosSaleProduct[]>(`/pos/sale-products${query}`);
+  }
+
+  /** The ticket of a sale (the simplified invoice's legal minimum). */
+  async getPosReceipt(saleId: string): Promise<PosReceipt> {
+    return this.request<PosReceipt>(`/pos/sales/${encodeURIComponent(saleId)}/receipt`);
+  }
+
+  /** The till's settings: the staff discount limit (everyone reads, owner and managers save). */
+  async getPosSettings(): Promise<PosSettings> {
+    return this.request<PosSettings>("/pos/settings");
+  }
+
+  async savePosSettings(settings: PosSettings): Promise<PosSettings> {
+    return this.request<PosSettings>("/pos/settings", { method: "PUT", body: JSON.stringify(settings) });
+  }
+
+  /** The open cash-drawer session (null when closed), with what it should hold. */
+  async getCurrentCashSession(): Promise<CashSessionCurrent> {
+    return this.request<CashSessionCurrent>("/pos/cash-sessions/current");
+  }
+
+  /** "Abrir caja": the float, in cents. A 409 when another one is open. */
+  async openCashSession(body: { openingFloatCents: number; notes?: string }): Promise<CashSessionView> {
+    return this.request<CashSessionView>("/pos/cash-sessions/open", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** "Movimiento de caja": money put in or taken out of the open drawer, with why. */
+  async addCashMovement(
+    sessionId: string,
+    body: { type: CashMovementType; amountCents: number; reason: string },
+  ): Promise<CashMovementRow> {
+    return this.request<CashMovementRow>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}/movements`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** "Cerrar caja": the cash counted (cents), optionally by coin and note. */
+  async closeCashSession(
+    sessionId: string,
+    body: { countedCashCents: number; breakdown?: Record<string, number>; notes?: string },
+  ): Promise<CashSessionView> {
+    return this.request<CashSessionView>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Past sessions (owner and managers). */
+  async getCashSessions(params: { from?: string; to?: string; page?: number; limit?: number } = {}): Promise<CashSessionList> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== "") query.set(key, String(value));
+    const qs = query.toString();
+    return this.request<CashSessionList>(`/pos/cash-sessions${qs ? `?${qs}` : ""}`);
+  }
+
+  /** One session's report. */
+  async getCashSession(sessionId: string): Promise<CashSessionView> {
+    return this.request<CashSessionView>(`/pos/cash-sessions/${encodeURIComponent(sessionId)}`);
   }
 
   async posQuickSale(data: {
     serviceId: string;
     paymentMethod: string;
     clientId?: string;
-  }): Promise<{ id: string }> {
-    return this.request<{ id: string }>("/pos/quick-sale", {
+    saleId?: string;
+    professionalId?: string;
+  }): Promise<PosSale> {
+    return this.request<PosSale>("/pos/quick-sale", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -3505,8 +4891,9 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async deleteProduct(id: string): Promise<void> {
-    return this.request<void>(`/pos/products/${id}`, {
+  /** Deleted, or deactivated when it has sales or stock movements (`deactivated: true`). */
+  async deleteProduct(id: string): Promise<{ deleted?: boolean; deactivated?: boolean } | void> {
+    return this.request<{ deleted?: boolean; deactivated?: boolean } | void>(`/pos/products/${id}`, {
       method: "DELETE",
     });
   }
@@ -3570,10 +4957,12 @@ class ApiClient implements ApiClientInterface {
   async getEmailCampaigns(
     status?: string,
     campaignType?: string,
+    archived?: boolean,
   ): Promise<EmailCampaign[]> {
     const params = new URLSearchParams();
     if (status) params.append("status", status);
     if (campaignType) params.append("campaignType", campaignType);
+    if (archived) params.append("archived", "true");
     const queryString = params.toString();
     return this.request<EmailCampaign[]>(
       `/email-campaigns${queryString ? "?" + queryString : ""}`,
@@ -3582,6 +4971,26 @@ class ApiClient implements ApiClientInterface {
 
   async getEmailCampaign(id: string): Promise<EmailCampaign> {
     return this.request<EmailCampaign>(`/email-campaigns/${id}`);
+  }
+
+  async getEmailCampaignAudience(): Promise<EmailCampaignAudience> {
+    return this.request<EmailCampaignAudience>("/email-campaigns/audience");
+  }
+
+  async archiveEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/archive`, { method: "POST" });
+  }
+
+  async unarchiveEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/unarchive`, { method: "POST" });
+  }
+
+  async unscheduleEmailCampaign(id: string): Promise<EmailCampaign> {
+    return this.request<EmailCampaign>(`/email-campaigns/${id}/unschedule`, { method: "POST" });
+  }
+
+  async retryFailedEmailCampaign(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/retry-failed`, { method: "POST" });
   }
 
   async getEmailCampaignRecipients(id: string): Promise<any[]> {
@@ -3627,14 +5036,34 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
+  /**
+   * "Enviar a todos": the server adds every active client with an email
+   * who accepts promotions, then sends.
+   */
+  async sendEmailCampaignToAll(id: string): Promise<SendEmailCampaignResult> {
+    return this.request<SendEmailCampaignResult>(`/email-campaigns/${id}/send-to-all`, {
+      method: "POST",
+    });
+  }
+
   async getEmailCampaignTrackingStatus(): Promise<EmailCampaignTrackingStatus> {
     return this.request<EmailCampaignTrackingStatus>(
       "/email-campaigns/tracking-status",
     );
   }
 
-  async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<any> {
-    return this.request<any>(`/email-campaigns/${id}/recipients`, {
+  /** The month's marketing emails: sent, left and the bono's. */
+  async getEmailMarketingQuota(): Promise<EmailMarketingQuota> {
+    return this.request<EmailMarketingQuota>("/email-campaigns/quota");
+  }
+
+  /** "Comprar bono de emails": the Stripe page to pay for it. */
+  async buyEmailPack(): Promise<{ url: string }> {
+    return this.request<{ url: string }>("/email-campaigns/quota/pack-checkout", { method: "POST" });
+  }
+
+  async addRecipientsToCampaign(id: string, clientIds: string[]): Promise<AddEmailCampaignRecipientsResult> {
+    return this.request<AddEmailCampaignRecipientsResult>(`/email-campaigns/${id}/recipients`, {
       method: "POST",
       body: JSON.stringify({ clientIds }),
     });
@@ -3859,7 +5288,6 @@ class ApiClient implements ApiClientInterface {
     name: string;
     slug: string;
     timezone: string;
-    currency: string;
     country: string;
     language: string;
     plan?: string;
@@ -3875,38 +5303,70 @@ class ApiClient implements ApiClientInterface {
     taxIdType?: "nif" | "cif" | "nie" | "passport" | "other" | null;
     legalName?: string | null;
     email?: string | null;
-    dateFormat?: string;
-    timeFormat?: string;
+    /** Informational: hours of notice the salon asks for; 0 = none. */
     minCancelHours?: number;
-    openingHours?: Record<string, unknown> | null;
+    /** The salon's cancellation policy in its own words (informational). */
+    cancellationPolicy?: string | null;
+    /**
+     * The salon's own week ([{ day, openTime, closeTime }]), or a legacy
+     * shape: read it with lib/salon-hours.ts.
+     */
+    openingHours?: unknown;
+    /** Profile URLs, linked from the salon's public page. */
+    instagram?: string | null;
+    facebook?: string | null;
+    /** Minutes between the start times offered when booking. */
+    bookingSlotMinutes?: number;
+    /** Online bookings start confirmed instead of pending. */
+    autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
+    /** Ajustes > Recepcionista "Chat en mi web". */
+    webChatEnabled?: boolean;
+    /** The public page's links (Ajustes > Salón). */
+    website?: string | null;
+    whatsapp?: string | null;
+    /** The salon's own privacy policy; null: the one generated for it. */
+    privacyPolicyUrl?: string | null;
   }> {
     return this.request("/auth/tenant");
   }
 
   async updateTenant(data: {
     name?: string;
-    description?: string;
+    /** null (or "") clears it, as for postalCode, state, phone and email. */
+    description?: string | null;
     language?: string;
-    currency?: string;
     timezone?: string;
-    dateFormat?: string;
-    timeFormat?: string;
     street?: string;
     city?: string;
-    postalCode?: string;
-    state?: string;
-    phone?: string;
+    postalCode?: string | null;
+    state?: string | null;
+    phone?: string | null;
     logo?: string;
-    email?: string;
+    /** The public page's cover photo; null clears it. */
+    coverImage?: string | null;
+    email?: string | null;
     minCancelHours?: number;
-    /** Merged server-side into the tenant's openingHours JSON. */
-    openingHours?: { open: string; close: string };
+    /** null (or "") clears it. */
+    cancellationPolicy?: string | null;
+    /** The salon's week, replacing what was stored; [] = no salon-level hours. */
+    openingHours?: WorkingHoursEntry[];
+    /** "@handle" or a profile link (stored as the profile URL); "" clears it. */
+    instagram?: string;
+    facebook?: string;
+    bookingSlotMinutes?: number;
+    autoConfirmOnlineBookings?: boolean;
+    timeOffEmailNotices?: boolean;
+    webChatEnabled?: boolean;
+    /** null clears them. */
+    website?: string | null;
+    whatsapp?: string | null;
+    privacyPolicyUrl?: string | null;
   }): Promise<{
     id: string;
     name: string;
     slug: string;
     timezone: string;
-    currency: string;
     country: string;
     language: string;
   }> {
@@ -3959,7 +5419,7 @@ class ApiClient implements ApiClientInterface {
     return this.request("/virtual-receptionist/channels/meta/pages");
   }
 
-  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean }> {
+  async selectMetaChannelPage(pageId: string): Promise<{ connected: boolean; instagramTaken?: boolean; message?: string }> {
     return this.request("/virtual-receptionist/channels/meta/select", {
       method: "POST",
       body: JSON.stringify({ pageId }),
@@ -4064,7 +5524,8 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/saas/tenants/${id}/stats`);
   }
 
-  async launchSalonDashboard(tenantId: string): Promise<{
+  /** C17: the reason is required; it is signed into the one-shot token. */
+  async launchSalonDashboard(tenantId: string, reason: string): Promise<{
     token: string;
     ownerEmail: string;
     ownerName: string;
@@ -4074,17 +5535,58 @@ class ApiClient implements ApiClientInterface {
   }> {
     return this.request(`/saas/tenants/${tenantId}/launch`, {
       method: "POST",
+      body: JSON.stringify({ reason }),
     });
   }
 
-  async impersonate(
-    token: string,
-    reason: string = "support",
-  ): Promise<{ user: any; tokens: { accessToken: string; refreshToken: string; expiresIn: number; tokenType: string } }> {
+  /** Redeems the console's one-shot token; the reason travels inside it (C17). */
+  async impersonate(token: string): Promise<{
+    user: any;
+    tokens: { accessToken: string; expiresIn: number; tokenType: string };
+    support: { tenantId: string; endsAt: string };
+  }> {
     return this.request(`/auth/impersonate`, {
       method: "POST",
-      body: JSON.stringify({ token, reason }),
+      body: JSON.stringify({ token }),
     });
+  }
+
+  /** Audit 8 D11: one of KiraRoom's own salons, left out of platform figures. Audit-logged. */
+  async setSaasTenantInternal(id: string, isInternal: boolean): Promise<{ id: string; isInternal: boolean }> {
+    return this.request(`/saas/tenants/${id}/internal`, {
+      method: "PATCH",
+      body: JSON.stringify({ isInternal }),
+    });
+  }
+
+  /** "Cerrar todas las sesiones": every session of this account ends, this one too. */
+  async logoutEverywhere(): Promise<void> {
+    try {
+      await this.request("/auth/logout", { method: "POST", body: JSON.stringify({ everywhere: true }) });
+    } finally {
+      removeToken();
+      removeRefreshToken();
+    }
+  }
+
+  /** C9: the audit log for the platform owner (read-only). */
+  async getSaasAuditLogs(filters: {
+    page?: number;
+    limit?: number;
+    tenantId?: string;
+    tenant?: string;
+    actor?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+  }): Promise<{ data: SaasAuditLogRow[]; meta: { total: number; page: number; limit: number; totalPages: number } }> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== "") q.set(k, String(v));
+    return this.request(`/saas/audit-logs?${q.toString()}`);
+  }
+
+  async getSaasAuditLogActions(): Promise<{ data: string[] }> {
+    return this.request("/saas/audit-logs/actions");
   }
 
   async suspendSaasTenant(id: string): Promise<any> {
@@ -4093,14 +5595,53 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async reactivateSaasTenant(id: string): Promise<any> {
-    return this.request(`/saas/tenants/${id}/reactivate`, {
+  /**
+   * "Cortesía" (audit 8 D6): active without paying, on a plan, until a date.
+   * cancelDeletion: the owner asked "Borrar mi salón"; a courtesy cancels it only with this (T4).
+   */
+  async courtesySaasTenant(id: string, body: { plan: string; until: string; cancelDeletion?: boolean }): Promise<any> {
+    return this.request(`/saas/tenants/${id}/courtesy`, {
       method: "POST",
+      body: JSON.stringify(body),
     });
+  }
+
+  /** "Bloquear" (audit 8 D4, abuse): access cut now, nothing sent, nothing charged. */
+  async blockSaasTenant(id: string, reason: string): Promise<any> {
+    return this.request(`/saas/tenants/${id}/block`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  async unblockSaasTenant(id: string): Promise<any> {
+    return this.request(`/saas/tenants/${id}/unblock`, { method: "POST" });
+  }
+
+  /** The salon's data as plain JSON, for the console's "Exportar datos" (audit 8 D14). */
+  async downloadSaasTenantExport(id: string): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/saas/tenants/${id}/export?format=json`, "datos-rgpd.json");
+  }
+
+  /** GDPR erasure from the console: the salon's name typed, and force for one still active (audit 8 T5). */
+  async anonymizeSaasTenant(id: string, body: { confirmName: string; force?: boolean }): Promise<{ ok: true; requestId: string }> {
+    return this.request(`/saas/tenants/${id}/anonymize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getSaasTenantGdprRequests(id: string): Promise<SaasGdprRequest[]> {
+    return this.request(`/saas/tenants/${id}/gdpr-requests`);
   }
 
   async getSaasAnalytics(): Promise<any> {
     return this.request("/saas/analytics/overview");
+  }
+
+  /** "Esta semana" in the console (audit 8 D12). */
+  async getSaasWeekly(): Promise<any> {
+    return this.request("/saas/weekly");
   }
 
   async getSaasUsers(filter?: {
@@ -4187,6 +5728,8 @@ class ApiClient implements ApiClientInterface {
     status: string;
     expiresAt: string;
     magicLink: string;
+    /** Whether the email really went out (audit 8 T15). */
+    emailSent?: boolean;
   }> {
     return this.request(`/saas/invites`, {
       method: "POST",
@@ -4194,7 +5737,7 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async listTenantInvites(filter?: { status?: string; email?: string }): Promise<any[]> {
+  async listTenantInvites(filter?: { status?: string; email?: string }): Promise<SaasTenantInvite[]> {
     const params = new URLSearchParams();
     if (filter?.status) params.append("status", filter.status);
     if (filter?.email) params.append("email", filter.email);
@@ -4206,7 +5749,7 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/saas/invites/${id}`, { method: "DELETE" });
   }
 
-  async resendTenantInvite(id: string): Promise<any> {
+  async resendTenantInvite(id: string): Promise<{ email: string; magicLink?: string; emailSent?: boolean }> {
     return this.request(`/saas/invites/${id}/resend`, { method: "POST" });
   }
 
@@ -4237,6 +5780,8 @@ class ApiClient implements ApiClientInterface {
       language?: string;
       contactEmail?: string;
       phone?: string;
+      /** The terms (with the art. 28 processing agreement) and the privacy policy. */
+      acceptTerms: boolean;
     },
   ): Promise<{
     tenantId: string;
@@ -4244,7 +5789,6 @@ class ApiClient implements ApiClientInterface {
     email: string;
     role: string;
     accessToken: string;
-    refreshToken: string;
     expiresIn: number;
     tokenType: string;
   }> {
@@ -4306,8 +5850,12 @@ class ApiClient implements ApiClientInterface {
     hasServices: boolean;
     hasStaff: boolean;
     hasWorkingHours: boolean;
+    /** The salon's saved week (list format); [] when none is set. */
+    openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
     hasFirstAppointment: boolean;
     serviceTemplates: Array<{ name: string; durationMinutes: number; price: number }>;
+    /** The salon's active services, for the test booking's picker. */
+    services?: Array<{ id: string; name: string }>;
   }> {
     return this.request(`/onboarding/wizard`);
   }
@@ -4326,10 +5874,14 @@ class ApiClient implements ApiClientInterface {
       time: string;
     };
     workingHours?: Record<string, { open: string; close: string } | null>;
+    /** The salon's week in the list format (several entries a day = shifts). */
+    openingHours?: Array<{ day: string; openTime: string; closeTime: string }>;
   }): Promise<{
     ok: true;
     completed: number;
     total: number;
+    /** What this submission actually saved. */
+    saved?: { services: number; hours: boolean; appointment: boolean };
     skipped: { appointment: "no_staff" | "no_service" | null };
   }> {
     return this.request(`/onboarding/wizard`, {
@@ -4434,12 +5986,16 @@ class ApiClient implements ApiClientInterface {
   async deleteConsentForm(id: string): Promise<{ deleted: boolean }> {
     return this.request(`/consent-forms/${id}`, { method: "DELETE" });
   }
+  /**
+   * Records a signed consent; needs a session. The salon comes from the
+   * session. From the panel, name the client and the name she signed with;
+   * a signed-in client signs for herself (no clientId, her name by default).
+   */
   async signConsent(input: {
-    tenantId: string;
-    clientId: string;
+    clientId?: string;
     formId: string;
     responses: Record<string, unknown>;
-    signatureName: string;
+    signatureName?: string;
     appointmentId?: string;
     serviceId?: string;
   }): Promise<Consent> {
@@ -4469,14 +6025,18 @@ class ApiClient implements ApiClientInterface {
     const q = params.toString();
     return this.request(`/reviews${q ? `?${q}` : ""}`);
   }
-  async moderateReview(id: string, action: "approve" | "reject"): Promise<Review> {
+  async moderateReview(id: string, action: "approve" | "reject", reason?: string): Promise<Review> {
     return this.request(`/reviews/${id}/moderate`, {
       method: "POST",
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(action === "reject" ? { action, reason } : { action }),
     });
   }
   async getReviewSettings(): Promise<ReviewSettings> {
     return this.request(`/reviews/settings`);
+  }
+  /** Submits the WhatsApp review template to Meta; answers the settings with its status. */
+  async submitReviewWhatsAppTemplate(): Promise<ReviewSettings> {
+    return this.request(`/reviews/settings/whatsapp-template`, { method: "POST" });
   }
   async updateReviewSettings(data: {
     googlePlaceId?: string | null;
@@ -4505,20 +6065,28 @@ class ApiClient implements ApiClientInterface {
       throw err;
     }
   }
-  async startWhatsAppConnect(): Promise<{ url: string; state: string }> {
-    return this.request(`/whatsapp/connect/start`);
-  }
   async manualWhatsAppConnect(input: {
     accessToken: string;
     wabaId: string;
     phoneNumberId: string;
-    displayPhone: string;
     displayName?: string;
   }): Promise<WhatsAppConnection> {
     return this.request(`/whatsapp/connect/manual`, {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  /** Asks Meta again whether the stored token, number and subscription work. */
+  async checkWhatsAppConnection(): Promise<WhatsAppConnection> {
+    return this.request(`/whatsapp/connection/check`, { method: "POST" });
+  }
+  /** Whether KiraRoom can receive WhatsApp at all (the platform's Meta app). */
+  async getWhatsAppSetup(): Promise<WhatsAppSetupStatus> {
+    return this.request(`/whatsapp/setup`);
+  }
+  /** "Probar recepción": from when an event from Meta proves that messages arrive. */
+  async startWhatsAppReceptionTest(): Promise<WhatsAppReceptionTest> {
+    return this.request(`/whatsapp/connection/reception-test`, { method: "POST" });
   }
   async disconnectWhatsApp(): Promise<{ disconnected: boolean }> {
     return this.request(`/whatsapp/connection`, { method: "DELETE" });
@@ -4539,6 +6107,10 @@ class ApiClient implements ApiClientInterface {
   async getWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
     return this.request(`/whatsapp/campaigns/${id}`);
   }
+  /** Whether the plan includes WhatsApp campaigns (Pro and Empresa). Every plan can read past ones. */
+  async getWhatsAppCampaignAccess(): Promise<{ included: boolean }> {
+    return this.request(`/whatsapp/campaigns/access`);
+  }
   async getWhatsAppCampaignAudience(inactiveDays?: number | null): Promise<WhatsAppAudiencePreview> {
     const q = inactiveDays ? `?inactiveDays=${inactiveDays}` : "";
     return this.request(`/whatsapp/campaigns/audience${q}`);
@@ -4556,6 +6128,10 @@ class ApiClient implements ApiClientInterface {
   async cancelWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
     return this.request(`/whatsapp/campaigns/${id}/cancel`, { method: "POST" });
   }
+  /** Carries on a campaign paused by a problem with the salon's WhatsApp account. */
+  async resumeWhatsAppCampaign(id: string): Promise<WhatsAppCampaign> {
+    return this.request(`/whatsapp/campaigns/${id}/resume`, { method: "POST" });
+  }
   async deleteWhatsAppCampaign(id: string): Promise<{ deleted: boolean }> {
     return this.request(`/whatsapp/campaigns/${id}`, { method: "DELETE" });
   }
@@ -4564,6 +6140,19 @@ class ApiClient implements ApiClientInterface {
   async getOnboardingState(): Promise<OnboardingState> {
     return this.request(`/onboarding/state`);
   }
+  /**
+   * Compartir: the QR downloaded or the booking link copied or shared. Marks
+   * the checklist's "Publica tu widget o QR" done. Never throws: it is a
+   * side note to what the owner did.
+   */
+  async recordBookingLinkShared(how: "qr_download" | "link_copy" | "link_share" | "widget_copy"): Promise<void> {
+    try {
+      await this.request(`/onboarding/events/booking-link-shared`, { method: "POST", body: JSON.stringify({ how }) });
+    } catch {
+      /* best effort */
+    }
+  }
+
   async skipOnboardingStep(key: string): Promise<{ ok: boolean }> {
     return this.request(`/onboarding/step/${key}/skip`, { method: "POST" });
   }
@@ -4589,6 +6178,9 @@ class ApiClient implements ApiClientInterface {
   }
   async getRebookingLog(clientId: string): Promise<RebookingReminder[]> {
     return this.request(`/rebooking/clients/${clientId}/log`);
+  }
+  async getRebookingTenantLog(limit = 20): Promise<RebookingTenantLog> {
+    return this.request(`/rebooking/log?limit=${limit}`);
   }
   async optOutClientRebooking(clientId: string): Promise<{ ok: boolean }> {
     return this.request(`/rebooking/clients/${clientId}/opt-out`, { method: "POST" });
@@ -4644,6 +6236,11 @@ class ApiClient implements ApiClientInterface {
       taxRate: number;
       productId?: string;
       serviceId?: string;
+      /**
+       * The unit price already includes the tax (the salon's pricesIncludeTax).
+       * Left out, the server adds the tax on top.
+       */
+      taxIncluded?: boolean;
     }>;
     notes?: string;
   }): Promise<{ id: string }> {
@@ -4651,6 +6248,42 @@ class ApiClient implements ApiClientInterface {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  async listInvoicesPage(query: Record<string, string>): Promise<unknown> {
+    const qs = new URLSearchParams(query).toString();
+    return this.request(`/invoices${qs ? `?${qs}` : ""}`);
+  }
+  async rectifyInvoice(
+    id: string,
+    body: {
+      reason: string;
+      lines?: Array<
+        | { originalLineId: string; quantity: number }
+        | { description: string; quantity: number; unitPriceCents: number; taxRate: number; taxIncluded: boolean }
+      >;
+    },
+  ): Promise<{ id: string }> {
+    return this.request<{ id: string }>(`/invoices/${id}/rectify`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+  async emailInvoice(id: string, to?: string): Promise<{ sent: boolean; to: string }> {
+    return this.request<{ sent: boolean; to: string }>(`/invoices/${id}/email`, {
+      method: "POST",
+      body: JSON.stringify(to ? { to } : {}),
+    });
+  }
+  /**
+   * A plain link to /invoices/:id/pdf carried no token (it lives in
+   * localStorage, the API reads the Authorization header) and got 401.
+   */
+  async downloadInvoiceFile(
+    id: string,
+    kind: "pdf" | "xml",
+    filename?: string,
+  ): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/invoices/${id}/${kind}`, filename ?? `factura.${kind}`);
   }
   async cancelInvoice(id: string, reason: string): Promise<Invoice> {
     return this.request<Invoice>(`/invoices/${id}/cancel`, {
@@ -4677,17 +6310,19 @@ class ApiClient implements ApiClientInterface {
       { method: "POST" },
     );
   }
-  getInvoicePdfUrl(id: string): string {
-    return `${API_BASE_URL}/invoices/${id}/pdf`;
-  }
-  getInvoiceXmlUrl(id: string): string {
-    return `${API_BASE_URL}/invoices/${id}/xml`;
-  }
 
   // ---- P2A Fiscal settings ----
   /** The quarterly return of the salon's tax regime (modelo_303, modelo_420 or null). */
   async getQuarterlyReturnType(): Promise<{ regime: string; type: string | null }> {
     return this.request(`/tax-reports/quarterly-type`);
+  }
+  /** The income of the year for the Modelo 130 (autónomos only; applies: false otherwise). */
+  async getModelo130Income(year: number): Promise<Modelo130Income> {
+    return this.request(`/tax-reports/modelo-130-income/${year}`);
+  }
+  /** What issuer data (NIF, razón social, fiscal address) the salon is missing for its invoices. */
+  async getInvoiceIssuerStatus(): Promise<InvoiceIssuerStatus> {
+    return this.request(`/invoices/issuer-status`);
   }
   /** Generates (or regenerates) the draft for a quarter. */
   async generateTaxReport(type: string, year: number, quarter: number): Promise<TaxReportDraft> {
@@ -4721,10 +6356,11 @@ class ApiClient implements ApiClientInterface {
   }
   async uploadFiscalCertificate(input: {
     alias: string;
+    provider: "p12";
     pkcs12Base64: string;
     passphrase: string;
     certificateType?: "personal" | "seal";
-  }): Promise<{ id: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }> {
+  }): Promise<{ id: string; fingerprint: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }> {
     return this.request(`/invoices/certificates`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -4788,7 +6424,52 @@ class ApiClient implements ApiClientInterface {
     format: "csv" | "xlsx",
   ): Promise<{ blob: Blob; filename: string }> {
     const qs = new URLSearchParams({ from, to, format });
-    const url = `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`;
+    return this.downloadWithToken(
+      `${API_BASE_URL}/accounting/export/facturas-emitidas?${qs}`,
+      `facturas-emitidas_${from}_${to}.${format}`,
+    );
+  }
+  /**
+   * One of the salon's data exports as a CSV (owner/admin), e.g. before
+   * deleting the salon (Ajustes > Seguridad). Everything, no filters.
+   */
+  async downloadSalonExport(kind: SalonExportKind): Promise<{ blob: Blob; filename: string }> {
+    return this.downloadWithToken(`${API_BASE_URL}/exports/${kind}.csv`, `${kind}.csv`);
+  }
+
+  /** "Permitir que soporte de KiraRoom entre en mi panel" and the recent support sessions (owner). */
+  async getSupportAccess(): Promise<SupportAccessStatus> {
+    return this.request<SupportAccessStatus>("/settings/support-access");
+  }
+
+  /** The owner allows or refuses support sessions; a support session cannot change it. */
+  async updateSupportAccess(allowed: boolean): Promise<SupportAccessStatus> {
+    return this.request<SupportAccessStatus>("/settings/support-access", {
+      method: "PATCH",
+      body: JSON.stringify({ allowed }),
+    });
+  }
+
+  /** "Borrar mi salón" (owner only): whether it is pending, and its dates. */
+  async getSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion");
+  }
+
+  /** Asks to delete the salon: read-only now, anonymised 30 days after. Password (and 2FA code). */
+  async requestSalonDeletion(password: string, code?: string): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", {
+      method: "POST",
+      body: JSON.stringify({ password, ...(code ? { code } : {}) }),
+    });
+  }
+
+  /** Cancels a pending deletion: the salon is as it was. */
+  async cancelSalonDeletion(): Promise<SalonDeletionStatus> {
+    return this.request<SalonDeletionStatus>("/settings/salon-deletion", { method: "DELETE" });
+  }
+
+  /** GET a file with the bearer token, refreshing the session once on a 401 like request() does. */
+  private async downloadWithToken(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
     const get = () => {
       const token = getToken();
       return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -4799,13 +6480,12 @@ class ApiClient implements ApiClientInterface {
       const body = await res.json().catch(() => ({}));
       const raw = (body as { message?: unknown }).message;
       throw new ApiError(
-        Array.isArray(raw) ? raw.join(". ") : String(raw || `Error ${res.status}`),
+        apiErrorMessage(res.status, raw, `Error ${res.status}`),
         res.status,
       );
     }
     const disposition = res.headers.get("Content-Disposition") ?? "";
-    const filename =
-      /filename="([^"]+)"/.exec(disposition)?.[1] ?? `facturas-emitidas_${from}_${to}.${format}`;
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
     return { blob: await res.blob(), filename };
   }
   async listAccountingLogs(limit = 100): Promise<AccountingSyncLog[]> {
@@ -4832,7 +6512,6 @@ class ApiClient implements ApiClientInterface {
     provider?: string;
     apiKey?: string;          // empty/undefined = keep existing
     defaultModel?: string;
-    baseUrl?: string | null;
     workspaceId?: string | null;
   }): Promise<PlatformLlmConfig> {
     return this.request(`/platform/llm-config`, {
@@ -4840,7 +6519,17 @@ class ApiClient implements ApiClientInterface {
       body: JSON.stringify(input),
     });
   }
-  async testPlatformLlmConnection(): Promise<{
+  /** "Quitar": removes the console's key; the server's .env applies again. */
+  async clearPlatformLlmKey(): Promise<PlatformLlmConfig> {
+    return this.request(`/platform/llm-config/api-key`, { method: "DELETE" });
+  }
+  /** Tests the typed values (not saved); each one left out falls back to the one in force. */
+  async testPlatformLlmConnection(typed: {
+    provider?: string;
+    apiKey?: string;
+    defaultModel?: string;
+    workspaceId?: string | null;
+  } = {}): Promise<{
     ok: boolean;
     message: string;
     model?: string;
@@ -4848,6 +6537,84 @@ class ApiClient implements ApiClientInterface {
   }> {
     return this.request(`/platform/llm-config/test`, {
       method: "POST",
+      body: JSON.stringify(typed),
+    });
+  }
+  /** The workspaces an Anthropic key can use; the key is sent once and never stored. */
+  async discoverAnthropicWorkspaces(apiKey: string): Promise<{
+    ok: boolean;
+    workspaces: Array<{ id: string; name?: string; type?: string; default?: boolean }>;
+    message?: string;
+  }> {
+    return this.request(`/platform/llm-config/anthropic/workspaces`, {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
+    });
+  }
+
+  // Platform email (Resend). The key and the webhook secret are write-only:
+  // GET says where each setting comes from, never its value.
+  /** KiraRoom's Meta app: which settings exist (never their values) and the webhook URLs. */
+  async getPlatformMetaStatus(): Promise<PlatformMetaStatus> {
+    return this.request(`/platform/meta-status`);
+  }
+
+  async getPlatformEmailConfig(): Promise<PlatformEmailConfig> {
+    return this.request(`/platform/email-config`);
+  }
+  /** A string sets a field, null clears it (the server's .env applies), absent keeps it. */
+  async updatePlatformEmailConfig(input: {
+    apiKey?: string | null;
+    from?: string | null;
+    webhookSecret?: string | null;
+    marketingPackEmails?: number | null;
+    marketingPackPriceCents?: number | null;
+  }): Promise<PlatformEmailConfig> {
+    return this.request(`/platform/email-config`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  /** With typed values (not saved), tests those; else the settings in force. */
+  async sendPlatformTestEmail(typed: { apiKey?: string; from?: string } = {}): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/email-config/test`, { method: "POST", body: JSON.stringify(typed) });
+  }
+
+  /** The retention job's switch (the saas_owner only). */
+  async getPlatformRetentionConfig(): Promise<PlatformRetentionConfig> {
+    return this.request(`/platform/retention-config`);
+  }
+  async updatePlatformRetentionConfig(enabled: boolean): Promise<PlatformRetentionConfig> {
+    return this.request(`/platform/retention-config`, { method: "PUT", body: JSON.stringify({ enabled }) });
+  }
+
+  // KiraRoom's own Stripe account. Secret key and webhook secret are
+  // write-only: GET says where each comes from, never its value.
+  async getPlatformStripeConfig(): Promise<PlatformStripeConfig> {
+    return this.request(`/platform/stripe-config`);
+  }
+  /** A value sets a field, null clears it (the server's .env applies), absent keeps it. */
+  async updatePlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripeConfig> {
+    return this.request(`/platform/stripe-config`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+  /** What saving `input` would do (mode before and after, why it would be refused, salons affected), without saving. */
+  async getPlatformStripeTestModePlans(): Promise<PlatformStripeTestModePlans> {
+    return this.request(`/platform/stripe-config/test-mode-plans`);
+  }
+  async previewPlatformStripeConfig(input: PlatformStripeUpdate): Promise<PlatformStripePreview> {
+    return this.request(`/platform/stripe-config/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  /** With a typed secret key (not saved), tests that one; else the key in force. */
+  async testPlatformStripe(secretKey?: string): Promise<{ ok: boolean; message: string }> {
+    return this.request(`/platform/stripe-config/test`, {
+      method: "POST",
+      body: JSON.stringify(secretKey ? { secretKey } : {}),
     });
   }
 
@@ -4871,19 +6638,14 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/assistant/conversations/${conversationId}/messages`);
   }
 
+  /** POST /assistant/messages: the backend has no per-conversation POST route. */
   async sendAssistantMessage(
     conversationId: string,
     body: SendAssistantMessageDto,
   ): Promise<AssistantSendResponse> {
-    return this.request(`/assistant/conversations/${conversationId}/messages`, {
+    return this.request('/assistant/messages', {
       method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-
-  async markAssistantConversationRead(conversationId: string): Promise<void> {
-    return this.request(`/assistant/conversations/${conversationId}/read`, {
-      method: 'POST',
+      body: JSON.stringify({ ...body, conversationId }),
     });
   }
 
@@ -4921,13 +6683,6 @@ class ApiClient implements ApiClientInterface {
     });
   }
 
-  async getAssistantFeedbackForMessage(messageId: string): Promise<{
-    messageId: string;
-    up: number;
-    down: number;
-  }> {
-    return this.request(`/assistant/messages/${messageId}/feedback`);
-  }
 
   /**
    * Re-exported for component imports.
@@ -4962,11 +6717,79 @@ const apiClient = new ApiClient();
 export default apiClient;
 export { ApiClient, apiClient };
 
+/** "unreadable": stored in the console but cannot be decrypted; counts as not configured. */
+export type EmailSettingSource = "console" | "server" | "none" | "unreadable";
+
+export interface PlatformEmailConfig {
+  apiKey: { source: EmailSettingSource; lastFour: string | null };
+  from: { source: EmailSettingSource; value: string | null };
+  webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  /** The bono de emails salons can buy: offered once both are set. */
+  marketingPack: { emails: number | null; priceCents: number | null; offered: boolean };
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/** The retention switch: `enabled` is the console's, `effective` also counts the server's env override. */
+export interface PlatformRetentionConfig {
+  enabled: boolean;
+  envOverride: boolean;
+  effective: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export type StripeMode = "test" | "live" | "none";
+
+export interface PlatformStripeConfig {
+  mode: StripeMode;
+  secretKey: { source: EmailSettingSource; lastFour: string | null };
+  publishableKey: { source: EmailSettingSource; value: string | null };
+  webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+  /** The other mode's webhook secret: its events are verified and ignored. */
+  otherWebhookSecret: { source: EmailSettingSource; lastFour: string | null; mode: StripeMode };
+  /** What the server's .env holds, for "Volver a lo del servidor". */
+  server: { mode: StripeMode; hasWebhookSecret: boolean };
+  /** Why the settings in force cannot take payments safely; null when they can. */
+  problem: string | null;
+  /** Stripe Tax is switched on somewhere and ignored (no VAT, D6). */
+  taxIgnored: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/** A string sets a field, null clears it (the server's .env applies), absent keeps it. */
+export interface PlatformStripeUpdate {
+  secretKey?: string | null;
+  publishableKey?: string | null;
+  webhookSecret?: string | null;
+  otherWebhookSecret?: string | null;
+}
+
+/** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */
+export interface PlatformStripeTestModePlans {
+  total: number;
+  salons: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
+}
+
+export interface PlatformStripePreview {
+  modeBefore: StripeMode;
+  modeAfter: StripeMode;
+  problem: string | null;
+  impact: {
+    otherModeSalons: number;
+    activePlansTotal: number;
+    activePlans: Array<{ id: string; name: string; slug: string | null; plan: string | null; subscriptionStatus: string | null }>;
+  } | null;
+}
+
 export interface PlatformLlmConfig {
   provider: string;
   defaultModel: string;
-  baseUrl: string | null;
   workspaceId: string | null;   // Anthropic identity-linked keys only
+  keyState: "set" | "none" | "unreadable";
+  serverKey: boolean;          // ANTHROPIC_API_KEY in the server's .env (never its value)
+  inUse: "console" | "server" | "none" | "unreadable";
   apiKeyMasked: string;        // e.g. "sk-an••••23"
   apiKeyLastFour: string;      // last-4 chars only
   apiKeyHash: string;          // SHA-256 fingerprint, never reversible
@@ -5032,6 +6855,8 @@ export interface SendAssistantMessageDto {
 export interface CreateAssistantConversationDto {
   sessionId?: string;
   title?: string;
+  /** true: a new, empty thread ("Nueva conversación"). */
+  fresh?: boolean;
 }
 
 export interface DailyBriefing {
@@ -5060,7 +6885,14 @@ export interface DailyBriefing {
   };
   gaps: {
     total: number;
-    items: Array<{ start: string; end: string; minutes: number }>;
+    /** Per professional, inside their hours, from now on. */
+    items: Array<{
+      start: string;
+      end: string;
+      minutes: number;
+      professionalId?: string;
+      professionalFirstName?: string;
+    }>;
   };
   lowStock: {
     total: number;
@@ -5110,6 +6942,10 @@ export interface LoyaltyProgramSettings {
   welcomePoints: number;
   autoEnroll: boolean;
   allowSelfEnroll: boolean;
+  /** Days without a paid visit after which the whole balance expires; null: never. */
+  pointsExpirationDays: number | null;
+  /** "Mostrar puntos en el email tras la visita". */
+  showPointsInReviewEmail: boolean;
 }
 
 export interface LoyaltyTier {
@@ -5124,11 +6960,17 @@ export interface LoyaltyRewardInput {
   description?: string;
   type: "discount" | "free_service" | "product" | "voucher";
   pointsCost: number;
-  discountPercent?: number;
+  discountPercent?: number | null;
   /** Cents. */
-  discountAmount?: number;
-  freeServiceId?: string;
+  discountAmount?: number | null;
+  freeServiceId?: string | null;
+  /** The product a product reward hands over (it leaves the stock). */
+  productId?: string | null;
   isActive?: boolean;
+  /** How many times it can be redeemed in all; null: no limit. */
+  maxRedemptions?: number | null;
+  /** ISO date-time after which it can no longer be redeemed; null: never. */
+  expiresAt?: string | null;
 }
 
 export interface LoyaltyReward extends LoyaltyRewardInput {
@@ -5140,6 +6982,8 @@ export interface LoyaltyReward extends LoyaltyRewardInput {
 
 export interface LoyaltyProgram extends LoyaltyProgramSettings {
   id: string;
+  /** No points expire before this (the grace after expiry was switched on or shortened). */
+  pointsExpiryStartsAt?: string | null;
   tiers: LoyaltyTier[];
   rewards: LoyaltyReward[];
   _count: { members: number };
@@ -5165,31 +7009,271 @@ export interface LoyaltyTransactionRow {
   description: string | null;
 }
 
+/** The till's settings (GET/PUT /pos/settings). */
+/** A line of the ticket as the server priced it (money cents, tax included). */
+export interface PosQuoteLine {
+  kind: "appointment" | "service" | "product";
+  serviceId?: string;
+  productId?: string;
+  appointmentId?: string;
+  professionalId?: string;
+  name: string;
+  unitPriceCents: number;
+  quantity: number;
+  grossCents: number;
+  discountCents: number;
+  netCents: number;
+  taxRate: number;
+  taxCents: number;
+}
+
+/** GET /promotions/statistics: one promotion's uses at the till. */
+export interface PromotionStats {
+  id: string;
+  name: string;
+  code: string;
+  usedCount: number;
+  /** Euros taken off by the uses that still count (a fully refunded sale released its use). */
+  totalDiscount: number;
+  usageCount: number;
+}
+
+/** The promotion code applied to a ticket at the till (cents). */
+export interface PosPromotion {
+  id: string;
+  code: string;
+  name: string;
+  discount: number;
+}
+
+/** POST /pos/quote: what the checkout will charge. */
+export interface PosQuote {
+  lines: PosQuoteLine[];
+  giftCards: Array<{ amountCents: number; recipientName?: string; recipientEmail?: string; message?: string }>;
+  subtotal: number;
+  discount: { lines: number; order: number; total: number };
+  /** The promotion code applied: after the manual discounts, before the points. */
+  promotion?: PosPromotion | null;
+  loyalty: { discount: number; pointsSpent: number; rewardName: string } | null;
+  total: number;
+  tax: { label: string; cents: number; included: boolean; note: string };
+  invoice: { kind: "none" | "simplified" | "full"; problem?: string };
+}
+
+/** A sale recorded at the till (POST /pos/checkout, /pos/quick-sale). */
+export interface PosSale {
+  saleId: string;
+  orderId: string;
+  kind: "checkout" | "quick_sale";
+  total: number;
+  change: number;
+  tendered: number;
+  discount?: { lines: number; order: number; total: number };
+  promotion?: PosPromotion | null;
+  // gift: the zero-price line of a product or «otro regalo» reward, to hand over.
+  loyalty?: { pointsEarned: number; pointsSpent: number; discount: number; rewardName?: string; gift?: string | null };
+  invoice: { id: string; series: string; number: string; full: boolean } | null;
+  giftCards?: Array<{ id: string; code: string; amountCents: number; recipientEmail?: string; emailSent?: boolean }>;
+  /** Visits whose loyalty reward their issued invoice could not take: a rectificativa to issue by hand. */
+  loyaltyNotOnInvoice?: Array<{ appointmentId: string; invoiceId?: string; invoice: string; amountCents: number }>;
+  /** The sale was charged without its invoice: the salon is missing its issuer data (NIF, razón social, address). */
+  invoiceSkipped?: { reason: string; missing: string[] };
+  /** True when this answer is the first one of a sale sent again. */
+  replayed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface PosSaleProduct {
+  id: string;
+  name: string;
+  sku?: string | null;
+  category?: string | null;
+  chargeCents: number;
+  taxRate: number;
+  trackInventory: boolean;
+  quantity: number;
+}
+
+/** GET /pos/sales/:id/receipt. */
+export interface PosReceipt {
+  saleId: string;
+  salon: { name: string; tradeName: string; taxId: string | null; address: string; phone: string | null };
+  invoice: {
+    id: string;
+    number: string;
+    full: boolean;
+    recipientName?: string | null;
+    recipientTaxId?: string | null;
+    /** VERI*FACTU: what the ticket's tax QR encodes. */
+    qrUrl?: string | null;
+  } | null;
+  date: string;
+  time: string;
+  lines: Array<{
+    kind: string;
+    description: string;
+    quantity: number;
+    unitPriceCents: number;
+    discountCents: number;
+    totalCents: number;
+    taxRate: number;
+    taxCents: number;
+  }>;
+  taxLabel: string;
+  taxNote: string;
+  taxBreakdown: Array<{ rate: number; baseCents: number; taxCents: number }>;
+  taxCents: number;
+  subtotalCents: number;
+  discountCents: number;
+  loyaltyDiscountCents: number;
+  /** The promotion code's part of the lines' discounts. */
+  promotion?: { code: string; discountCents: number } | null;
+  totalCents: number;
+  payments: Array<{ method: string; amount: number }>;
+  tenderedCents: number;
+  changeCents: number;
+  giftCards: Array<{ code: string; amountCents: number }>;
+  /** The client's points: earned on this sale, her balance, the expiry rule. Null: no member client. */
+  loyalty?: { pointsEarned: number; balance: number; expiryRule: string | null } | null;
+}
+
+export type CashMovementType = "in" | "out";
+
+export interface CashPerson {
+  id: string;
+  name: string | null;
+}
+
+export interface CashMovementRow {
+  id: string;
+  createdAt: string;
+  type: CashMovementType;
+  amountCents: number;
+  reason: string;
+  createdBy?: CashPerson | null;
+}
+
+/** What a session took, by method and in the drawer (cents): the owner's and managers' view only. */
+export interface CashSessionFigures {
+  /**
+   * amountCents includes wallet top-ups taken with the method (topUpCents of
+   * it); netCents is it minus refunds and wallet withdrawals handed back with it.
+   */
+  byMethod: Array<{
+    method: string;
+    count: number;
+    amountCents: number;
+    topUpCents: number;
+    refundedCents: number;
+    walletWithdrawnCents: number;
+    netCents: number;
+  }>;
+  cash: {
+    openingFloatCents: number;
+    salesCents: number;
+    changeGivenCents: number;
+    tenderedCents: number;
+    refundsCents: number;
+    /** Cash handed over to load clients' wallets: in the drawer, not a sale. */
+    walletTopUpsCents: number;
+    /** Cash handed back from clients' wallets: out of the drawer. */
+    walletWithdrawalsCents: number;
+    movementsInCents: number;
+    movementsOutCents: number;
+    expectedCents: number;
+  };
+  sales: {
+    count: number;
+    grossCents: number;
+    subtotalCents: number;
+    discountCents: number;
+    loyaltyDiscountCents: number;
+    taxCents: number;
+    netCents: number;
+  };
+  refunds: { count: number; totalCents: number };
+  walletTopUps: { count: number; totalCents: number };
+  walletWithdrawals: { count: number; totalCents: number };
+}
+
+/** What every view of a session has. */
+interface CashSessionBase {
+  id: string;
+  status: "open" | "closed";
+  openedAt: string;
+  openingFloatCents: number;
+  closedAt: string | null;
+  countedCashCents: number | null;
+  openedBy: CashPerson | null;
+  closedBy: CashPerson | null;
+  openingNotes: string | null;
+  closingNotes: string | null;
+  countBreakdown: Record<string, number> | null;
+  movements: CashMovementRow[];
+  salon: { name: string; timezone: string };
+}
+
+/** GET /pos/cash-sessions/:id for the owner and managers: the session and its figures (cents). */
+export interface CashSessionFullView extends CashSessionBase {
+  blind?: false;
+  /** Open: what the drawer should hold now. Closed: what it should have held at close. */
+  expectedCashCents: number | null;
+  discrepancyCents: number | null;
+  figures: CashSessionFigures;
+}
+
+/**
+ * The same for staff (blind count): no expected cash, no totals, no
+ * difference; only their own movements. The server never sends the rest.
+ */
+export interface CashSessionBlindView extends CashSessionBase {
+  blind: true;
+}
+
+export type CashSessionView = CashSessionFullView | CashSessionBlindView;
+
+export interface CashSessionCurrent {
+  session: CashSessionView | null;
+  /** The last close: its count is offered as the new float. */
+  lastClosed: { id: string; closedAt: string; countedCashCents: number | null } | null;
+  /** Owner and managers: the history of past sessions. */
+  canSeeHistory: boolean;
+}
+
+export interface CashSessionSummary {
+  id: string;
+  status: "open" | "closed";
+  openedAt: string;
+  openingFloatCents: number;
+  closedAt: string | null;
+  countedCashCents: number | null;
+  expectedCashCents: number | null;
+  discrepancyCents: number | null;
+  openedBy: CashPerson | null;
+  closedBy: CashPerson | null;
+}
+
+export interface CashSessionList {
+  sessions: CashSessionSummary[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  totals: { closedSessions: number; countedCashCents: number; expectedCashCents: number; discrepancyCents: number };
+}
+
+export interface PosSettings {
+  /** The most a staff member may take off a line at the till, in percent. 0: only the owner or a manager. */
+  maxStaffDiscountPercent: number;
+}
+
 export interface ClientLoyaltySummary {
   program: (LoyaltyProgramSettings & { id: string }) | null;
-  member: (LoyaltyMemberRow & { tier: { name: string } | null }) | null;
+  member: (LoyaltyMemberRow & {
+    tier: { name: string } | null;
+    /** When her balance expires if she does not come back; null: never, or nothing to lose. */
+    pointsExpireOn?: string | null;
+  }) | null;
   rewards: LoyaltyReward[];
   history: LoyaltyTransactionRow[];
 }
-
-export type MyLoyalty =
-  | { enabled: false }
-  | {
-      enabled: true;
-      program: {
-        name: string;
-        description: string | null;
-        earnMode: "per_euro" | "per_visit";
-        pointsPerEuro: number;
-        pointsPerVisit: number;
-        minPointsRedemption: number;
-        welcomePoints: number;
-        allowSelfEnroll: boolean;
-      };
-      member: { currentPoints: number; lifetimePoints: number; joinedAt: string; tier: string | null } | null;
-      rewards: Array<{ id: string; name: string; description: string | null; type: string; pointsCost: number }>;
-      history: LoyaltyTransactionRow[];
-    };
 
 // -------------------------------------------------------------- wait-list
 
@@ -5208,9 +7292,12 @@ export interface WaitListEntry {
   professionalName: string | null;
   earliestDate: string | null;
   latestDate: string | null;
-  status: "waiting" | "notified" | "cancelled" | "fulfilled";
+  status: "waiting" | "notified" | "cancelled" | "fulfilled" | "expired";
   notifiedAt: string | null;
   notifyCount: number;
+  /** Set when the system (window_passed, too_old) or the client (client_left) closed it. */
+  closedReason?: string | null;
+  closedAt?: string | null;
   notes: string | null;
   createdAt: string;
   lastNotification: {
@@ -5219,12 +7306,15 @@ export interface WaitListEntry {
     channels: WaitListChannelOutcome[];
     slot: { date: string | null; time: string | null; professionalId: string | null };
   } | null;
+  // email and phone are null for staff (contactHidden): only owner and admin see them.
   client: { firstName: string; lastName: string; email: string | null; phone: string | null };
+  contactHidden?: boolean;
 }
 
 export interface WaitListNotifyResult {
   notified: boolean;
   channels: WaitListChannelOutcome[];
-  bookingUrl: string;
+  // null when the service is not bookable online: the notice asks the client to call.
+  bookingUrl: string | null;
   summary: string;
 }

@@ -152,6 +152,8 @@ describe("GracePeriodScheduler.suspendExpiredGraces", () => {
     expect(email.calls).toHaveLength(1);
     expect(email.calls[0].to).toBe("owner@salon.test");
     expect(email.calls[0].tenantName).toBe("Salon Demo");
+    // The email promises the same date the account keeps its data until.
+    expect(email.calls[0].readOnlyUntil).toEqual(t.readOnlyUntil);
   });
 
   it("does NOT flip tenants whose gracePeriodEndsAt is still in the future", async () => {

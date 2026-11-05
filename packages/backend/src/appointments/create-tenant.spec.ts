@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { plainToInstance } from "class-transformer";
 import { validateSync } from "class-validator";
 import { AppointmentsService } from "./appointments.service";
@@ -17,8 +17,10 @@ import { phoneKey } from "../common/phone";
  * past day, or a slot already taken.
  */
 
-const PRO = { id: "11111111-1111-4111-8111-111111111111", tenantId: "tenant-b", firstName: "Ana" };
-const PRO_2 = { id: "22222222-2222-4222-8222-222222222222", tenantId: "tenant-b", firstName: "Bea" };
+const PRO = { id: "11111111-1111-4111-8111-111111111111", tenantId: "tenant-b", firstName: "Ana", isActive: true };
+const PRO_2 = { id: "22222222-2222-4222-8222-222222222222", tenantId: "tenant-b", firstName: "Bea", isActive: true };
+/** Another salon's widget: a real id, of another salon. */
+const FOREIGN_WIDGET_ID = "55555555-5555-4555-8555-555555555555";
 const SERVICE_ID = "33333333-3333-4333-8333-333333333333";
 const WIDGET_ID = "44444444-4444-4444-8444-444444444444";
 
@@ -28,22 +30,34 @@ function day(offset: number): string {
 }
 
 function build({
-  existingClients = [] as Array<{ id: string; email?: string | null; phone?: string | null; tenantId: string }>,
+  existingClients = [] as Array<{ id: string; email?: string | null; phone?: string | null; tenantId: string; status?: string }>,
   freeTimes = { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] } as Record<string, string[]>,
   offering = [PRO.id, PRO_2.id],
   widgetProfessionals = [] as string[],
   minAdvanceBooking = 2,
   maxAdvanceBooking = 30,
   locationLinks = [] as Array<{ professionalId: string; locationId: string; isPrimary: boolean }>,
+  subscriptionStatus = "active",
+  isOnlineBookable = true,
+  serviceActive = true,
+  inactiveProfessionals = [] as string[],
+  autoConfirmOnlineBookings = false,
+  requiresApproval = false,
 } = {}) {
   const clientLookups: any[] = [];
   const created: any[] = [];
   const locks: string[] = [];
   const prisma: any = {
+    // No time off recorded (time-off-query.ts).
+    timeOff: { findMany: jest.fn(async () => []) },
+    // Staff bookings read and write through the transaction; online ones
+    // only take the lock in it.
     $transaction: jest.fn(async (fn: any) =>
-      fn({ $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
+      fn({ ...prisma, $executeRaw: async (_s: TemplateStringsArray, key: string) => { locks.push(key); return 0; } }),
     ),
-    tenant: { findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES" }) },
+    tenant: {
+      findUnique: async () => ({ timezone: "Europe/Madrid", country: "ES", subscriptionStatus, autoConfirmOnlineBookings }),
+    },
     // findOrCreateClient's phone lookup: tenant and last nine digits.
     $queryRaw: jest.fn(async (_s: TemplateStringsArray, tenantId: string, key: string) =>
       existingClients
@@ -54,31 +68,63 @@ function build({
     widgetInstance: {
       findUnique: async ({ where }: any) =>
         where.id === WIDGET_ID ? { tenantId: "tenant-b", professionals: widgetProfessionals } : null,
+      findFirst: jest.fn(async ({ where }: any) => {
+        const all = [
+          { id: WIDGET_ID, tenantId: "tenant-b" },
+          { id: FOREIGN_WIDGET_ID, tenantId: "tenant-a" },
+        ];
+        return all.find((w) => w.id === where.id && w.tenantId === where.tenantId) ?? null;
+      }),
     },
     professional: {
       findFirst: jest.fn(async ({ where }: any) => {
-        const all = [PRO, PRO_2];
+        const all = [PRO, PRO_2].map((p) => ({ ...p, isActive: !inactiveProfessionals.includes(p.id) }));
         return all.find((p) => p.id === where.id && (!where.tenantId || where.tenantId === p.tenantId)) ?? null;
       }),
       findMany: async ({ where }: any) =>
         [PRO, PRO_2]
           .filter((p) => !where.id?.in || where.id.in.includes(p.id))
           .map((p) => ({ id: p.id, services: offering.includes(p.id) ? [{ serviceId: SERVICE_ID }] : [] })),
+      count: async ({ where }: any) =>
+        [PRO, PRO_2].filter((p) => p.tenantId === where.tenantId && where.id.in.includes(p.id)).length,
     },
     // Where each professional works (active locations of the salon only).
     professionalLocation: {
       findMany: jest.fn(async ({ where }: any) =>
-        where.location?.tenantId === "tenant-b"
-          ? locationLinks.filter((l) => l.professionalId === where.professionalId)
-          : [],
+        where.locationId
+          ? locationLinks.filter((l) => l.locationId === where.locationId)
+          : where.location?.tenantId === "tenant-b"
+            ? locationLinks.filter((l) => l.professionalId === where.professionalId)
+            : [],
+      ),
+    },
+    // The salon's open locations: those its professionals are linked to.
+    location: {
+      findFirst: jest.fn(async ({ where }: any) =>
+        where.tenantId === "tenant-b" && locationLinks.some((l) => l.locationId === where.id) ? { id: where.id } : null,
       ),
     },
     service: {
       findFirst: jest.fn(async ({ where }: any) =>
         where.tenantId === "tenant-b"
-          ? { id: SERVICE_ID, duration: 30, price: 20, currency: "EUR", minAdvanceBooking, maxAdvanceBooking }
+          ? {
+              id: SERVICE_ID,
+              name: "Corte",
+              duration: 30,
+              price: 20,
+              currency: "EUR",
+              minAdvanceBooking,
+              maxAdvanceBooking,
+              isActive: serviceActive,
+              isOnlineBookable,
+              requiresApproval,
+            }
           : null,
       ),
+      findMany: async ({ where }: any) =>
+        where.tenantId === "tenant-b" ? [{ id: SERVICE_ID, duration: 30, name: "Corte", isActive: serviceActive }] : [],
+      count: async ({ where }: any) =>
+        where.tenantId === "tenant-b" ? where.id.in.filter((id: string) => id === SERVICE_ID).length : 0,
     },
     client: {
       findFirst: jest.fn(async ({ where }: any) => {
@@ -86,7 +132,11 @@ function build({
         return (
           existingClients.find(
             (c) =>
-              (where.email === undefined || c.email === where.email) &&
+              // { equals, mode: "insensitive" }: any case matches.
+              (where.email === undefined ||
+                (typeof where.email === "object"
+                  ? c.email?.toLowerCase() === where.email.equals.toLowerCase()
+                  : c.email === where.email)) &&
               (where.id === undefined || c.id === where.id) &&
               c.tenantId === where.tenantId,
           ) ?? null
@@ -102,8 +152,12 @@ function build({
         Object.assign(row, data);
         return row;
       }),
+      count: async ({ where }: any) =>
+        existingClients.filter((c) => c.tenantId === where.tenantId && where.id.in.includes(c.id)).length,
     },
     appointment: {
+      // The professional's other appointments that day: none here.
+      findMany: jest.fn(async () => []),
       create: jest.fn(async ({ data }: any) => {
         created.push(data);
         return { id: "apt-1", ...data };
@@ -111,7 +165,7 @@ function build({
     },
   };
   const stub = {} as any;
-  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub, stub);
+  const service = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
   // Side effects after the insert are not what this spec is about.
   (service as any).sendAppointmentCreatedNotifications = jest.fn();
   (service as any).events = { recordOnce: jest.fn() };
@@ -163,8 +217,30 @@ describe("online booking: who and where", () => {
 
     await service.createOnline(BOOKING as any);
 
-    expect(clientLookups[0]).toEqual({ email: "ana@mail.test", tenantId: "tenant-b" });
+    expect(clientLookups[0]).toEqual({
+      email: { equals: "ana@mail.test", mode: "insensitive" },
+      tenantId: "tenant-b",
+    });
     expect(created[0].clientId).toBe("ana-at-b");
+  });
+
+  it("finds her whatever the capitals of her email, and stores a new one in lower case", async () => {
+    const { service, created, prisma } = build({
+      existingClients: [{ id: "ana-at-b", email: "Ana@Mail.test", tenantId: "tenant-b" }],
+    });
+
+    await service.createOnline({ ...BOOKING, clientInfo: { ...BOOKING.clientInfo, email: " ANA@mail.TEST " } } as any);
+    expect(created[0].clientId).toBe("ana-at-b");
+    expect(prisma.client.create).not.toHaveBeenCalled();
+
+    await service.createOnline({
+      ...BOOKING,
+      clientInfo: { firstName: "Eva", lastName: "V", email: "Eva@Mail.TEST", phone: "699 888 777" },
+    } as any);
+    expect(prisma.client.create.mock.calls[0][0].data).toMatchObject({
+      email: "eva@mail.test",
+      phone: "+34699888777",
+    });
   });
 
   it("creates the client in this salon when they are only known elsewhere", async () => {
@@ -191,18 +267,49 @@ describe("online booking: who and where", () => {
     expect(prisma.client.create).not.toHaveBeenCalled();
   });
 
-  it("fills in the email of a client found by phone, and never overwrites one", async () => {
+  it("never changes an existing client's contact details from a public booking", async () => {
+    // Matched by one detail, the booking is hers; the other detail on the
+    // form is not written onto her record, missing or different: her notices
+    // would go to whoever typed it.
+    const existingClients: any[] = [
+      { id: "no-email", email: null, phone: "600111222", tenantId: "tenant-b" },
+      { id: "has-email", email: "old@mail.test", phone: "611222333", tenantId: "tenant-b" },
+      { id: "no-phone", email: "eva@mail.test", phone: null, tenantId: "tenant-b" },
+    ];
+    const { service, prisma, created } = build({ existingClients });
+
+    await service.createOnline(BOOKING as any);
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any);
+    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "E", lastName: "V", email: "eva@mail.test", phone: "699 888 777" } } as any);
+
+    expect(created.map((a) => a.clientId)).toEqual(["no-email", "has-email", "no-phone"]);
+    expect(prisma.client.update).not.toHaveBeenCalled();
+    expect(prisma.client.create).not.toHaveBeenCalled();
+    expect(existingClients.map((c) => [c.email, c.phone])).toEqual([
+      [null, "600111222"],
+      ["old@mail.test", "611222333"],
+      ["eva@mail.test", null],
+    ]);
+  });
+
+  it("a booking by the team still fills in a missing detail, and never overwrites one", async () => {
     const { service, prisma } = build({
       existingClients: [
         { id: "no-email", email: null, phone: "600111222", tenantId: "tenant-b" },
         { id: "has-email", email: "old@mail.test", phone: "611222333", tenantId: "tenant-b" },
       ],
     });
+    const owner = { id: "u1", role: "owner", tenantId: "tenant-b" };
 
-    await service.createOnline(BOOKING as any);
-    await service.createOnline({ ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any);
+    await service.createByStaff(BOOKING as any, owner);
+    await service.createByStaff(
+      { ...BOOKING, clientInfo: { firstName: "B", lastName: "C", email: "new@mail.test", phone: "611 222 333" } } as any,
+      owner,
+    );
 
-    expect(prisma.client.update.mock.calls).toEqual([[{ where: { id: "no-email" }, data: { email: "ana@mail.test" } }]]);
+    expect(prisma.client.update.mock.calls).toEqual([
+      [{ where: { id: "no-email", tenantId: "tenant-b" }, data: { email: "ana@mail.test" } }],
+    ]);
   });
 
   it("stores a new client's phone in international form", async () => {
@@ -231,6 +338,70 @@ describe("online booking: who and where", () => {
 
     await expect(service.createOnline(BOOKING as any)).rejects.toThrow(NotFoundException);
     expect(prisma.client.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("online booking: a salon without an active plan", () => {
+  it.each(["cancelled", "suspended"])("refuses a booking when the subscription is %s", async (subscriptionStatus) => {
+    const { service, created } = build({ subscriptionStatus });
+
+    await expect(service.createOnline(BOOKING as any)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("still books during the trial and on an active plan", async () => {
+    for (const subscriptionStatus of ["trialing", "active", "past_due"]) {
+      const { service, created } = build({ subscriptionStatus });
+      await service.createOnline(BOOKING as any);
+      expect(created).toHaveLength(1);
+    }
+  });
+});
+
+describe("online booking: confirmed automatically when the salon says so", () => {
+  // Tenant.autoConfirmOnlineBookings, from the salon's general settings.
+  it("starts pending by default, as before", async () => {
+    const { service, created } = build();
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
+  it("starts confirmed when the salon confirms online bookings automatically", async () => {
+    const { service, created } = build({ autoConfirmOnlineBookings: true });
+    const hasValidConsent = jest.fn(async () => true);
+    (service as any).consentService = { hasValidConsent };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("confirmed");
+    expect(hasValidConsent).toHaveBeenCalledWith(expect.any(String), expect.any(String), SERVICE_ID);
+  });
+
+  it("stays pending when the service needs consent forms the client hasn't signed", async () => {
+    // Confirming is where consent is checked; a visit born confirmed would
+    // never be checked again.
+    const { service, created } = build({ autoConfirmOnlineBookings: true });
+    (service as any).consentService = { hasValidConsent: jest.fn(async () => false) };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
+  it("stays pending when the service requires the salon's approval", async () => {
+    // Service.requiresApproval was saved and read nowhere.
+    const { service, created } = build({ autoConfirmOnlineBookings: true, requiresApproval: true });
+    (service as any).consentService = { hasValidConsent: jest.fn(async () => true) };
+    await service.createOnline(BOOKING as any);
+    expect(created[0].status).toBe("pending");
+  });
+
+  it("leaves the team's own bookings from the panel alone", async () => {
+    const { service, created } = build({
+      autoConfirmOnlineBookings: true,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0].status).toBe("pending");
   });
 });
 
@@ -269,6 +440,95 @@ describe("online booking: the slot", () => {
   });
 });
 
+describe("online booking: only what the salon offers online", () => {
+  it("refuses a service the salon marked not bookable online, before anything is written", async () => {
+    const { service, created, prisma } = build({ isOnlineBookable: false });
+
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(ForbiddenException);
+    await expect(refused).rejects.toMatchObject({ response: { code: "SERVICE_NOT_BOOKABLE_ONLINE" } });
+    expect(created).toHaveLength(0);
+    expect(prisma.client.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses it from the receptionist too (bookOnline)", async () => {
+    const { service, created } = build({ isOnlineBookable: false });
+    await expect(service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses an inactive service and an inactive professional", async () => {
+    const off = build({ serviceActive: false });
+    await expect(off.service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(NotFoundException);
+
+    // The receptionist names the professional itself: bookOnline checks it.
+    const gone = build({ inactiveProfessionals: [PRO.id] });
+    await expect(gone.service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(NotFoundException);
+    expect(off.created).toHaveLength(0);
+    expect(gone.created).toHaveLength(0);
+  });
+
+  it("the team still books a service that is not bookable online", async () => {
+    const { service, created } = build({
+      isOnlineBookable: false,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await service.createByStaff(
+      { ...BOOKING, clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created).toHaveLength(1);
+  });
+
+  it("the team cannot book a deactivated service", async () => {
+    // The pickers no longer offer it; a stale form or a direct call must
+    // not book it either.
+    const { service, created } = build({
+      serviceActive: false,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    const refused = service.createByStaff(
+      { ...BOOKING, clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    await expect(refused).rejects.toThrow(BadRequestException);
+    await expect(refused).rejects.toThrow(/desactivado/);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses a named professional who does not perform the service", async () => {
+    // Only Bea is linked to the service: the booking page offers only her.
+    const { service, created } = build({ offering: [PRO_2.id] });
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(BadRequestException);
+    await expect(refused).rejects.toThrow(/no realiza este servicio/);
+    expect(created).toHaveLength(0);
+
+    await service.createOnline({ ...BOOKING, professionalId: PRO_2.id } as any);
+    expect(created[0].professionalId).toBe(PRO_2.id);
+  });
+
+  it("lets anyone be named when nobody is linked to the service, as the booking page does", async () => {
+    const { service, created } = build({ offering: [] });
+    await service.createOnline(BOOKING as any);
+    expect(created[0].professionalId).toBe(PRO.id);
+  });
+
+  it("refuses another salon's widget named with a professional", async () => {
+    const { service, created } = build();
+    await expect(
+      service.createOnline({ ...BOOKING, widgetInstanceId: FOREIGN_WIDGET_ID } as any),
+    ).rejects.toThrow(NotFoundException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("keeps its own widget's attribution", async () => {
+    const { service, created } = build();
+    await service.createOnline({ ...BOOKING, widgetInstanceId: WIDGET_ID } as any);
+    expect(created[0]).toMatchObject({ tenantId: "tenant-b", widgetInstanceId: WIDGET_ID });
+  });
+});
+
 describe("the widget's 'any professional'", () => {
   it("assigns the first professional who offers the service and is free", async () => {
     const { service, created } = build({ freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
@@ -280,6 +540,21 @@ describe("the widget's 'any professional'", () => {
 
   it("only considers the widget's own professionals when it lists some", async () => {
     const { service } = build({ widgetProfessionals: [PRO.id], freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
+
+    await expect(
+      service.createOnline({ ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID } as any),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  // R11: who does the service is decided salon-wide, as for a named
+  // professional. Deciding it within the widget's list gave the cut to a
+  // widget professional who does not do it because none of them was linked.
+  it("never gives the service to a widget professional who does not do it", async () => {
+    const { service } = build({
+      widgetProfessionals: [PRO_2.id],
+      offering: [PRO.id],
+      freeTimes: { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] },
+    });
 
     await expect(
       service.createOnline({ ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID } as any),
@@ -308,8 +583,10 @@ describe("staff booking", () => {
     expect(created[0].tenantId).toBe("tenant-b");
   });
 
-  it("does not require the slot to be free: staff may book over the grid", async () => {
-    // A deliberate difference: the salon can squeeze someone in by hand.
+  it("does not require an online slot: staff may book off the grid", async () => {
+    // A deliberate difference: the salon can squeeze someone in by hand, on
+    // any minute and inside the online notice. An overlap with another
+    // appointment of the professional is refused: see staff-create.spec.ts.
     const { service, created } = build({
       freeTimes: {},
       existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
@@ -359,6 +636,30 @@ describe("request validation", () => {
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined })).toEqual(["clientId"]);
     expect(errors(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: PRO.id })).toEqual([]);
   });
+
+  // The booking forms show these to the client as they arrive.
+  it("explains a public booking's mistakes in Spanish", () => {
+    const messages = (body: object): string[] => {
+      const collect = (es: any[]): string[] =>
+        es.flatMap((e) => [...Object.values<string>(e.constraints ?? {}), ...collect(e.children ?? [])]);
+      return collect(validateSync(plainToInstance(OnlineBookingDto, body) as object, { whitelist: true })).sort();
+    };
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "12345" } })).toEqual([
+      "Introduce un teléfono válido (al menos 9 cifras)",
+    ]);
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", email: "a@mail.test" } })).toContain(
+      "El teléfono es obligatorio",
+    );
+    expect(messages({ ...BOOKING, clientInfo: { firstName: "A", lastName: "B", phone: "600111222", email: "a@" } })).toEqual([
+      "Introduce un email válido",
+    ]);
+    expect(messages({ ...BOOKING, clientInfo: undefined })).toEqual(["Faltan tus datos de contacto"]);
+    expect(messages({ ...BOOKING, scheduledDate: "tomorrow", scheduledTime: "25:00" })).toEqual([
+      "Elige una fecha válida",
+      "Elige una hora válida",
+    ]);
+    expect(messages({ ...BOOKING, serviceId: undefined })).toEqual(["Elige un servicio"]);
+  });
 });
 
 /**
@@ -405,5 +706,161 @@ describe("the appointment's location", () => {
     const none = build();
     await none.service.createOnline(BOOKING as any);
     expect(none.created[0].locationId).toBeNull();
+  });
+});
+
+describe("online booking: a client the salon blocked", () => {
+  const blocked = () => [
+    { id: "blocked-ana", email: "ana@mail.test", phone: "600111222", tenantId: "tenant-b", status: "blocked" },
+  ];
+
+  it("refuses her from the site and the widget, without saying why", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+
+    const refused = service.createOnline(BOOKING as any);
+    await expect(refused).rejects.toThrow(ForbiddenException);
+    await expect(refused).rejects.toMatchObject({
+      response: { code: "ONLINE_BOOKING_NOT_AVAILABLE", message: "No es posible reservar online; contacta con el salón." },
+    });
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses her when she is matched by phone only", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await expect(
+      service.createOnline({ ...BOOKING, clientInfo: { firstName: "Ana", lastName: "López", phone: "600 111 222" } } as any),
+    ).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses her from the receptionist too (bookOnline)", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await expect(service.bookOnline("tenant-b", BOOKING as any)).rejects.toThrow(ForbiddenException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("still lets the team book her from the panel", async () => {
+    const { service, created } = build({ existingClients: blocked() });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "blocked-ana" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0].clientId).toBe("blocked-ana");
+  });
+
+  it("books an inactive client online as before", async () => {
+    const { service, created } = build({ existingClients: [{ ...blocked()[0], status: "inactive" }] });
+    await service.createOnline(BOOKING as any);
+    expect(created[0].clientId).toBe("blocked-ana");
+  });
+});
+
+/**
+ * Every booking keeps the service as it was booked (appointment-snapshot.ts):
+ * the site, the widget, the virtual receptionist and the wait list's offer
+ * (which books through the site) all go through insertAppointment.
+ */
+describe("the booked service is kept on the appointment", () => {
+  const SNAPSHOT = { serviceName: "Corte", servicePrice: 20, serviceDuration: 30 };
+
+  it("from the booking site", async () => {
+    const { service, created } = build();
+    await service.createOnline(BOOKING as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the widget's any professional", async () => {
+    const { service, created } = build();
+    await service.createOnline({ ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget" } as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the virtual receptionist (bookOnline)", async () => {
+    const { service, created } = build();
+    await service.bookOnline("tenant-b", BOOKING as any);
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+
+  it("from the panel", async () => {
+    const { service, created } = build({ existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }] });
+    await service.createByStaff(
+      { ...BOOKING, scheduledDate: "2026-12-01", clientInfo: undefined, clientId: "c1" } as any,
+      { id: "u1", role: "owner", tenantId: "tenant-b" },
+    );
+    expect(created[0]).toMatchObject(SNAPSHOT);
+  });
+});
+
+/**
+ * A booking at one of the salon's locations (multi-local): only the
+ * professionals who work there, and the appointment is that location's.
+ */
+describe("booking at a location", () => {
+  const LOC_A = "55555555-5555-4555-8555-555555555555";
+  const LOC_B = "66666666-6666-4666-8666-666666666666";
+  const links = [
+    { professionalId: PRO.id, locationId: LOC_A, isPrimary: true },
+    { professionalId: PRO.id, locationId: LOC_B, isPrimary: false },
+    { professionalId: PRO_2.id, locationId: LOC_B, isPrimary: true },
+  ];
+
+  it("is that location's, not the professional's primary one", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await service.createOnline({ ...BOOKING, locationId: LOC_B } as any);
+    expect(created[0].locationId).toBe(LOC_B);
+  });
+
+  it("refuses a professional who does not work there, before anything is written", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await expect(
+      service.createOnline({ ...BOOKING, professionalId: PRO_2.id, locationId: LOC_A } as any),
+    ).rejects.toThrow(BadRequestException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("refuses a location that is not the salon's, or is closed", async () => {
+    const { service, created } = build({ locationLinks: links });
+    await expect(
+      service.createOnline({ ...BOOKING, locationId: "77777777-7777-4777-8777-777777777777" } as any),
+    ).rejects.toThrow(NotFoundException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("the widget's any professional picks among those who work there", async () => {
+    // Ana works at both and is busy at 10:00; Bea works at B only. At B the
+    // widget gives Bea; at A nobody free works there (Bea is not considered).
+    const onlyBeaFreeAtB = build({ locationLinks: links, freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
+    await onlyBeaFreeAtB.service.createOnline({
+      ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget", locationId: LOC_B,
+    } as any);
+    expect(onlyBeaFreeAtB.created[0]).toMatchObject({ professionalId: PRO_2.id, locationId: LOC_B });
+
+    const nobodyAtA = build({ locationLinks: links, freeTimes: { [PRO.id]: [], [PRO_2.id]: ["10:00"] } });
+    await expect(
+      nobodyAtA.service.createOnline({
+        ...BOOKING, professionalId: "", widgetInstanceId: WIDGET_ID, source: "widget", locationId: LOC_A,
+      } as any),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it("from the panel too: every professional of the visit must work there", async () => {
+    const { service, created } = build({
+      locationLinks: links,
+      existingClients: [{ id: "c1", email: "x@mail.test", tenantId: "tenant-b" }],
+    });
+    await expect(
+      service.createByStaff(
+        { ...BOOKING, professionalId: PRO_2.id, locationId: LOC_A, clientInfo: undefined, clientId: "c1" } as any,
+        { id: "u1", role: "owner", tenantId: "tenant-b" },
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(created).toHaveLength(0);
+  });
+
+  it("validates the location id in both bodies", () => {
+    const online = plainToInstance(OnlineBookingDto, { ...BOOKING, locationId: "nope" });
+    expect(validateSync(online).map((e) => e.property)).toContain("locationId");
+    const staff = plainToInstance(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: SERVICE_ID, locationId: LOC_A });
+    expect(validateSync(staff)).toEqual([]);
   });
 });

@@ -14,10 +14,14 @@ import {
   ChevronRight,
   X,
   Bug,
+  ShieldCheck,
+  CalendarCheck,
+  History,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { removeToken } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { authStorage } from "@/lib/auth-storage";
 
 interface SaasSidebarProps {
   collapsed: boolean;
@@ -53,7 +57,7 @@ export function SaasSidebar({
     } finally {
       removeToken();
       if (typeof window !== "undefined") {
-        localStorage.removeItem("user");
+        authStorage().removeItem("user");
         document.cookie = "saas_user=; path=/; max-age=0";
       }
       window.location.href = "/saas/login";
@@ -62,11 +66,15 @@ export function SaasSidebar({
 
   const navItems = [
     { href: "/saas", icon: Home, labelKey: "saas.nav.overview", exact: true },
+    { href: "/saas/weekly", icon: CalendarCheck, labelKey: "saas.nav.weekly" },
     { href: "/saas/tenants", icon: Building2, labelKey: "saas.nav.salons" },
     { href: "/saas/users", icon: Users, labelKey: "saas.nav.users" },
     { href: "/saas/analytics", icon: BarChart2, labelKey: "saas.nav.analytics" },
     { href: "/saas/bug-reports", icon: Bug, labelKey: "saas.nav.bugReports" },
+    // The audit log, read-only (audit 8, C9).
+    { href: "/saas/actividad", icon: History, labelKey: "saas.nav.activity" },
     { href: "/saas/settings", icon: Settings, labelKey: "saas.nav.settings" },
+    { href: "/saas/seguridad", icon: ShieldCheck, labelKey: "saas.nav.security" },
   ];
 
   const isActive = (item: { href: string; exact?: boolean }) => {

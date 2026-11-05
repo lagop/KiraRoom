@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
+import { authStorage } from "@/lib/auth-storage";
 
 type InviteContext = {
   email: string;
@@ -52,6 +53,9 @@ export default function AcceptInvitePage() {
 
   // Step 3 — timezone
   const [timezone, setTimezone] = useState(DEFAULT_SALON_TIMEZONE);
+  // The terms (with the art. 28 processing agreement) and the privacy policy,
+  // as on signup: recorded by the server with the new salon.
+  const [acceptTerms, setAcceptTerms] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -95,6 +99,10 @@ export default function AcceptInvitePage() {
   }
 
   async function submit() {
+    if (!acceptTerms) {
+      setSubmitError("Acepta los términos para crear tu cuenta.");
+      return;
+    }
     setSubmitError(null);
     setSubmitting(true);
     try {
@@ -109,16 +117,16 @@ export default function AcceptInvitePage() {
         country,
         timezone,
         phone: phone.trim() || undefined,
+        acceptTerms: true,
       });
       if (res?.accessToken) {
-        localStorage.setItem("kira_auth_token", res.accessToken);
-        if (res.refreshToken) {
-          localStorage.setItem("kira_refresh_token", res.refreshToken);
-        }
+        // The refresh token arrived as an httpOnly cookie.
+        authStorage().setItem("kira_auth_token", res.accessToken);
+        authStorage().removeItem("kira_refresh_token");
       }
       setStep(4);
-      // Redirect to the onboarding wizard after a short pause.
-      setTimeout(() => router.push("/dashboard/onboarding"), 1500);
+      // To the panel, where the setup overlay takes it from here (D10).
+      setTimeout(() => router.push("/dashboard"), 1500);
     } catch (e: any) {
       const msg =
         e?.response?.data?.message ||
@@ -329,6 +337,25 @@ export default function AcceptInvitePage() {
                   ))}
                 </select>
               </Field>
+              <label className="mt-4 flex items-start gap-2 text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={acceptTerms}
+                  onChange={(e) => setAcceptTerms(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>
+                  Acepto los{" "}
+                  <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-700 underline">
+                    Términos del servicio
+                  </a>{" "}
+                  (incluido el encargo del tratamiento, art. 28 RGPD) y la{" "}
+                  <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-700 underline">
+                    Política de privacidad
+                  </a>
+                  .
+                </span>
+              </label>
               {submitError && <ErrorMsg>{submitError}</ErrorMsg>}
               <Nav>
                 <button type="button" onClick={() => setStep(2)} className={ghostBtn}>
@@ -357,7 +384,7 @@ export default function AcceptInvitePage() {
               </div>
               <h2 className="text-xl font-bold mb-2">¡Listo!</h2>
               <p className="text-sm text-slate-600">
-                Te estamos llevando al configurador de tu salón…
+                Te llevamos a tu panel para configurar el salón…
               </p>
             </div>
           )}

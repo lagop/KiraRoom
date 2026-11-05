@@ -13,7 +13,7 @@ const period = { start: "2026-09-28", end: "2026-10-02" }; // Monday to Friday
 const apt = (over: Partial<AnalyticsAppointment>): AnalyticsAppointment => ({
   status: "completed",
   paymentStatus: "paid",
-  totalAmount: 2000,
+  amountPaid: 2000,
   scheduledDate: "2026-09-28",
   duration: 60,
   ...over,
@@ -63,11 +63,11 @@ describe("buildConsolidatedReport", () => {
     ],
     appointments: [
       apt({ professionalId: "ana", clientId: "c1", serviceId: "s1", service: { name: "Corte" } }),
-      apt({ professionalId: "ana", clientId: "c1", serviceId: "s2", service: { name: "Color" }, totalAmount: 6000, duration: 120 }),
-      apt({ professionalId: "ana", clientId: "c2", status: "cancelled", totalAmount: 9999 }),
+      apt({ professionalId: "ana", clientId: "c1", serviceId: "s2", service: { name: "Color" }, amountPaid: 6000, duration: 120 }),
+      apt({ professionalId: "ana", clientId: "c2", status: "cancelled", paymentStatus: "refunded", amountPaid: 0 }), // cancelled and given back
       apt({ professionalId: "eva", clientId: "c3", serviceId: "s1", service: { name: "Corte" }, scheduledDate: "2026-10-02", status: "confirmed", paymentStatus: "pending", duration: 120 }),
       apt({ professionalId: "ana", locationId: "playa", clientId: "c4", serviceId: "s1", service: { name: "Corte" }, scheduledDate: "2026-10-02" }),
-      apt({ professionalId: "luz", clientId: "c5", totalAmount: 1500 }), // no location
+      apt({ professionalId: "luz", clientId: "c5", amountPaid: 1500 }), // no location
     ],
   });
 
@@ -102,5 +102,34 @@ describe("buildConsolidatedReport", () => {
     expect(report.totals).toMatchObject({ revenue: 11500, appointments: 5 });
     expect(report.activeLocations).toBe(2);
     expect(report.currencyUnit).toBe("cents");
+  });
+
+  it("takes approved closures and absences out of each location's capacity", () => {
+    const withTimeOff = buildConsolidatedReport({
+      period,
+      locations: [
+        { id: "centro", name: "Centro" },
+        { id: "playa", name: "Playa" },
+      ],
+      professionals: [
+        { id: "ana", workingHours: [{ day: "monday", openTime: "09:00", closeTime: "13:00" }] },
+        { id: "eva", workingHours: [{ day: "friday", openTime: "10:00", closeTime: "18:00" }] },
+      ],
+      links: [
+        { professionalId: "ana", locationId: "centro", isPrimary: true },
+        { professionalId: "eva", locationId: "playa", isPrimary: true },
+      ],
+      appointments: [apt({ professionalId: "eva", scheduledDate: "2026-10-02", duration: 120 })],
+      timeOff: [
+        // The salon closes on Monday: Ana's only working day.
+        { professionalId: null, kind: "closure", startDate: "2026-09-28", endDate: "2026-09-28" },
+        // Eva is out from 14:00 on Friday: 240 of her 480 minutes.
+        { professionalId: "eva", kind: "other", startDate: "2026-10-02", endDate: "2026-10-02", startTime: "14:00", endTime: "18:00" },
+      ],
+    });
+    const [centro, playa] = withTimeOff.perLocation;
+    expect(centro.occupancy).toMatchObject({ availableMinutes: 0, rate: null });
+    expect(playa.occupancy).toMatchObject({ bookedMinutes: 120, availableMinutes: 240, rate: 50 });
+    expect(withTimeOff.totals.occupancy).toMatchObject({ bookedMinutes: 120, availableMinutes: 240, rate: 50 });
   });
 });

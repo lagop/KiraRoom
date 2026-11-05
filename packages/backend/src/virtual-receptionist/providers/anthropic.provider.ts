@@ -3,6 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { LLMProvider, LLMGenerationConfig, LLMCompletion, ChatMessage } from '@kira/shared';
 import Anthropic from '@anthropic-ai/sdk';
 import { createUsageAccumulator } from './usage-totals';
+import {
+  maxTokensFor,
+  samplingParams,
+  thinkingParams,
+  withCacheBreakpoints,
+} from './anthropic-request';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL } from './anthropic-models';
 
 @Injectable()
 export class AnthropicProvider {
@@ -29,12 +36,7 @@ export class AnthropicProvider {
       apiKey &&
       (apiKey !== this.lastInitKey || workspaceId !== this.lastInitWorkspaceId)
     ) {
-      this.anthropic = new Anthropic({
-        apiKey,
-        ...(workspaceId
-          ? { defaultHeaders: { 'anthropic-workspace-id': String(workspaceId) } }
-          : {}),
-      });
+      this.anthropic = buildClient(apiKey, workspaceId);
       this.lastInitKey = apiKey;
       this.lastInitWorkspaceId = workspaceId ?? null;
       this.logger.log(
@@ -59,13 +61,33 @@ export class AnthropicProvider {
        */
       maxToolIterations?: number;
       toolChoice?: 'auto' | 'any' | { type: 'tool'; name: string };
+      /**
+       * The platform's key, passed in rather than written to process.env
+       * (which wiped every other provider's key on each message, so the
+       * fallback provider never had one).
+       */
+      credentials?: ProviderCredentials;
+      /**
+       * The server's notes for this turn, in a system block of their own
+       * after the cached prompt, never inside the client's message.
+       */
+      systemNotes?: string;
+      /** Retries one request (not the whole tool loop); see LLMService. */
+      callWithRetry?: <T>(fn: () => Promise<T>) => Promise<T>;
     },
   ): Promise<LLMCompletion> {
     // P2A-platform-llm: pick up env-injected key changes (admin UI).
-    this.initializeClient();
-    if (!this.anthropic) {
+    let client: Anthropic | null;
+    if (options?.credentials?.apiKey) {
+      client = this.clientFor(options.credentials);
+    } else {
+      this.initializeClient();
+      client = this.anthropic;
+    }
+    if (!client) {
       throw new Error('Anthropic client not initialized');
     }
+    const call = options?.callWithRetry ?? (<T>(fn: () => Promise<T>) => fn());
 
     const startTime = Date.now();
     const tools = options?.tools;
@@ -77,22 +99,29 @@ export class AnthropicProvider {
     // left to the model, which often answered without calling it. Forcing the
     // follow-up requests too would keep calling the tool until maxIter.
     const firstToolChoice = this.toToolChoice(options?.toolChoice ?? 'auto');
+    // Usage is summed across every round-trip, not read off the last
+    // response: the loop below reassigns `response`, so reading its usage
+    // after the loop silently dropped every intermediate request. Declared
+    // here so a request that fails half-way still reports what it spent.
+    const usage = createUsageAccumulator();
 
     try {
-      const messages = this.buildConversationHistory(
+      const messages: any[] = this.buildConversationHistory(
         conversationHistory,
         currentUserMessage,
       );
+      // Everything before the current user turn: the stable part of the
+      // conversation, cached at its end (see withCacheBreakpoints).
+      const historyCount = messages.length - 1;
 
-      // P2A-anthropic-params: newer Anthropic models (Haiku 4.5,
-      // Sonnet 4.5, Opus 4.1) reject requests that specify BOTH
-      // `temperature` and `top_p` — they return 400. We prefer
-      // `temperature` and only fall back to `top_p` when temperature
-      // is not provided.
-      const useTopP =
-        config.temperature === undefined && config.topP !== undefined;
-      const temperature = config.temperature;
-      const topP = config.topP;
+      // Model-dependent parameters (anthropic-request.ts): no sampling
+      // parameters and a thinking effort on Claude Haiku 5.5 and the rest of
+      // the Claude 5 family; temperature as before on Haiku 4.5.
+      const modelParams = {
+        max_tokens: maxTokensFor(config.model, config.maxTokens),
+        ...samplingParams(config.model, config.temperature, config.topP),
+        ...thinkingParams(config.model, this.configService.get('LLM_EFFORT')),
+      };
 
       // Prompt caching. The system prompt is the largest part of the input
       // and is stable per salon, so it is the natural cache prefix: a read
@@ -111,47 +140,45 @@ export class AnthropicProvider {
       // simply processed uncached, which is why cache_read_input_tokens sat
       // at 0 in production while this block looked correct.
       //
-      // Estimated for a salon with one short FAQ: ~600 tokens of tool
-      // schemas plus ~3000 of system prompt, about 3600. It was ~1970 until
-      // the booking flow and the handling rules went into the prompt.
+      // Estimated at ~600 tokens of tool schemas plus the system prompt;
       // prompt-cache-prefix.l4.spec.ts tracks this against the real
-      // buildSystemPrompt output.
-      //
-      // The size also varies by salon now: the FAQs are in the prompt, up to
-      // 20 entries of 200 + 200 characters, which is up to ~2200 tokens more.
-      // So a salon with a handful of full FAQs probably clears 4096 and is
-      // cached, while one with none probably is not. The estimate is too
-      // rough to say which salons are which -- per-tenant
+      // buildSystemPrompt output. The estimate is rough: per-tenant
       // cache_read_input_tokens in production is the only real answer.
       //
       // Leaving cache_control in place costs nothing and pays off wherever
       // the prefix clears the minimum. Do not read a run of zeroes as "the
       // prefix is being invalidated" for a salon until its prefix is known
       // to be over 4096: below that, zero is the expected answer.
+      //
+      // Measured in production (October 2026, test salon with one service):
+      // about 2,600 input tokens per request and no cache write at all --
+      // below the minimum. Two things change that: Claude Haiku 5.5 caches
+      // from 512 tokens, and the messages now carry breakpoints too (end of
+      // the stored history, and the last message for the tool loop), so a
+      // longer conversation clears the minimum even on Haiku 4.5.
+      //
+      // The turn's server notes go in a second block, after the breakpoint:
+      // the cached prefix stays the same for every conversation of the salon.
       const cacheableSystem = [
         {
           type: "text" as const,
           text: systemPrompt,
           cache_control: { type: "ephemeral" as const },
         },
+        ...(options?.systemNotes ? [{ type: "text" as const, text: options.systemNotes }] : []),
       ];
-      // Usage is summed across every round-trip, not read off the last
-      // response: the loop below reassigns `response`, so reading its usage
-      // after the loop silently dropped every intermediate request.
-      const usage = createUsageAccumulator();
 
-      let response = await this.anthropic.messages.create({
-        model: config.model,
-        system: cacheableSystem,
-        messages,
-        max_tokens: config.maxTokens,
-        ...(useTopP
-          ? { top_p: topP }
-          : { temperature }),
-        ...(tools && tools.length > 0
-          ? { tools: tools as any, tool_choice: firstToolChoice }
-          : {}),
-      });
+      let response: any = await call(() =>
+        client.messages.create({
+          model: config.model,
+          system: cacheableSystem,
+          messages: withCacheBreakpoints(messages, historyCount) as any,
+          ...modelParams,
+          ...(tools && tools.length > 0
+            ? { tools: tools as any, tool_choice: firstToolChoice }
+            : {}),
+        } as any),
+      );
       usage.add(response.usage);
 
       // Tool-execution loop. The model can emit `tool_use` blocks; we
@@ -170,20 +197,18 @@ export class AnthropicProvider {
           (b: any) => b && b.type === 'tool_use',
         ) as Array<{ id: string; name: string; input: unknown }>;
 
-        // Append the model's tool_use blocks to the conversation so the
-        // next request can pair them with our tool_result blocks.
+        // Append the model's whole turn so the next request can pair its
+        // tool_use blocks with our tool_result blocks. Whole, not just the
+        // tool_use blocks: an adaptive-thinking model (Haiku 5.5) needs its
+        // thinking blocks back unchanged with the tool results, and any text
+        // it wrote before the call is part of the turn too.
         messages.push({
           role: 'assistant',
-          content: toolUseBlocks.map((tu) => ({
-            type: 'tool_use',
-            id: tu.id,
-            name: tu.name,
-            input: tu.input,
-          })) as any,
+          content: response.content,
         });
 
         // Execute every tool call and append tool_result blocks. The
-        // Anthropic / MiniMax API requires tool_result.content to be a
+        // The Anthropic API requires tool_result.content to be a
         // JSON-encoded string, not a raw object.
         const toolResultBlocks: Array<{
           type: 'tool_result';
@@ -206,15 +231,19 @@ export class AnthropicProvider {
             this.logger.warn(
               `Tool execution failed name=${tu.name} err=${message}`,
             );
+            // The reason stays in the log: the raw exception text (a
+            // database message) is not something to put in front of the
+            // model, which may repeat it to the client.
+            const failure = { error: 'tool_failed' };
             executedTools.push({
               name: tu.name,
               input: tu.input,
-              result: { error: message },
+              result: failure,
             });
             toolResultBlocks.push({
               type: 'tool_result',
               tool_use_id: tu.id,
-              content: JSON.stringify({ error: message }),
+              content: JSON.stringify(failure),
               is_error: true,
             });
           }
@@ -225,24 +254,43 @@ export class AnthropicProvider {
           content: toolResultBlocks as any,
         });
 
-        response = await this.anthropic.messages.create({
-          model: config.model,
-          system: cacheableSystem,
-          messages,
-          max_tokens: config.maxTokens,
-          ...(useTopP
-            ? { top_p: topP }
-            : { temperature }),
-          ...(tools && tools.length > 0
-            ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
-            : {}),
-        });
+        response = await call(() =>
+          client.messages.create({
+            model: config.model,
+            system: cacheableSystem,
+            messages: withCacheBreakpoints(messages, historyCount) as any,
+            ...modelParams,
+            ...(tools && tools.length > 0
+              ? { tools: tools as any, tool_choice: { type: 'auto' as const } }
+              : {}),
+          } as any),
+        );
         usage.add(response.usage);
       }
 
       const latency = Date.now() - startTime;
+      // Claude Haiku 5.5 runs safety classifiers that can decline a request,
+      // with no server-side fallback. Say so plainly instead of returning
+      // whatever partial text came with the refusal.
+      if (response.stop_reason === 'refusal') {
+        this.logger.warn(`Anthropic declined the request (stop_reason=refusal, model=${config.model})`);
+        return {
+          id: response.id,
+          // No "le paso tu mensaje al equipo": nothing passes it on. The
+          // receptionist adds the salon's phone (VirtualReceptionistService).
+          text: 'Ahora mismo no puedo responder a eso por aquí.',
+          usage: usage.totals(),
+          model: config.model,
+          provider: LLMProvider.ANTHROPIC,
+          timestamp: new Date(),
+          latency,
+          finishReason: 'refusal',
+          ...({ toolsExecuted: executedTools } as any),
+        };
+      }
       // Concatenate every text block so multi-block responses render as
-      // a single reply.
+      // a single reply. Blocks are picked by type: a thinking model's
+      // response starts with thinking blocks.
       const completion = (response.content ?? [])
         .filter((b: any) => b && b.type === 'text')
         .map((b: any) => b.text)
@@ -267,56 +315,60 @@ export class AnthropicProvider {
         ...({ toolsExecuted: executedTools } as any),
       };
     } catch (error) {
-      this.logger.error('Error generating Anthropic completion:', error);
-      throw new Error(`Anthropic API error: ${(error as Error).message}`);
+      // The reason goes in the message itself: passed as a second argument
+      // the error object was dropped by the JSON logger, and production only
+      // showed "Error generating Anthropic completion:" with no cause. The
+      // SDK's message is the API's error body (type and text), never the key.
+      this.logger.error(`Error generating Anthropic completion: ${describeApiError(error)}`);
+      // The HTTP status and what the request had already spent travel with
+      // the error: LLMService records the usage (it was lost before), and
+      // decides on retries from the status, not from digits in the text.
+      throw providerError(`Anthropic API error: ${(error as Error).message}`, error, usage.totals(), config.model);
     }
   }
 
+  /** A client for the key the caller passed, reused while the key is the same. */
+  private explicit: { key: string; workspaceId: string | null; client: Anthropic } | null = null;
+
+  private clientFor(c: ProviderCredentials): Anthropic {
+    const workspaceId = c.workspaceId ?? null;
+    if (!this.explicit || this.explicit.key !== c.apiKey || this.explicit.workspaceId !== workspaceId) {
+      this.explicit = { key: c.apiKey, workspaceId, client: buildClient(c.apiKey, workspaceId) };
+    }
+    return this.explicit.client;
+  }
+
+  /** The current Claude models (anthropic-models.ts); costPerToken is USD per 1K input tokens. */
   async getAvailableModels(): Promise<any[]> {
-    return [
-      {
-        id: 'claude-3-opus-20240229',
-        name: 'Claude 3 Opus',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.015,
-        features: ['Very high intelligence', 'Complex reasoning', 'Creative generation'],
-        isEnabled: true,
-      },
-      {
-        id: 'claude-3-sonnet-20240229',
-        name: 'Claude 3 Sonnet',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.003,
-        features: ['Great intelligence', 'Balanced performance', 'Fast responses'],
-        isEnabled: true,
-      },
-      {
-        id: 'claude-3-haiku-20240307',
-        name: 'Claude 3 Haiku',
-        provider: LLMProvider.ANTHROPIC,
-        contextWindow: 200000,
-        costPerToken: 0.0008,
-        features: ['Fastest performance', 'High efficiency', 'Cost-effective'],
-        isEnabled: true,
-      },
-    ];
+    return CLAUDE_MODELS.map((m) => ({
+      id: m.id,
+      name: m.name,
+      provider: LLMProvider.ANTHROPIC,
+      contextWindow: m.contextWindow,
+      costPerToken: m.inputPerMTok / 1000,
+      features: m.legacy ? ['Legacy'] : [],
+      isEnabled: true,
+    }));
   }
 
   async testConnection(apiKey: string, model?: string): Promise<any> {
     const testClient = new Anthropic({ apiKey });
+    const testModel = model || DEFAULT_CLAUDE_MODEL;
 
     try {
-      const response = await testClient.messages.create({
-        model: model || 'claude-3-sonnet-20240229',
+      // The same model-dependent parameters as a real request: Claude 5
+      // models think first, and the thinking counts toward max_tokens.
+      const response: any = await testClient.messages.create({
+        model: testModel,
         messages: [{ role: 'user', content: 'Hello, world!' }],
-        max_tokens: 10,
-      });
+        max_tokens: maxTokensFor(testModel, 10),
+        ...thinkingParams(testModel, 'low'),
+      } as any);
+      const text = (response.content ?? []).find((b: any) => b.type === 'text');
 
       return {
         success: true,
-        message: response.content[0].type === 'text' ? response.content[0].text : '',
+        message: text?.text ?? '',
         model: response.model,
       };
     } catch (error) {
@@ -352,4 +404,50 @@ export class AnthropicProvider {
     if (choice === 'auto') return { type: 'auto' };
     return { type: 'tool', name: choice.name };
   }
+}
+
+/** A provider key handed to the provider for one request. */
+export interface ProviderCredentials {
+  apiKey: string;
+  workspaceId?: string | null;
+}
+
+/**
+ * The SDK's own retries are off (it retried every request twice more, under
+ * our retries of the whole tool loop): LLMService retries each request.
+ */
+export function buildClient(apiKey: string, workspaceId: string | null | undefined): Anthropic {
+  return new Anthropic({
+    apiKey,
+    maxRetries: 0,
+    ...(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': String(workspaceId) } } : {}),
+  });
+}
+
+/** An error that keeps the HTTP status of its cause and the usage spent so far. */
+export function providerError(
+  message: string,
+  cause: unknown,
+  usage?: unknown,
+  model?: string,
+): Error & { status?: number; code?: string; usage?: unknown; model?: string } {
+  const c = cause as { status?: unknown; code?: unknown } | null;
+  return Object.assign(new Error(message), {
+    ...(typeof c?.status === 'number' ? { status: c.status } : {}),
+    ...(typeof c?.code === 'string' ? { code: c.code } : {}),
+    ...(usage ? { usage } : {}),
+    ...(model ? { model } : {}),
+  });
+}
+
+/**
+ * One line on why a request failed: the HTTP status and the API error
+ * message. The SDK puts the API error body in `message` (for example
+ * `401 {"type":"error","error":{"type":"authentication_error",...}}`);
+ * it never contains the API key.
+ */
+export function describeApiError(error: unknown): string {
+  const e = error as { status?: number; message?: string } | null;
+  const status = typeof e?.status === "number" ? `status=${e.status} ` : "";
+  return `${status}${e?.message ?? String(error)}`.slice(0, 500);
 }

@@ -1,8 +1,10 @@
 "use client";
 
 import BookingWidget from '@/components/booking/BookingWidget';
+import { useToast } from '@/components/ui/use-toast';
 
-// Mock data for demonstration
+// Invented data: this page is the landing page's booking demo. The widget
+// shows example times and books nothing (lib/demo-booking.ts).
 const mockSalon = {
   id: 'salon-1',
   name: 'Kira Room',
@@ -74,9 +76,9 @@ const mockProfessionals = [
 ];
 
 export default function ExampleBookingPage() {
-  const handleBookingComplete = (appointment: any) => {
-    console.log('Booking completed:', appointment);
-    alert(`¡Reserva confirmada! ID: ${appointment.id}`);
+  const { toast } = useToast();
+  const handleBookingComplete = () => {
+    toast({ title: 'Reserva de demostración', description: 'No se ha reservado ninguna cita.' });
   };
 
   return (
@@ -95,7 +97,7 @@ export default function ExampleBookingPage() {
           </p>
           <div className="mt-6 inline-flex items-center px-4 py-2 bg-white/80 backdrop-blur-sm text-purple-700 rounded-full text-sm font-medium shadow-md border border-purple-200">
             <span className="mr-2">✨</span>
-            Integración completa con API de disponibilidad en tiempo real
+            Demostración: horarios de ejemplo, no se reserva nada
           </div>
         </div>
 
@@ -149,8 +151,8 @@ export default function ExampleBookingPage() {
             </div>
             <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200">
               <p className="text-sm text-gray-600 text-center">
-                <span className="font-medium">💡 Nota:</span> Este ejemplo utiliza datos de demostración para servicios y profesionales,
-                pero la disponibilidad de horarios se obtiene directamente de nuestro backend en tiempo real.
+                <span className="font-medium">💡 Nota:</span> Esta demostración usa servicios, profesionales y horarios de
+                ejemplo y no reserva nada. En la página de tu salón, las horas libres salen de tu agenda real.
               </p>
             </div>
           </div>

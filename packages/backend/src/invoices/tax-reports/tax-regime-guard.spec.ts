@@ -58,7 +58,7 @@ describe("tax regime guard on quarterly returns", () => {
 
     await expect(
       service.generate("t1", TaxReportType.modelo_303, 2026, 3),
-    ).rejects.toThrow(/IGIC[\s\S]*modelo_420/);
+    ).rejects.toThrow(/IGIC[\s\S]*modelo 420/);
   });
 
   it("allows a Modelo 303 for a tenant under IVA", async () => {
@@ -102,7 +102,7 @@ describe("tax regime guard on quarterly returns", () => {
 
     await expect(
       service.generate("t1", TaxReportType.modelo_420, 2026, 3),
-    ).rejects.toThrow(/modelo_303, not modelo_420/);
+    ).rejects.toThrow(/es el modelo 303 \(IVA\), no el modelo 420 \(IGIC\)/);
   });
 
   it("refuses any indirect-tax return under IPSI, which has no form here", async () => {
@@ -110,19 +110,19 @@ describe("tax regime guard on quarterly returns", () => {
 
     await expect(
       service.generate("t1", TaxReportType.modelo_303, 2026, 3),
-    ).rejects.toThrow(/city council/);
+    ).rejects.toThrow(/ciudad autónoma/);
   });
 
-  it("lets the Modelo 130 through under every regime", async () => {
-    // IRPF is not an indirect tax, so the territory's regime is irrelevant.
+  it("no longer generates a Modelo 130 draft, under any regime", async () => {
     for (const regime of ["iva", "igic", "ipsi"]) {
       const { service, prisma } = serviceFor({ taxRegime: regime });
 
-      await service.generate("t1", TaxReportType.modelo_130, 2026, 3);
+      await expect(service.generate("t1", TaxReportType.modelo_130, 2026, 3)).rejects.toThrow(
+        /ya no prepara el modelo 130/,
+      );
 
-      expect(prisma.taxReport.upsert).toHaveBeenCalled();
-      // The regime is not even looked up for a 130.
-      expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+      expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+      expect(prisma.taxReport.upsert).not.toHaveBeenCalled();
     }
   });
 
@@ -131,7 +131,7 @@ describe("tax regime guard on quarterly returns", () => {
 
     await expect(
       service.generate("t1", TaxReportType.modelo_303, 2026, 7),
-    ).rejects.toThrow(/Invalid quarter/);
+    ).rejects.toThrow(/El trimestre 7 no existe/);
 
     expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
   });

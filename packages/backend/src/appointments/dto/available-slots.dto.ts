@@ -1,6 +1,14 @@
-import { IsUUID, IsDateString, IsOptional, IsNumber, Min, IsArray } from 'class-validator';
+import { IsUUID, IsDateString, IsOptional, IsNumber, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+/**
+ * GET /appointments/available-slots (public). A query string arrives as
+ * text and the global ValidationPipe does no implicit conversion
+ * (common/validation/global-validation-pipe.ts), so a numeric field needs
+ * its @Type: without it the widget's `duration=60` was refused with a 400
+ * and the widget never showed a free time.
+ */
 export class AvailableSlotsDto {
   @ApiProperty({ description: 'Tenant ID for multi-tenant support' })
   @IsUUID()
@@ -15,6 +23,19 @@ export class AvailableSlotsDto {
   @IsOptional()
   professionalIds?: string;
 
+  @ApiPropertyOptional({ description: 'One of the salon\x27s locations: only the professionals who work there' })
+  @IsUUID()
+  @IsOptional()
+  locationId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The booking widget asking for "any professional": only the widget\x27s professionals count, as when it books (findFreeProfessional)',
+  })
+  @IsUUID()
+  @IsOptional()
+  widgetInstanceId?: string;
+
   @ApiPropertyOptional({ description: 'Service ID to filter slots' })
   @IsOptional()
   serviceId?: string;
@@ -28,6 +49,7 @@ export class AvailableSlotsDto {
     example: 60,
     default: 60
   })
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   @IsOptional()

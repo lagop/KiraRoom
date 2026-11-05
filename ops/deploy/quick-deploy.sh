@@ -9,13 +9,13 @@
 #      clone if present, otherwise clones fresh).
 #   3. Generates three strong secrets locally with openssl
 #      (POSTGRES_PASSWORD, JWT_SECRET, OAUTH_STATE_SECRET).
-#   4. Writes /opt/kiraroom/.env with the secrets + the Stripe/MiniMax
-#      values you provide as env vars to the SSH session.
+#   4. Writes /opt/kiraroom/.env with the secrets + the Stripe values
+#      you provide as env vars to the SSH session (and ANTHROPIC_API_KEY
+#      if given; it is usually saved in the platform console instead).
 #   5. Runs `docker compose up -d` against docker-compose.prod.yml.
 #   6. Verifies the 5 containers are healthy.
 #
 # Required env vars to pass via SSH:
-#   MINIMAX_API_KEY
 #   STRIPE_SECRET_KEY
 #   STRIPE_WEBHOOK_SECRET
 #   TRAEFIK_NETWORK         (default: root_default)
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 # ---- 1. Required env vars from caller ---------------------------------
-: "${MINIMAX_API_KEY:?Set MINIMAX_API_KEY=<your-key> before running}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 : "${STRIPE_SECRET_KEY:?Set STRIPE_SECRET_KEY=sk_test_... before running}"
 : "${STRIPE_WEBHOOK_SECRET:?Set STRIPE_WEBHOOK_SECRET=whsec_... before running}"
 
@@ -92,7 +92,7 @@ POSTGRES_PASSWORD=${POSTGRES_PASSWORD_NEW}
 JWT_SECRET=${JWT_SECRET_NEW}
 OAUTH_STATE_SECRET=${OAUTH_STATE_SECRET_NEW}
 
-MINIMAX_API_KEY=${MINIMAX_API_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
 

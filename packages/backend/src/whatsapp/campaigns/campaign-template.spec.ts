@@ -4,7 +4,9 @@ import {
   attemptOf,
   campaignTemplatePayload,
   compileBody,
+  isSundayIn,
   templateNameFor,
+  withinCampaignWindow,
   withinSendingHours,
 } from "./campaign-template";
 
@@ -77,5 +79,22 @@ describe("withinSendingHours", () => {
     expect(withinSendingHours(new Date("2026-10-10T19:00:00Z"), "Europe/Madrid")).toBe(false); // 21:00
     expect(withinSendingHours(new Date("2026-10-10T07:30:00Z"), "Atlantic/Canary")).toBe(false); // 8:30
     expect(withinSendingHours(new Date("2026-10-10T12:00:00Z"), "Not/AZone")).toBe(true); // falls back to Madrid
+  });
+});
+
+describe("withinCampaignWindow (no campaigns on Sundays)", () => {
+  it("is 9:00 to 21:00, Monday to Saturday, on the salon's clock", () => {
+    expect(isSundayIn(new Date("2026-10-11T10:00:00Z"), "Europe/Madrid")).toBe(true);
+    expect(withinCampaignWindow(new Date("2026-10-10T10:00:00Z"), "Europe/Madrid")).toBe(true); // Saturday 12:00
+    expect(withinCampaignWindow(new Date("2026-10-11T10:00:00Z"), "Europe/Madrid")).toBe(false); // Sunday 12:00
+    expect(withinCampaignWindow(new Date("2026-10-12T07:00:00Z"), "Europe/Madrid")).toBe(true); // Monday 9:00
+    expect(withinCampaignWindow(new Date("2026-10-12T06:59:00Z"), "Europe/Madrid")).toBe(false); // Monday 8:59
+    // 23:30 UTC on Saturday is already Sunday 01:30 in Madrid.
+    expect(isSundayIn(new Date("2026-10-10T23:30:00Z"), "Europe/Madrid")).toBe(true);
+    expect(isSundayIn(new Date("2026-10-10T23:30:00Z"), "Not/AZone")).toBe(true); // falls back to Madrid
+  });
+
+  it("leaves the hours of reminders and rebooking alone (withinSendingHours has no weekday)", () => {
+    expect(withinSendingHours(new Date("2026-10-11T10:00:00Z"), "Europe/Madrid")).toBe(true);
   });
 });

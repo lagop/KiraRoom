@@ -32,14 +32,14 @@ function makePrismaMock(tenantSeed?: { id: string; taxId: string | null }) {
         return cur;
       },
     },
+    $transaction: async (fn: any) => fn(prisma),
   };
   return { prisma, tenants };
 }
 
 const CIF_CONTROL_LETTERS = "JABCDEFGHI";
-const CIF_LETTER_GROUP = new Set([
-  "C", "D", "F", "G", "H", "J", "K", "N", "P", "Q", "R", "S", "U", "V", "W",
-]);
+// Letter-only starting letters; A, B, E, H take a digit, the rest either.
+const CIF_LETTER_GROUP = new Set(["N", "P", "Q", "R", "S", "W"]);
 
 function cifControl(letter: string, body: string): string {
   let sum = 0;
@@ -49,8 +49,7 @@ function cifControl(letter: string, body: string): string {
     const p = d * w;
     sum += p < 10 ? p : Math.floor(p / 10) + (p % 10);
   }
-  const rounded = Math.ceil(sum / 10) * 10;
-  const digit = (10 - (rounded % 10)) % 10;
+  const digit = (10 - (sum % 10)) % 10;
   return CIF_LETTER_GROUP.has(letter) ? CIF_CONTROL_LETTERS[digit] : String(digit);
 }
 
@@ -70,6 +69,13 @@ class CapturingAuditLog {
     this.records.push({ action, ...params });
     return { id: `audit-${this.records.length}` };
   }
+}
+
+const ACTOR = { id: "saas-1", role: "saas_owner" };
+
+/** The NIF rows only (each change also writes a tenant.update row). */
+function nifRows(audit: CapturingAuditLog) {
+  return audit.records.filter((r) => r.action === "tenant.taxId.change");
 }
 
 function buildService(prisma: any, auditLog: CapturingAuditLog): SaasService {
@@ -94,23 +100,25 @@ describe("SaasService.updateTenant — taxId fields (P2A)", () => {
     const svc = buildService(prisma, audit);
     (svc as any).logger = { warn: (m: string) => svcCaptured(svc).push(m) };
 
-    // A is in the {digit} group. Body 1234567 + digit control = A12345670.
+    // A is in the {digit} group. Body 1234567 + digit control = A12345674.
     const cif = makeCif("A", "1234567");
     await svc.updateTenant("t-1", {
       taxId: cif,
       taxIdType: "cif" as any,
       legalName: "Acme S.L.",
-    });
+    }, ACTOR);
     const cur = tenants.get("t-1");
     expect(cur.taxId).toBe(cif);
     expect(cur.legalName).toBe("Acme S.L.");
     // First setting of taxId is itself a "change" — must be audited.
-    expect(audit.records.length).toBe(1);
-    expect(audit.records[0].action).toBe("tenant.taxId.change");
-    expect(audit.records[0].tenantId).toBe("t-1");
-    expect(audit.records[0].metadata).toEqual({
+    expect(nifRows(audit).length).toBe(1);
+    expect(nifRows(audit)[0].actorId).toBe("saas-1");
+    expect(nifRows(audit)[0].action).toBe("tenant.taxId.change");
+    expect(nifRows(audit)[0].tenantId).toBe("t-1");
+    expect(nifRows(audit)[0].metadata).toEqual({
       before: null,
       after: cif,
+      source: "saas/console",
     });
   });
 
@@ -120,7 +128,7 @@ describe("SaasService.updateTenant — taxId fields (P2A)", () => {
     const svc = buildService(prisma, audit);
     (svc as any).logger = { warn: (m: string) => svcCaptured(svc).push(m) };
     tenants.set("t-2", makeExistingTenant("t-2"));
-    await expect(svc.updateTenant("t-2", { taxId: "999" })).rejects.toThrow(
+    await expect(svc.updateTenant("t-2", { taxId: "999" }, ACTOR)).rejects.toThrow(
       /taxId invalid/,
     );
     expect(audit.records.length).toBe(0);
@@ -129,16 +137,24 @@ describe("SaasService.updateTenant — taxId fields (P2A)", () => {
   it("leaves the tenant untouched when no taxId is supplied", async () => {
     const { prisma, tenants } = makePrismaMock({
       id: "t-3",
-      taxId: "B12345670",
+      taxId: "B12345674",
     });
     const audit = new CapturingAuditLog();
     const svc = buildService(prisma, audit);
     (svc as any).logger = { warn: (m: string) => svcCaptured(svc).push(m) };
-    await svc.updateTenant("t-3", { legalName: "Renamed SA" });
+    await svc.updateTenant("t-3", { legalName: "Renamed SA" }, ACTOR);
     const cur = tenants.get("t-3");
-    expect(cur.taxId).toBe("B12345670");
+    expect(cur.taxId).toBe("B12345674");
     expect(cur.legalName).toBe("Renamed SA");
-    expect(audit.records.length).toBe(0);
+    expect(nifRows(audit).length).toBe(0);
+    // Audit 8, C9: the change itself is on record, before and after.
+    expect(audit.records).toEqual([
+      expect.objectContaining({
+        action: "tenant.update",
+        actorId: "saas-1",
+        metadata: { changes: { legalName: { before: null, after: "Renamed SA" } } },
+      }),
+    ]);
   });
 
   it("records audit row when taxId changes", async () => {
@@ -149,25 +165,27 @@ describe("SaasService.updateTenant — taxId fields (P2A)", () => {
     const audit = new CapturingAuditLog();
     const svc = buildService(prisma, audit);
     (svc as any).logger = { warn: (m: string) => svcCaptured(svc).push(m) };
-    await svc.updateTenant("t-4", { taxId: "B12345670" });
-    expect(audit.records.length).toBe(1);
-    expect(audit.records[0].action).toBe("tenant.taxId.change");
-    expect(audit.records[0].tenantId).toBe("t-4");
-    expect(audit.records[0].metadata).toEqual({
+    await svc.updateTenant("t-4", { taxId: "B12345674" }, ACTOR);
+    expect(nifRows(audit).length).toBe(1);
+    expect(nifRows(audit)[0].actorId).toBe("saas-1");
+    expect(nifRows(audit)[0].action).toBe("tenant.taxId.change");
+    expect(nifRows(audit)[0].tenantId).toBe("t-4");
+    expect(nifRows(audit)[0].metadata).toEqual({
       before: "OLD-NIF",
-      after: "B12345670",
+      after: "B12345674",
+      source: "saas/console",
     });
   });
 
   it("does not record when taxId equals the existing value", async () => {
     const { prisma, tenants } = makePrismaMock({
       id: "t-5",
-      taxId: "B12345670",
+      taxId: "B12345674",
     });
     const audit = new CapturingAuditLog();
     const svc = buildService(prisma, audit);
     (svc as any).logger = { warn: (m: string) => svcCaptured(svc).push(m) };
-    await svc.updateTenant("t-5", { taxId: "B12345670" });
+    await svc.updateTenant("t-5", { taxId: "B12345674" }, ACTOR);
     expect(audit.records.length).toBe(0);
   });
 });

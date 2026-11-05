@@ -19,16 +19,20 @@ export const SYSTEM = {
   multipleTaxpayers: true,
 } as const;
 
-/** The producer of the software (the company behind KiraRoom), from the environment. */
+/** The producer of the software, as every record and the declaración responsable name it. */
 export interface Producer {
   name: string;
   nif: string;
 }
 
-export function producer(env: NodeJS.ProcessEnv = process.env): Producer | null {
-  const name = env.VERIFACTU_PRODUCER_NAME?.trim();
-  const nif = format.nif(env.VERIFACTU_PRODUCER_NIF);
-  return name && nif ? { name: format.text(name, 120), nif } : null;
+/**
+ * The producer: KIRAROOM_OWNER of packages/frontend/lib/salon-legal.ts, which
+ * /legal/verifactu prints. verifactu-config.spec.ts fails if the two differ.
+ */
+export const PRODUCER = { name: "Orlando Perdomo Sosa", nif: "44309432R" } as const;
+
+export function producer(): Producer {
+  return { name: format.text(PRODUCER.name, 120), nif: format.nif(PRODUCER.nif)! };
 }
 
 export type AeatEnvironment = "test" | "production";
@@ -63,14 +67,12 @@ export function endpoint(kind: "personal" | "seal", env: NodeJS.ProcessEnv = pro
 }
 
 /**
- * What the declaración responsable shows besides the producer's name and NIF
- * (Orden HAC/1177/2024 art. 15.1 j and l): its postal address, and the date
- * and place where it signs the declaration for this version.
+ * The date and place where the producer signs the declaración responsable
+ * for this version (Orden HAC/1177/2024 art. 15.1 l): the producer's to set
+ * when signing. The rest of its identity is KIRAROOM_OWNER.
  */
 export function declarationDetails(env: NodeJS.ProcessEnv = process.env) {
   return {
-    address: env.VERIFACTU_PRODUCER_ADDRESS?.trim() || null,
-    contactEmail: env.VERIFACTU_PRODUCER_EMAIL?.trim() || null,
     signedOn: env.VERIFACTU_DECLARATION_DATE?.trim() || null,
     signedAt: env.VERIFACTU_DECLARATION_PLACE?.trim() || null,
   };
@@ -87,12 +89,10 @@ export function qrBase(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Whether salons may switch VERI*FACTU on. It needs the producer's
- * identity (every record carries it) and, in production, the explicit
- * FISCAL_SUBMISSION_ENABLED=1 that also guarded the old stub transports.
+ * Whether salons may switch VERI*FACTU on and records are generated and
+ * sent: in production only with the explicit FISCAL_SUBMISSION_ENABLED=1.
  */
 export function verifactuAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (!producer(env)) return false;
   return env.NODE_ENV !== "production" || env.FISCAL_SUBMISSION_ENABLED === "1";
 }
 

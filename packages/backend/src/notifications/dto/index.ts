@@ -1,5 +1,15 @@
 import { IsString, IsOptional, IsEnum, IsObject, IsBoolean, IsUUID, IsArray, IsNumber } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+
+/**
+ * Query strings arrive as text: without this, isRead=false failed
+ * @IsBoolean (400) and the panel's unread tab showed everything.
+ */
+export function queryBoolean({ value }: { value: unknown }): unknown {
+  if (value === true || value === 'true' || value === '1') return true;
+  if (value === false || value === 'false' || value === '0') return false;
+  return value;
+}
 
 // Notification type enum - must match Prisma schema
 export enum NotificationType {
@@ -72,8 +82,15 @@ export class UpdateNotificationDto {
 
 export class NotificationFilterDto {
   @IsOptional()
+  @Transform(queryBoolean)
   @IsBoolean()
   isRead?: boolean;
+
+  /** Same as isRead=false; kept for older panels that send it. */
+  @IsOptional()
+  @Transform(queryBoolean)
+  @IsBoolean()
+  unreadOnly?: boolean;
 
   @IsOptional()
   @IsEnum(NotificationType)
@@ -105,6 +122,8 @@ export class NotificationPreferenceDto {
 }
 
 export class BulkNotificationDto {
+  /** Ignored: the salon is the signed-in user's. */
+  @IsOptional()
   @IsUUID()
   tenantId: string;
 

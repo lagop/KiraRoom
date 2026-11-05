@@ -114,8 +114,6 @@ function esc(s: string): string {
 export const COUNTERS = {
   AI_CALLS: 'vrm_ai_calls_total', // status = 'success' | 'cap_exceeded' | 'error'
   AI_FAIRUSE_CAP_HIT: 'vrm_ai_fairuse_cap_hit_total', // plan = esencial | pro | empresa
-  FAQ_CACHE_HIT: 'vrm_faq_cache_hit_total', // (no labels)
-  FAQ_CACHE_MISS: 'vrm_faq_cache_miss_total',
   ADDON_PROVISIONED: 'vrm_addon_provisioned_total', // source = 'stripe' | 'manual'; key = add_on_key
   ADDON_CANCELLED: 'vrm_addon_cancelled_total', // key = add_on_key
   MESSAGE_BUNDLE_CONSUMED: 'vrm_message_bundle_consumed_total', // channel = 'whatsapp' | 'sms'; result = 'ok' | 'no_credits'

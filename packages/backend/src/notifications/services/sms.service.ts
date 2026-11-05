@@ -2,6 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Twilio from 'twilio';
 import { MessageBundlesService } from '../../message-bundles/message-bundles.service';
+import { displayDate } from './email.service';
+import { maskPhone, maskPhonesIn } from '../../common/phone';
+
+/**
+ * A number as an SMS goes to it, in E.164: "+34..." as typed, "00..." as
+ * "+...", a Spanish nine-digit number with +34, ten digits or more with a
+ * "+" in front; anything else as typed (and refused as invalid).
+ */
+export function smsE164(phone: string): string {
+  const cleaned = phone.replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('00')) return '+' + cleaned.substring(2);
+  if (/^[6789]\d{8}$/.test(cleaned)) return '+34' + cleaned;
+  if (cleaned.length >= 10) return '+' + cleaned;
+  return cleaned;
+}
 
 export interface SmsOptions {
   to: string;
@@ -16,6 +32,14 @@ export interface AppointmentSmsData {
   date: string;
   time: string;
   salonName: string;
+  /**
+   * The booking waits for the salon to confirm it: the text says the
+   * request was received, not that the appointment is confirmed. The
+   * "confirmada" text goes when the salon confirms it.
+   */
+  pending?: boolean;
+  /** The client's "Cancelar mi cita" link (public-cancel-link.ts), when she may use it. */
+  cancelUrl?: string;
 }
 
 @Injectable()
@@ -66,7 +90,7 @@ export class SmsService {
     const formattedPhone = this.formatPhoneNumber(options.to);
 
     if (!this.isValidPhoneNumber(formattedPhone)) {
-      this.logger.error(`Invalid phone number format: ${options.to}`);
+      this.logger.error(`Invalid phone number format: ${maskPhone(options.to)}`);
       return { success: false, error: 'Invalid phone number format' };
     }
 
@@ -79,15 +103,15 @@ export class SmsService {
 
       if (message.status === 'failed' || message.status === 'undelivered') {
         const errorMsg = message.errorMessage || `SMS failed with status: ${message.status}`;
-        this.logger.error(`Failed to send SMS: ${errorMsg}`);
+        this.logger.error(`Failed to send SMS: ${maskPhonesIn(errorMsg)}`);
         return { success: false, error: errorMsg };
       }
 
-      this.logger.log(`SMS sent successfully: ${message.sid} to ${formattedPhone}`);
+      this.logger.log(`SMS sent successfully: ${message.sid} to ${maskPhone(formattedPhone)}`);
       return { success: true, id: message.sid };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(`Failed to send SMS: ${errorMessage}`);
+      this.logger.error(`Failed to send SMS: ${maskPhonesIn(errorMessage)}`);
       return { success: false, error: errorMessage };
     }
   }
@@ -150,36 +174,9 @@ export class SmsService {
     });
   }
 
-  /**
-   * Format phone number to E.164 format
-   * Handles Spanish phone numbers (+34 prefix) and other formats
-   */
+  /** The number as the SMS goes to it, in E.164 (smsE164). */
   private formatPhoneNumber(phone: string): string {
-    // Remove all non-numeric characters except +
-    let cleaned = phone.replace(/[^\d+]/g, '');
-
-    // If it already starts with +, assume it's in E.164 format
-    if (cleaned.startsWith('+')) {
-      return cleaned;
-    }
-
-    // If it starts with 00, replace with +
-    if (cleaned.startsWith('00')) {
-      return '+' + cleaned.substring(2);
-    }
-
-    // Spanish phone numbers: if it starts with 6, 7, 8, or 9 and has 9 digits, add +34
-    if (/^[6789]\d{8}$/.test(cleaned)) {
-      return '+34' + cleaned;
-    }
-
-    // If it's a 10+ digit number without prefix, assume it needs +
-    if (cleaned.length >= 10) {
-      return '+' + cleaned;
-    }
-
-    // Return as-is if we can't determine the format
-    return cleaned;
+    return smsE164(phone);
   }
 
   /**
@@ -192,18 +189,59 @@ export class SmsService {
   }
 
   /**
+   * Who the SMS is from, as its first word: the salon. They used to start
+   * with "KiraRoom:", a name the client never booked with.
+   */
+  private signature(data: AppointmentSmsData): string {
+    // Runs of whitespace, not of the letter "s" (it was /s+/g: "Peluquería
+    // Rosas" went out as "Peluquería Ro a").
+    return (data.salonName ?? "").replace(/\s+/g, " ").trim().slice(0, 40) || "Tu salón";
+  }
+
+  /**
    * Generate confirmation SMS body
    * Keep under 160 characters for single SMS
    */
   private generateConfirmationBody(data: AppointmentSmsData): string {
-    // Template: "KiraRoom: Tu cita está confirmada. {service} con {professional} el {date} a las {time}. ¡Gracias!"
-    const message = `KiraRoom: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    // The link goes after the text, never cut: the text is shortened instead.
+    // A pending one names the salon in the sentence, so no "Salón:" first.
+    const link = data.cancelUrl ? ` Cancelar: ${data.cancelUrl}` : '';
+    const room = 160 - link.length;
+    if (data.pending) {
+      const message = `Hemos recibido tu solicitud. ${from} te confirmará la cita: ${data.serviceName} el ${date} a las ${data.time}.`;
+      if (message.length <= room) return message + link;
+      return `${from}: Solicitud recibida (${date}, ${data.time}). Te confirmaremos la cita.${link}`;
+    }
+    const message = `${from}: Tu cita está confirmada. ${data.serviceName} con ${data.professionalName} el ${date} a las ${data.time}. ¡Gracias!`;
 
     // Truncate if too long (preserve key info)
-    if (message.length > 160) {
-      return `KiraRoom: Cita confirmada. ${data.serviceName} el ${data.date} a las ${data.time}. ¡Gracias!`;
+    if (message.length > room) {
+      const short = `${from}: Cita confirmada. ${data.serviceName} el ${date} a las ${data.time}. ¡Gracias!`;
+      // With the link, a long service name goes before the link does.
+      if (link && short.length > room) return `${from}: Cita confirmada el ${date} a las ${data.time}.${link}`;
+      return short + link;
     }
 
+    return message + link;
+  }
+
+  /**
+   * A booking the salon did not confirm in time (pending-booking-expiry):
+   * it is cancelled, and the client is told so.
+   */
+  async sendBookingNotConfirmed(data: AppointmentSmsData): Promise<{ success: boolean; id?: string; error?: string }> {
+    return this.sendSms({ to: data.clientPhone, body: this.generateNotConfirmedBody(data) });
+  }
+
+  private generateNotConfirmedBody(data: AppointmentSmsData): string {
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = `${from} no ha podido confirmar tu cita del ${date} a las ${data.time} y se ha anulado. Puedes pedir otra cuando quieras.`;
+    if (message.length > 160) {
+      return `${from}: No hemos podido confirmar tu cita del ${date} y se ha anulado. Pide otra cuando quieras.`;
+    }
     return message;
   }
 
@@ -211,23 +249,22 @@ export class SmsService {
    * Generate reminder SMS body
    */
   private generateReminderBody(data: AppointmentSmsData, hoursBefore: number): string {
+    const from = this.signature(data);
     if (hoursBefore <= 1) {
       // 1 hour reminder - more urgent
-      // Template: "KiraRoom: Tu cita es en 1 hora ({time}). {service} con {professional}."
-      const message = `KiraRoom: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
+      const message = `${from}: Tu cita es en 1 hora (${data.time}). ${data.serviceName} con ${data.professionalName}.`;
 
       if (message.length > 160) {
-        return `KiraRoom: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
+        return `${from}: Cita en 1 hora (${data.time}). ${data.serviceName}.`;
       }
 
       return message;
     } else {
       // 24 hour reminder
-      // Template: "KiraRoom: Recordatorio - Tu cita mañana a las {time} para {service}. ¡Te esperamos!"
-      const message = `KiraRoom: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
+      const message = `${from}: Recordatorio - Tu cita mañana a las ${data.time} para ${data.serviceName}. ¡Te esperamos!`;
 
       if (message.length > 160) {
-        return `KiraRoom: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
+        return `${from}: Recordatorio - Cita mañana a las ${data.time}. ${data.serviceName}.`;
       }
 
       return message;
@@ -238,17 +275,14 @@ export class SmsService {
    * Generate cancellation SMS body
    */
   private generateCancellationBody(data: AppointmentSmsData, reason?: string): string {
-    // Template: "KiraRoom: Tu cita del {date} ha sido cancelada. Para reagendar, contáctanos."
-    let message: string;
-
-    if (reason) {
-      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Motivo: ${reason}. Para reagendar, contáctanos.`;
-    } else {
-      message = `KiraRoom: Tu cita del ${data.date} ha sido cancelada. Para reagendar, contáctanos.`;
-    }
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = reason
+      ? `${from}: Tu cita del ${date} ha sido cancelada. Motivo: ${reason}. Para pedir otra cita, contáctanos.`
+      : `${from}: Tu cita del ${date} ha sido cancelada. Para pedir otra cita, contáctanos.`;
 
     if (message.length > 160) {
-      return `KiraRoom: Cita del ${data.date} cancelada. Contáctanos para reagendar.`;
+      return `${from}: Cita del ${date} cancelada. Contáctanos para pedir otra.`;
     }
 
     return message;
@@ -258,11 +292,12 @@ export class SmsService {
    * Generate rescheduled SMS body
    */
   private generateRescheduledBody(data: AppointmentSmsData, oldDate: string, oldTime: string): string {
-    // Template: "KiraRoom: Tu cita ha sido movida al {date} a las {time}. {service} con {professional}."
-    const message = `KiraRoom: Tu cita ha sido movida al ${data.date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
+    const from = this.signature(data);
+    const date = displayDate(data.date);
+    const message = `${from}: Tu cita ha cambiado al ${date} a las ${data.time}. ${data.serviceName} con ${data.professionalName}.`;
 
     if (message.length > 160) {
-      return `KiraRoom: Cita movida al ${data.date} a las ${data.time}. ${data.serviceName}.`;
+      return `${from}: Cita cambiada al ${date} a las ${data.time}. ${data.serviceName}.`;
     }
 
     return message;
@@ -288,14 +323,14 @@ export class SmsService {
       .catch(() => ({ ok: false, remaining: 0, reason: 'no_addon' as const }));
     if (!decision.ok) {
       this.logger.warn(
-        `sms marketing: skipping ${to} for tenant ${tenantId} (${decision.reason ?? 'no_credits'})`,
+        `sms marketing: skipping ${maskPhone(to)} for tenant ${tenantId} (${decision.reason ?? 'no_credits'})`,
       );
       return { sent: false, reason: decision.reason };
     }
     const result = await this.sendSms({ to, body });
     if (!result.success) {
       this.logger.error(
-        `sms marketing: sendSms failed for ${to} (${result.error})`,
+        `sms marketing: sendSms failed for ${maskPhone(to)} (${maskPhonesIn(result.error)})`,
       );
       return { sent: false, reason: result.error };
     }

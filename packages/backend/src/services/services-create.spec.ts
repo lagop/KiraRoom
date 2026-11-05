@@ -84,7 +84,7 @@ describe("service defaults", () => {
     expect(data).toMatchObject({
       isActive: true,
       isOnlineBookable: true,
-      bufferTime: 15,
+      bufferTime: 0,
       minAdvanceBooking: 2,
       maxAdvanceBooking: 30,
       currency: "EUR",

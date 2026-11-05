@@ -7,6 +7,18 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import apiClient from '@/lib/api';
+import { useToast } from '@/components/ui/use-toast';
+import { useTranslations } from '@/lib/use-translation';
+import { WeeklyScheduleEditor } from '@/components/professionals/WeeklyScheduleEditor';
+import { LocationsPicker } from '@/components/professionals/LocationsPicker';
+import { NEW_PROFESSIONAL_WEB, WebVisibilityFields } from '@/components/professionals/WebVisibilityFields';
+import { NO_LOCATIONS, locationsPayload, type LocationChoice } from '@/lib/professional-locations';
+import {
+  defaultSchedule,
+  hasProblems,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from '@/lib/weekly-schedule';
 
 interface Service {
   id: string;
@@ -16,9 +28,20 @@ interface Service {
 
 export function ProfessionalForm() {
   const router = useRouter();
+  const { toast } = useToast();
+  const t = useTranslations();
   const [isLoading, setIsLoading] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  // Multi-local only: the picker hides itself otherwise and nothing is sent.
+  const [locations, setLocations] = useState<LocationChoice>(NO_LOCATIONS);
+  const [locationsTouched, setLocationsTouched] = useState(false);
+  // Created with a schedule: without one a new professional would be
+  // bookable at any hour the salon opens.
+  const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  // Shown on the salon's page as "Ana G.", without photo, until she agrees to more.
+  const [web, setWeb] = useState(NEW_PROFESSIONAL_WEB);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -62,6 +85,11 @@ export function ProfessionalForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (hasProblems(schedule)) {
+      setScheduleError('Revisa el horario: hay tramos que no se pueden guardar.');
+      return;
+    }
+    setScheduleError(null);
     setIsLoading(true);
 
     try {
@@ -75,13 +103,21 @@ export function ProfessionalForm() {
         specialties: formData.specialty ? [formData.specialty] : [],
         position: 'professional',
         serviceIds: selectedServices,
+        workingHours: workingHoursFromSchedule(schedule),
+        ...locationsPayload(locations, locationsTouched),
+        webNameDisplay: web.webNameDisplay,
+        webShowPhoto: web.webShowPhoto,
       });
 
       router.push('/dashboard/professionals');
       router.refresh();
     } catch (error) {
       console.error('Error creating professional:', error);
-      alert('Failed to create professional. Please try again.');
+      toast({
+        title: 'No se ha podido crear el profesional. Inténtalo de nuevo.',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'destructive',
+      });
     } finally {
       setIsLoading(false);
     }
@@ -91,7 +127,7 @@ export function ProfessionalForm() {
     <form onSubmit={handleSubmit} className="space-y-6">
        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t('professionals.fields.email')}</Label>
           <Input
             id="email"
             name="email"
@@ -104,7 +140,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">{t('professionals.fields.password')}</Label>
           <Input
             id="password"
             name="password"
@@ -117,7 +153,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="firstName">First Name</Label>
+          <Label htmlFor="firstName">{t('professionals.fields.firstName')}</Label>
           <Input
             id="firstName"
             name="firstName"
@@ -129,7 +165,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="lastName">Last Name</Label>
+          <Label htmlFor="lastName">{t('professionals.fields.lastName')}</Label>
           <Input
             id="lastName"
             name="lastName"
@@ -141,7 +177,7 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="phone">Phone</Label>
+          <Label htmlFor="phone">{t('professionals.fields.phone')}</Label>
           <Input
             id="phone"
             name="phone"
@@ -153,19 +189,19 @@ export function ProfessionalForm() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="specialty">Specialty</Label>
+          <Label htmlFor="specialty">{t('professionals.fields.specialty')}</Label>
           <Input
             id="specialty"
             name="specialty"
             value={formData.specialty}
             onChange={handleChange}
-            placeholder="e.g., Hair Styling, Makeup Artist"
+            placeholder={t('professionals.fields.specialtyPlaceholder')}
             disabled={isLoading}
           />
         </div>
 
          <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="avatarUrl">Avatar URL</Label>
+          <Label htmlFor="avatarUrl">{t('professionals.fields.avatarUrl')}</Label>
           <Input
             id="avatarUrl"
             name="avatarUrl"
@@ -178,7 +214,7 @@ export function ProfessionalForm() {
         </div>
 
          <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="bio">Bio</Label>
+          <Label htmlFor="bio">{t('professionals.fields.bio')}</Label>
           <textarea
             id="bio"
             name="bio"
@@ -186,14 +222,14 @@ export function ProfessionalForm() {
             onChange={handleChange}
             rows={4}
             className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Write a short bio about the professional..."
+            placeholder={t('professionals.fields.bioPlaceholder')}
             disabled={isLoading}
           />
         </div>
 
         {/* Services Selection */}
          <div className="space-y-2 sm:col-span-2">
-          <Label>Services Provided</Label>
+          <Label>{t('professionals.fields.servicesProvided')}</Label>
            <div className="grid grid-cols-1 gap-2 mt-2 sm:grid-cols-2 lg:grid-cols-3">
             {services.map((service) => (
               <label
@@ -216,7 +252,45 @@ export function ProfessionalForm() {
           </div>
           {services.length === 0 && (
             <p className="text-sm text-gray-500 mt-2">
-              No services available. Please create services first.
+              {t('professionals.fields.noServices')}
+            </p>
+          )}
+        </div>
+
+        <div className="sm:col-span-2">
+          <WebVisibilityFields
+            nameDisplay={web.webNameDisplay}
+            showPhoto={web.webShowPhoto}
+            onChange={setWeb}
+            disabled={isLoading}
+            t={t}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <LocationsPicker
+            value={locations}
+            disabled={isLoading}
+            onChange={(next) => {
+              setLocations(next);
+              setLocationsTouched(true);
+            }}
+          />
+        </div>
+
+        <div className="space-y-2 sm:col-span-2">
+          <Label>Horario semanal</Label>
+          <WeeklyScheduleEditor
+            value={schedule}
+            onChange={(next) => {
+              setSchedule(next);
+              setScheduleError(null);
+            }}
+            disabled={isLoading}
+          />
+          {scheduleError && (
+            <p role="alert" className="text-sm text-red-600">
+              {scheduleError}
             </p>
           )}
         </div>
@@ -229,10 +303,10 @@ export function ProfessionalForm() {
           onClick={() => router.back()}
           disabled={isLoading}
         >
-          Cancel
+          {t('professionals.newForm.cancel')}
         </Button>
         <Button type="submit" disabled={isLoading}>
-          {isLoading ? 'Creating...' : 'Create Professional'}
+          {isLoading ? t('professionals.newForm.creating') : t('professionals.newForm.create')}
         </Button>
       </div>
     </form>

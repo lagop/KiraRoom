@@ -32,6 +32,7 @@ export interface ScheduleCardProps {
     schedule: string;
     date: string;
     time: string;
+    edit: string;
   };
 }
 
@@ -55,7 +56,7 @@ export function ScheduleCard({
           <button
             onClick={onEnterEditMode}
             className="text-gray-400 hover:text-gray-600 flex-shrink-0"
-            aria-label="Editar fecha y hora"
+            aria-label={labels.edit}
           >
             <Edit className="w-4 h-4" />
           </button>
@@ -99,7 +100,7 @@ export function ScheduleCard({
               <p className="font-medium text-gray-900 truncate">{appointment.time}</p>
             )}
             <p className="text-sm text-gray-500">
-              {calculateTotalDuration(appointment)} minutes
+              {calculateTotalDuration(appointment)} min
             </p>
           </div>
         </div>

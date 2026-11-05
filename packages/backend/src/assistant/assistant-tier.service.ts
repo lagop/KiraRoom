@@ -139,9 +139,10 @@ export class AssistantTierService {
    * should auto-pause the LLM and surface a billing alert.
    *
    * We approximate cost as 0.02€ per message + 0.05€ per write action
-   * (single-shot, no streaming). The numbers are conservative for the
-   * current Claude Haiku 4.5 pricing — adjust in this method if
-   * pricing changes materially.
+   * (single-shot, no streaming). The numbers were set for Claude Haiku
+   * 4.5 and are very conservative for Haiku 5.5, a tenth of the price
+   * (anthropic-models.ts) — adjust in this method if pricing changes
+   * materially.
    */
   async isOverCostCap(tenantId: string): Promise<boolean> {
     const start = new Date();

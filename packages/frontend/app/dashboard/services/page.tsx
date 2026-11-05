@@ -7,15 +7,31 @@ import apiClient from "@/lib/api";
 import type { Service } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Plus, Pencil, Trash2, Search, Filter } from "lucide-react";
-import { toast, useToast } from "@/components/ui/use-toast";
+import { useToast } from "@/components/ui/use-toast";
 import { useTranslations } from "@/lib/use-translation";
+import { formatEuros } from "../appointments/components/appointment-drawer.utils";
+import {
+  EMPTY_SERVICE_FORM,
+  SERVICE_FORM_LIMITS,
+  formToPayload,
+  serviceToForm,
+  type ServiceCategoryValue,
+  type ServiceFormState,
+  parseEuros,
+} from "@/lib/service-form";
+import { useTaxRegime } from "@/lib/use-tax-regime";
+import { clientPriceHint } from "@/lib/prices-tax-example";
 
 
 function ServicesPageContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const t = useTranslations();
+  // Prices here are the catalogue as the salon writes it. When it writes
+  // them without the tax, clients see them with it: the drawer says how much.
+  const tax = useTaxRegime();
 
   const CATEGORIES = [
     { value: "hair", label: t("services.hair") },
@@ -52,6 +68,9 @@ function ServicesPageContent() {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toDelete, setToDelete] = useState<Service | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Check for ?new=true query parameter to open add service drawer
   useEffect(() => {
@@ -60,28 +79,19 @@ function ServicesPageContent() {
     }
   }, [searchParams]);
 
-  // Form state
-  const [formData, setFormData] = useState<{
-    name: string;
-    description: string;
-    category: "hair" | "nails" | "facial" | "massage" | "body" | "other";
-    duration: number;
-    price: number;
-    currency: string;
-    isActive: boolean;
-  }>({
-    name: "",
-    description: "",
-    category: "other",
-    duration: 30,
-    price: 0,
-    currency: "EUR",
-    isActive: true,
-  });
+  // Numbers as typed: see lib/service-form.ts.
+  const [formData, setFormData] = useState<ServiceFormState>(EMPTY_SERVICE_FORM);
+  // "Las clientas verán 36,30 € (IVA incluido)", live as the price is typed.
+  const clientPrice = clientPriceHint(parseEuros(formData.price), tax.serverRate, tax.pricesIncludeTax, tax.label);
+  const setField = <K extends keyof ServiceFormState>(key: K, value: ServiceFormState[K]) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    setFormError(null);
+  };
 
   // Fetch services on mount
   useEffect(() => {
     fetchServices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Filter services when search or category changes
@@ -134,89 +144,63 @@ function ServicesPageContent() {
   const handleCreateNew = () => {
     setSelectedService(null);
     setIsEditing(false);
-    setFormData({
-      name: "",
-      description: "",
-      category: "other",
-      duration: 30,
-      price: 0,
-      currency: "EUR",
-      isActive: true,
-    });
+    setFormData(EMPTY_SERVICE_FORM);
+    setFormError(null);
     setIsDrawerOpen(true);
   };
 
   const handleEdit = (service: Service) => {
     setSelectedService(service);
     setIsEditing(true);
-    setFormData({
-      name: service.name,
-      description: service.description || "",
-      category: service.category,
-      duration: service.duration,
-      price: service.price,
-      currency: service.currency,
-      isActive: service.isActive,
-    });
+    setFormData(serviceToForm(service));
+    setFormError(null);
     setIsDrawerOpen(true);
   };
 
-  const handleDelete = async (service: Service) => {
-    const toastId = toast({
-      title: t("services.delete_service"),
-      description: t("services.delete_service_confirm", { name: service.name }),
-      variant: "destructive",
-      open: true,
-      action: (
-        <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              try {
-                await apiClient.deleteService(service.id);
-                toast({
-                  title: t("services.service_deleted"),
-                  description: t("services.service_deleted_success"),
-                  variant: "default",
-                });
-                fetchServices();
-              } catch (error) {
-                reportFailure(t("services.delete_failed"), error);
-              }
-            }}
-            className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors"
-          >
-            {t("services.delete_tooltip")}
-          </button>
-          <button
-            onClick={() => {
-              // Dismiss the toast without taking any action
-              toastId.dismiss();
-            }}
-            className="bg-gray-200 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors"
-          >
-            {t("services.cancel")}
-          </button>
-        </div>
-      ),
-    });
+  const confirmDelete = async () => {
+    if (!toDelete) return;
+    setIsDeleting(true);
+    try {
+      // With appointments it is history: the server deactivates it
+      // instead, and the reloaded list shows it inactive.
+      const { deactivated } = await apiClient.deleteService(toDelete.id);
+      toast({
+        title: t(deactivated ? "services.service_deactivated" : "services.service_deleted"),
+        description: t(
+          deactivated
+            ? "services.service_deactivated_history"
+            : "services.service_deleted_success",
+        ),
+        variant: "default",
+      });
+      setToDelete(null);
+      fetchServices();
+    } catch (error) {
+      reportFailure(t("services.delete_failed"), error);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const checked = formToPayload(formData);
+    if (!checked.ok) {
+      setFormError(t(`services.${checked.error}`));
+      return;
+    }
     setIsSubmitting(true);
 
     try {
       if (isEditing && selectedService) {
-        await apiClient.updateService(selectedService.id, formData);
+        await apiClient.updateService(selectedService.id, checked.payload);
         toast({
           title: t("services.service_updated"),
           description: t("services.service_updated_success"),
           variant: "default",
         });
       } else {
-        await apiClient.createService({
-          ...formData,
-        });
+        await apiClient.createService(checked.payload);
         toast({
           title: t("services.service_created"),
           description: t("services.service_created_success"),
@@ -250,20 +234,17 @@ function ServicesPageContent() {
     }
   };
 
-  const closeForm = () => {
-    setIsDrawerOpen(false);
-    setSelectedService(null);
-    setIsEditing(false);
-    setFormData({
-      name: "",
-      description: "",
-      category: "other",
-      duration: 30,
-      price: 0,
-      currency: "EUR",
-      isActive: true,
-    });
-  };
+  const inputClass =
+    "w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
+
+  const switchClass = (on: boolean) =>
+    `relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+      on ? "bg-blue-600" : "bg-gray-200"
+    }`;
+  const knobClass = (on: boolean) =>
+    `inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+      on ? "translate-x-6" : "translate-x-1"
+    }`;
 
   return (
     <div className="space-y-6">
@@ -293,6 +274,7 @@ function ServicesPageContent() {
               <input
                 type="text"
                 placeholder={t("services.search_services")}
+                aria-label={t("services.search_services")}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -303,6 +285,7 @@ function ServicesPageContent() {
             <Filter className="h-4 w-4 text-gray-400" />
             <select
               value={categoryFilter}
+              aria-label={t("services.category")}
               onChange={(e) => setCategoryFilter(e.target.value)}
               className="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
@@ -348,6 +331,11 @@ function ServicesPageContent() {
                     {CATEGORIES.find((c) => c.value === service.category)
                       ?.label || service.category}
                   </span>
+                  {!service.isActive && (
+                    <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mt-1 bg-gray-200 text-gray-700">
+                      {t("services.inactive_badge")}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                   <Button
@@ -355,14 +343,18 @@ function ServicesPageContent() {
                     size="icon"
                     onClick={() => handleEdit(service)}
                     className="h-8 w-8"
+                    aria-label={t("services.edit_tooltip", { name: service.name })}
+                    title={t("services.edit_tooltip", { name: service.name })}
                   >
                     <Pencil className="h-4 w-4" />
                   </Button>
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => handleDelete(service)}
+                    onClick={() => setToDelete(service)}
                     className="h-8 w-8 text-red-500 hover:text-red-700"
+                    aria-label={t("services.delete_named", { name: service.name })}
+                    title={t("services.delete_named", { name: service.name })}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -375,26 +367,21 @@ function ServicesPageContent() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="text-lg font-bold text-gray-900">
-                      {service.currency}{" "}
-                      {typeof service.price === "number"
-                        ? service.price.toFixed(2)
-                        : parseFloat(service.price || "0").toFixed(2)}
+                      {formatEuros(service.price)}
                     </div>
                     <div className="text-sm text-gray-500">
                       {service.duration} {t("services.minutes")}
                     </div>
                   </div>
                   <button
+                    type="button"
+                    role="switch"
+                    aria-checked={service.isActive}
+                    aria-label={t("services.toggle_active", { name: service.name })}
                     onClick={() => toggleServiceStatus(service)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                      service.isActive ? "bg-blue-600" : "bg-gray-200"
-                    }`}
+                    className={switchClass(service.isActive)}
                   >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        service.isActive ? "translate-x-6" : "translate-x-1"
-                      }`}
-                    />
+                    <span className={knobClass(service.isActive)} />
                   </button>
                 </div>
               </CardContent>
@@ -402,6 +389,18 @@ function ServicesPageContent() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!toDelete}
+        title={t("services.delete_service")}
+        description={toDelete ? t("services.delete_service_confirm", { name: toDelete.name }) : undefined}
+        confirmLabel={t("services.delete_tooltip")}
+        cancelLabel={t("services.cancel")}
+        destructive
+        loading={isDeleting}
+        onCancel={() => setToDelete(null)}
+        onConfirm={confirmDelete}
+      />
 
       {/* Drawer */}
       {isDrawerOpen && (
@@ -421,8 +420,10 @@ function ServicesPageContent() {
                     : t("services.new_service")}
                 </h2>
                 <button
+                  type="button"
                   onClick={() => setIsDrawerOpen(false)}
                   className="text-gray-400 hover:text-gray-600"
+                  aria-label={t("services.cancel")}
                 >
                   ✕
                 </button>
@@ -430,50 +431,44 @@ function ServicesPageContent() {
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="service-name" className="block text-sm font-medium text-gray-700 mb-1">
                     {t("services.service_name")} *
                   </label>
                   <input
+                    id="service-name"
                     type="text"
                     required
                     value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onChange={(e) => setField("name", e.target.value)}
+                    className={inputClass}
                     placeholder={t("services.placeholder_service_name")}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="service-description" className="block text-sm font-medium text-gray-700 mb-1">
                     {t("services.description_label")}
                   </label>
                   <textarea
+                    id="service-description"
                     value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
+                    onChange={(e) => setField("description", e.target.value)}
                     rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className={inputClass}
                     placeholder={t("services.placeholder_description")}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="service-category" className="block text-sm font-medium text-gray-700 mb-1">
                     {t("services.category")} *
                   </label>
                   <select
+                    id="service-category"
                     required
                     value={formData.category}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        category: e.target.value as any,
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onChange={(e) => setField("category", e.target.value as ServiceCategoryValue)}
+                    className={inputClass}
                   >
                     {CATEGORIES.map((cat) => (
                       <option key={cat.value} value={cat.value}>
@@ -485,83 +480,173 @@ function ServicesPageContent() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {t("services.duration")} *
+                    <label htmlFor="service-duration" className="block text-sm font-medium text-gray-700 mb-1">
+                      {t("services.duration_minutes")} *
                     </label>
                     <input
+                      id="service-duration"
                       type="number"
                       required
-                      min="1"
+                      min={SERVICE_FORM_LIMITS.durationMin}
+                      max={SERVICE_FORM_LIMITS.durationMax}
+                      step="1"
                       value={formData.duration}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          duration: parseInt(e.target.value) || 30,
-                        })
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      onChange={(e) => setField("duration", e.target.value)}
+                      className={inputClass}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {t("services.price")} *
+                    <label htmlFor="service-price" className="block text-sm font-medium text-gray-700 mb-1">
+                      {t("services.price_euros")} *
                     </label>
                     <input
+                      id="service-price"
                       type="number"
                       required
                       min="0"
+                      max={SERVICE_FORM_LIMITS.priceMax}
                       step="0.01"
                       value={formData.price}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          price: parseFloat(e.target.value) || 0,
-                        })
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      onChange={(e) => setField("price", e.target.value)}
+                      aria-describedby={clientPrice ? "service-price-hint" : undefined}
+                      className={inputClass}
                     />
+                    {clientPrice && (
+                      <p id="service-price-hint" data-test="service-client-price" className="mt-1 text-xs text-gray-500">
+                        {t(clientPrice.key, clientPrice.params)}
+                      </p>
+                    )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {t("services.currency")} *
+                  <label htmlFor="service-buffer" className="block text-sm font-medium text-gray-700 mb-1">
+                    {t("services.buffer_label")}
                   </label>
-                  <select
-                    required
-                    value={formData.currency}
-                    onChange={(e) =>
-                      setFormData({ ...formData, currency: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="EUR">{t("services.eur_euro")}</option>
-                    <option value="USD">{t("services.usd_dollar")}</option>
-                    <option value="GBP">{t("services.gbp_pound")}</option>
-                  </select>
+                  <input
+                    id="service-buffer"
+                    type="number"
+                    min="0"
+                    max={SERVICE_FORM_LIMITS.bufferMax}
+                    step="5"
+                    value={formData.bufferTime}
+                    onChange={(e) => setField("bufferTime", e.target.value)}
+                    className={inputClass}
+                    aria-describedby="service-buffer-hint"
+                  />
+                  <p id="service-buffer-hint" className="mt-1 text-xs text-gray-500">
+                    {t("services.buffer_hint")}
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() =>
-                      setFormData({ ...formData, isActive: !formData.isActive })
-                    }
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                      formData.isActive ? "bg-blue-600" : "bg-gray-200"
-                    }`}
+                    role="switch"
+                    aria-checked={formData.isActive}
+                    aria-labelledby="service-active-label"
+                    onClick={() => setField("isActive", !formData.isActive)}
+                    className={switchClass(formData.isActive)}
                   >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        formData.isActive ? "translate-x-6" : "translate-x-1"
-                      }`}
-                    />
+                    <span className={knobClass(formData.isActive)} />
                   </button>
-                  <span className="text-sm text-gray-700">
+                  <span id="service-active-label" className="text-sm text-gray-700">
                     {t("services.active_label")}
                   </span>
                 </div>
+
+                <fieldset className="space-y-3 rounded-md border border-gray-200 p-4">
+                  <legend className="px-1 text-sm font-semibold text-gray-900">
+                    {t("services.online_section")}
+                  </legend>
+
+                  <div className="flex items-start gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={formData.isOnlineBookable}
+                      aria-labelledby="service-online-label"
+                      aria-describedby="service-online-hint"
+                      onClick={() => setField("isOnlineBookable", !formData.isOnlineBookable)}
+                      className={switchClass(formData.isOnlineBookable)}
+                    >
+                      <span className={knobClass(formData.isOnlineBookable)} />
+                    </button>
+                    <div>
+                      <span id="service-online-label" className="text-sm text-gray-700">
+                        {t("services.online_bookable")}
+                      </span>
+                      <p id="service-online-hint" className="text-xs text-gray-500">
+                        {t("services.online_bookable_hint")}
+                      </p>
+                    </div>
+                  </div>
+
+                  {formData.isOnlineBookable && (
+                    <>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label htmlFor="service-min-advance" className="block text-sm font-medium text-gray-700 mb-1">
+                            {t("services.min_advance_hours")}
+                          </label>
+                          <input
+                            id="service-min-advance"
+                            type="number"
+                            min="0"
+                            max={SERVICE_FORM_LIMITS.minAdvanceHoursMax}
+                            step="1"
+                            value={formData.minAdvanceBooking}
+                            onChange={(e) => setField("minAdvanceBooking", e.target.value)}
+                            className={inputClass}
+                            aria-describedby="service-window-hint"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="service-max-advance" className="block text-sm font-medium text-gray-700 mb-1">
+                            {t("services.max_advance_days")}
+                          </label>
+                          <input
+                            id="service-max-advance"
+                            type="number"
+                            min="1"
+                            max={SERVICE_FORM_LIMITS.maxAdvanceDaysMax}
+                            step="1"
+                            value={formData.maxAdvanceBooking}
+                            onChange={(e) => setField("maxAdvanceBooking", e.target.value)}
+                            className={inputClass}
+                            aria-describedby="service-window-hint"
+                          />
+                        </div>
+                      </div>
+                      <p id="service-window-hint" className="text-xs text-gray-500">
+                        {t("services.booking_window_hint")}
+                      </p>
+
+                      <label className="flex items-start gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={formData.requiresApproval}
+                          onChange={(e) => setField("requiresApproval", e.target.checked)}
+                          aria-describedby="service-approval-hint"
+                        />
+                        <span>
+                          {t("services.requires_approval")}
+                          <span id="service-approval-hint" className="block text-xs text-gray-500">
+                            {t("services.requires_approval_hint")}
+                          </span>
+                        </span>
+                      </label>
+                    </>
+                  )}
+                </fieldset>
+
+                {formError && (
+                  <p role="alert" className="text-sm text-red-600">
+                    {formError}
+                  </p>
+                )}
 
                 <div className="flex gap-3 pt-4">
                   <Button

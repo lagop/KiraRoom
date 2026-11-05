@@ -5,6 +5,23 @@ import { createHash } from "crypto";
 import { openPkcs12 } from "./verifactu/certificate";
 
 /**
+ * The columns of a certificate that may be sent to the panel. Never add
+ * encryptedPem or passphraseCipher here.
+ */
+export const CERTIFICATE_PUBLIC_SELECT = {
+  id: true,
+  alias: true,
+  provider: true,
+  fingerprint: true,
+  issuer: true,
+  subject: true,
+  notBefore: true,
+  notAfter: true,
+  isActive: true,
+  createdAt: true,
+} as const;
+
+/**
  * Helpers around the FiscalCertificate table: storing the encrypted
  * PKCS#12 bundle, fingerprinting the certificate, and detecting expiry.
  *
@@ -40,10 +57,16 @@ export class FiscalCertificateService {
     return days < 30;
   }
 
+  /**
+   * The salon's active certificates, as the settings page lists them: only
+   * what describes a certificate. The encrypted PKCS#12 and its encrypted
+   * password never leave the server (the signing code reads them itself).
+   */
   async listActiveCertificates(tenantId: string) {
     return this.prisma.fiscalCertificate.findMany({
       where: { tenantId, isActive: true },
       orderBy: { createdAt: "desc" },
+      select: CERTIFICATE_PUBLIC_SELECT,
     });
   }
 

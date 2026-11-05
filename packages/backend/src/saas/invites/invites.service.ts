@@ -18,10 +18,11 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { EmailService } from "../../notifications/services/email.service";
+import { AuthSessionsService } from "../../auth/sessions/auth-sessions.service";
 import { AuditLogService } from "../audit-log.service";
 import {
   createTenantWithOwner,
-  slugify,
+  availableTenantSlug,
 } from "../saas.helpers";
 import { AcceptInviteDto } from "./dto/accept-invite.dto";
 import { CreateInviteDto } from "./dto/create-invite.dto";
@@ -30,6 +31,8 @@ import {
   DEFAULT_ACCESS_TOKEN_SECONDS,
   DEFAULT_REFRESH_TOKEN_SECONDS,
 } from "../../common/jwt-duration";
+import { TERMS_VERSION } from "../../auth/legal-terms";
+import { ACCESS_TOKEN_TYPE, REFRESH_TOKEN_TYPE } from "../../auth/session-token";
 
 const INVITE_TTL_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -51,6 +54,11 @@ export interface InviteView {
   magicLink?: string;
   /** Internal token (only on the create response). */
   token?: string;
+  /**
+   * Whether the email really went out (create and resend only). The console
+   * said "Hemos enviado el email" even when sending failed (audit 8 T15).
+   */
+  emailSent?: boolean;
 }
 
 /** What the public accept-invite page needs to render the wizard. */
@@ -79,6 +87,14 @@ export interface InviteAcceptanceContext {
  *   - rotated on resend (the old row is marked revoked and a new row
  *     is created).
  */
+/** How an invite's status reads in the console's messages. */
+const INVITE_STATUS_ES: Record<string, string> = {
+  pending: "pendiente",
+  accepted: "aceptada",
+  revoked: "anulada",
+  expired: "caducada",
+};
+
 @Injectable()
 export class InvitesService {
   private readonly logger = new Logger(InvitesService.name);
@@ -89,6 +105,7 @@ export class InvitesService {
     private readonly auditLog: AuditLogService,
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
+    private readonly sessions: AuthSessionsService,
   ) {}
 
   /**
@@ -103,9 +120,9 @@ export class InvitesService {
       return this.createInviteInTx(tx, dto, invitedById);
     });
 
-    await this.sendInviteEmail(invite);
+    const emailSent = await this.sendInviteEmail(invite);
 
-    return this.toView(invite, true);
+    return { ...this.toView(invite, true), emailSent };
   }
 
   /**
@@ -141,17 +158,18 @@ export class InvitesService {
     });
     if (existing) {
       throw new ConflictException(
-        `An active invite already exists for ${email} (${dto.tenantName}).`,
+        `Ya hay una invitación pendiente para ${email} (${dto.tenantName}). Reenvíala desde la lista de invitaciones.`,
       );
     }
 
-    const existingUser = await tx.user.findUnique({
-      where: { email },
+    // Ignoring case: older accounts may still have capitals.
+    const existingUser = await tx.user.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
       select: { tenantId: true },
     });
     if (existingUser) {
       throw new ConflictException(
-        `${email} already has a KiraRoom account. If they're joining your team, add them as a user from your dashboard instead of minting a tenant invite.`,
+        `${email} ya tiene una cuenta en KiraRoom. Si se une a un equipo, la dueña del salón la añade desde su panel.`,
       );
     }
 
@@ -197,7 +215,7 @@ export class InvitesService {
    */
   async getInviteForAcceptance(token: string): Promise<InviteAcceptanceContext> {
     if (!token || token.length < 16) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
 
     const invite = await this.prisma.tenantInvite.findUnique({
@@ -209,7 +227,7 @@ export class InvitesService {
       invite.status !== InviteStatus.pending ||
       invite.expiresAt.getTime() <= Date.now()
     ) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
 
     return {
@@ -229,6 +247,7 @@ export class InvitesService {
   async acceptInvite(
     token: string,
     dto: AcceptInviteDto,
+    context: { ip?: string | null } = {},
   ): Promise<{
     tenantId: string;
     userId: string;
@@ -253,40 +272,22 @@ export class InvitesService {
         invite.expiresAt.getTime() <= Date.now()
       ) {
         throw new ForbiddenException(
-          "This invite link is no longer valid.",
+          "Esta invitación ya no es válida: ha caducado, se ha anulado o ya se ha usado. Pide una nueva a KiraRoom.",
         );
       }
 
       // Slug must be available at accept time (a tenant could have
       // registered the same slug between invite-mint and invite-accept).
-      const slug = slugify(invite.tenantName);
-      const existingBySlug = await tx.tenant.findUnique({
-        where: { slug },
-        select: { id: true },
-      });
-      let finalSlug = slug;
-      if (existingBySlug) {
-        // Fall back to slug + 6 random hex chars so the accept never
-        // blocks on a name collision. The SaaS admin can rename later.
-        finalSlug = `${slug}-${randomBytes(3).toString("hex")}`;
-        const stillCollision = await tx.tenant.findUnique({
-          where: { slug: finalSlug },
-          select: { id: true },
-        });
-        if (stillCollision) {
-          // Astronomically unlikely (1 in 16M). The SaaS admin should
-          // mint a fresh invite with a different name.
-          throw new BadRequestException(
-            "Slug collision detected — please contact support.",
-          );
-        }
-      }
+      // A taken name gets the next free address ("-2", "-3"...), the same
+      // as a signup, so the accept never blocks on a name collision.
+      const finalSlug = await availableTenantSlug(tx, invite.tenantName);
 
       const { tenantId, userId, email, role } = await this.acceptWithSlug(
         tx,
         invite,
         dto,
         finalSlug,
+        context.ip ?? null,
       );
 
       // Atomic accept: updateMany with the status filter so that two
@@ -309,12 +310,12 @@ export class InvitesService {
 
       if (flip.count === 0) {
         throw new ForbiddenException(
-          "This invite link was just consumed by another request.",
+          "Esta invitación se acaba de usar. Si has sido tú, inicia sesión.",
         );
       }
 
       return { tenantId, userId, email, role };
-    }).then((result) => {
+    }).then(async (result) => {
       // After the tenant + user are committed, mint a JWT pair for
       // instant dashboard access. Mirrors AuthService.generateTokens
       // so the frontend login flow is identical.
@@ -337,13 +338,22 @@ export class InvitesService {
         tenantId: result.tenantId,
       };
 
-      const accessToken = this.jwt.sign(payload, {
+      // Typed like every session token (audit 8, C11).
+      const accessToken = this.jwt.sign({ ...payload, typ: ACCESS_TOKEN_TYPE }, {
         expiresIn: accessExpiresIn,
       });
-      const refreshToken = this.jwt.sign(payload, {
-        secret: process.env.JWT_REFRESH_SECRET,
-        expiresIn: refreshExpiresIn,
-      });
+      // A session like any sign-in's, so the refresh token rotates.
+      const session = await this.sessions.start(
+        { id: result.userId, type: "user" },
+        new Date(Date.now() + refreshExpiresIn * 1000),
+      );
+      const refreshToken = this.jwt.sign(
+        { ...payload, typ: REFRESH_TOKEN_TYPE, sid: session.sid, jti: session.jti },
+        {
+          secret: process.env.JWT_REFRESH_SECRET,
+          expiresIn: refreshExpiresIn,
+        },
+      );
 
       return {
         tenantId: result.tenantId,
@@ -352,6 +362,7 @@ export class InvitesService {
         role: result.role,
         accessToken,
         refreshToken,
+        refreshExpiresIn,
         expiresIn: accessExpiresIn,
         tokenType: "Bearer",
       };
@@ -371,6 +382,7 @@ export class InvitesService {
     },
     dto: AcceptInviteDto,
     slug: string,
+    ip: string | null = null,
   ): Promise<{ tenantId: string; userId: string; email: string; role: UserRole }> {
     // Owner User — `email` is the invite email so the same person can
     // log in via the regular /auth/login endpoint after the trial ends.
@@ -402,7 +414,10 @@ export class InvitesService {
       ownerPassword: dto.password,
       ownerFirstName,
       ownerLastName,
-      ownerRole: invite.role,
+      // Invites only ever create the salon owner (CreateInviteDto); an old
+      // invite with another role still makes an owner, never a platform admin.
+      ownerRole: invite.role === UserRole.admin ? UserRole.admin : UserRole.owner,
+      legalAcceptance: { termsVersion: TERMS_VERSION, ip, source: "invite" },
     });
 
     // Mark the user as email-verified — accepted invite is the proof.
@@ -463,11 +478,11 @@ export class InvitesService {
       where: { id },
     });
     if (!invite) {
-      throw new NotFoundException("Invite not found");
+      throw new NotFoundException("Invitación no encontrada");
     }
     if (invite.status !== InviteStatus.pending) {
       throw new BadRequestException(
-        `Cannot revoke invite in status '${invite.status}'.`,
+        `Solo se puede anular una invitación pendiente (esta está ${INVITE_STATUS_ES[invite.status] ?? invite.status}).`,
       );
     }
     const updated = await this.prisma.tenantInvite.update({
@@ -505,26 +520,31 @@ export class InvitesService {
         where: { id },
       });
       if (!existing) {
-        throw new NotFoundException("Invite not found");
+        throw new NotFoundException("Invitación no encontrada");
       }
       if (existing.status === InviteStatus.accepted) {
-        throw new BadRequestException("Invite was already accepted.");
+        throw new BadRequestException("Esta invitación ya se aceptó: el salón existe.");
       }
-      if (existing.status !== InviteStatus.pending) {
-        // Already revoked or expired — refuse to layer a fresh token
-        // on top of an already-dead invite.
+      // Pending or expired: a fresh link (an expired one used to need a
+      // new invite by hand, audit 8 T15). A revoked one stays revoked.
+      const expired =
+        existing.status === InviteStatus.expired ||
+        (existing.status === InviteStatus.pending && existing.expiresAt.getTime() <= Date.now());
+      if (existing.status !== InviteStatus.pending && !expired) {
         throw new BadRequestException(
-          `Cannot resend an invite in status '${existing.status}'.`,
+          `No se puede reenviar una invitación ${INVITE_STATUS_ES[existing.status] ?? existing.status}.`,
         );
       }
 
-      await tx.tenantInvite.update({
-        where: { id },
-        data: {
-          status: InviteStatus.revoked,
-          revokedAt: new Date(),
-        },
-      });
+      if (existing.status === InviteStatus.pending) {
+        await tx.tenantInvite.update({
+          where: { id },
+          data: {
+            status: InviteStatus.revoked,
+            revokedAt: new Date(),
+          },
+        });
+      }
 
       await this.auditLog.record(
         "tenant.invite.revoke",
@@ -552,9 +572,9 @@ export class InvitesService {
       );
     });
 
-    await this.sendInviteEmail(newInvite);
+    const emailSent = await this.sendInviteEmail(newInvite);
 
-    return this.toView(newInvite, true);
+    return { ...this.toView(newInvite, true), emailSent };
   }
 
   // ────────────────────── private helpers
@@ -574,14 +594,15 @@ export class InvitesService {
       this.logger.error(
         "APP_BASE_URL is not set — invite magic links will point to " +
           "http://localhost:3000, which is unreachable in production. " +
-          "Set APP_BASE_URL=https://app.kiraroom.com in the environment.",
+          "Set APP_BASE_URL=https://app.kiraroom.net in the environment.",
       );
       return `http://localhost:3000/accept-invite/${token}`;
     }
     return `${base.replace(/\/+$/, "")}/accept-invite/${token}`;
   }
 
-  private async sendInviteEmail(invite: TenantInvite): Promise<void> {
+  /** Sends the invite; true only when the email provider accepted it. */
+  private async sendInviteEmail(invite: TenantInvite): Promise<boolean> {
     const link = this.buildMagicLink(invite.token);
     try {
       const sent = await this.emailService.sendTenantInvite({
@@ -595,13 +616,17 @@ export class InvitesService {
         this.logger.warn(
           `Invite email failed for ${invite.email}: ${sent.error}`,
         );
+        return false;
       }
+      // Email off in this environment: nothing went out.
+      return !(sent as { skipped?: boolean }).skipped;
     } catch (err) {
       // Email failure must NOT block invite creation — the SaaS admin
       // already gets the magicLink in the API response.
       this.logger.error(
         `Invite email threw for ${invite.email}: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 

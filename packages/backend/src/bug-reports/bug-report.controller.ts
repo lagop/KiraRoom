@@ -1,26 +1,12 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Optional } from "@nestjs/common";
+import { BadRequestException, Body, Controller, HttpCode, HttpStatus, Post, Req, Optional } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import { BugReportService } from "./bug-report.service";
 import { SignedIn } from "../auth/decorators/signed-in.decorator";
-
-interface BugReportDto {
-  subject: string;
-  description: string;
-  /** Optional context — filled by the frontend automatically. */
-  currentUrl?: string;
-  appVersion?: string;
-  /**
-   * Optional email of the reporter. When provided, an automated
-   * acknowledgement is sent back so the reporter has a tracking id
-   * they can reference. Anonymous reports (no email) skip the ack.
-   */
-  email?: string;
-  /** Free-form JSON for additional context (last 10 log lines, viewport size, etc.). */
-  context?: Record<string, unknown>;
-}
+import { BugReportDto, MAX_BUG_CONTEXT_BYTES } from "./bug-report.dto";
 
 /**
  * One-click bug-report endpoint.
@@ -55,15 +41,27 @@ export class BugReportController {
       "Submit a bug report. Anonymous-friendly. The report is emailed to the founder and persisted for the SaaS admin dashboard." })
   @ApiResponse({ status: 202, description: "Bug report accepted" })
   @SignedIn()
+  // Each report sends two emails: 5 an hour per address, with per-user and
+  // per-salon counters in the service.
+  @Throttle({ default: { ttl: 3_600_000, limit: 5 } })
   async submit(
     @Body() dto: BugReportDto,
     @Req() req?: any,
   ): Promise<{ ok: true; id: string }> {
     const user = req?.user;
+    if (dto.context && JSON.stringify(dto.context).length > MAX_BUG_CONTEXT_BYTES) {
+      throw new BadRequestException("context too large");
+    }
     const id = await this.service.submit({
-      ...dto,
+      subject: dto.subject,
+      description: dto.description,
+      currentUrl: dto.currentUrl,
+      appVersion: dto.appVersion,
+      email: dto.email,
+      context: dto.context,
       tenantId: user?.tenantId ?? null,
-      authorId: user?.id ?? null });
+      authorId: user?.id ?? null,
+      accountEmail: user?.email ?? null });
     return { ok: true, id };
   }
 }

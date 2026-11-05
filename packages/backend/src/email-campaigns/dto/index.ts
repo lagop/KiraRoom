@@ -1,5 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum, IsBoolean, IsDateString, IsArray, IsEmail, IsNumber, Min, Max } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsString, IsOptional, IsEnum, IsBoolean, IsDateString, IsArray, IsEmail, IsNumber, IsUUID, Min, Max } from 'class-validator';
+
+/**
+ * An optional field the panel left empty arrives as "": that is "not
+ * given". Without this, an empty "Responder a" failed IsEmail (a silent 400)
+ * and an empty "Promoción" reached the database as a promotion id "" (a 500
+ * on the foreign key).
+ */
+const BlankIsUndefined = () =>
+  Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value));
 
 export enum CampaignType {
   newsletter = 'newsletter',
@@ -22,6 +32,7 @@ export class CreateCampaignDto {
   subject: string;
 
   @ApiPropertyOptional({ description: 'Preview text', example: 'Get 20% off your next visit' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   previewText?: string;
@@ -34,12 +45,14 @@ export class CreateCampaignDto {
   @IsEnum(CampaignType)
   campaignType: CampaignType;
 
-  @ApiPropertyOptional({ description: 'Sender name' })
+  @ApiPropertyOptional({ description: 'Not used: campaigns go out under the salon name' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   fromName?: string;
 
   @ApiPropertyOptional({ description: 'Reply-to email' })
+  @BlankIsUndefined()
   @IsEmail()
   @IsOptional()
   replyTo?: string;
@@ -53,7 +66,8 @@ export class CreateCampaignDto {
   inactiveDaysThreshold?: number;
 
   @ApiPropertyOptional({ description: 'ID of promotion to include in email' })
-  @IsString()
+  @BlankIsUndefined()
+  @IsUUID()
   @IsOptional()
   linkedPromotionId?: string;
 }
@@ -70,6 +84,7 @@ export class UpdateCampaignDto {
   subject?: string;
 
   @ApiPropertyOptional({ description: 'Preview text' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   previewText?: string;
@@ -84,12 +99,14 @@ export class UpdateCampaignDto {
   @IsOptional()
   campaignType?: CampaignType;
 
-  @ApiPropertyOptional({ description: 'Sender name' })
+  @ApiPropertyOptional({ description: 'Not used: campaigns go out under the salon name' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   fromName?: string;
 
   @ApiPropertyOptional({ description: 'Reply-to email' })
+  @BlankIsUndefined()
   @IsEmail()
   @IsOptional()
   replyTo?: string;
@@ -105,6 +122,7 @@ export class CreateTemplateDto {
   subject: string;
 
   @ApiPropertyOptional({ description: 'Preview text' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   previewText?: string;
@@ -134,6 +152,7 @@ export class SendCampaignDto {
   subject: string;
 
   @ApiPropertyOptional({ description: 'Preview text' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   previewText?: string;
@@ -151,12 +170,14 @@ export class SendCampaignDto {
   @IsOptional()
   sendNow?: boolean;
 
-  @ApiPropertyOptional({ description: 'Sender name' })
+  @ApiPropertyOptional({ description: 'Not used: campaigns go out under the salon name' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   fromName?: string;
 
   @ApiPropertyOptional({ description: 'Reply-to email' })
+  @BlankIsUndefined()
   @IsEmail()
   @IsOptional()
   replyTo?: string;
@@ -185,6 +206,7 @@ export class CreateReengagementCampaignDto {
   subject: string;
 
   @ApiPropertyOptional({ description: 'Preview text', example: 'Get a special discount on your next visit' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   previewText?: string;
@@ -200,16 +222,19 @@ export class CreateReengagementCampaignDto {
   inactiveDaysThreshold: number;
 
   @ApiPropertyOptional({ description: 'ID of promotion to include in email' })
-  @IsString()
+  @BlankIsUndefined()
+  @IsUUID()
   @IsOptional()
   linkedPromotionId?: string;
 
-  @ApiPropertyOptional({ description: 'Sender name' })
+  @ApiPropertyOptional({ description: 'Not used: campaigns go out under the salon name' })
+  @BlankIsUndefined()
   @IsString()
   @IsOptional()
   fromName?: string;
 
   @ApiPropertyOptional({ description: 'Reply-to email' })
+  @BlankIsUndefined()
   @IsEmail()
   @IsOptional()
   replyTo?: string;

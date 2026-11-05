@@ -192,3 +192,22 @@ export function aggregateModelo303(invoices: Modelo303Invoice[]): Record<string,
   boxes[MODELO_303_ZERO_RATE_KEY] = zeroBase;
   return boxes;
 }
+
+/**
+ * The taxable base (base imponible, tax not included) of `invoices`, split
+ * the way the 303 splits it: invoices, and rectificativas (by the same rule
+ * as the 303's boxes 14-15, isRectifying), whose bases are negative. Every
+ * rate counts, 0 % included, so it works under IGIC too. For the income card
+ * of the modelo 130 (TaxReportsService.income130).
+ */
+export function invoiceBases(invoices: Modelo303Invoice[]): { invoicedCents: number; rectifiedCents: number } {
+  let invoicedCents = 0;
+  let rectifiedCents = 0;
+  for (const inv of invoices) {
+    const lines = Array.isArray(inv.taxBreakdown) ? (inv.taxBreakdown as BreakdownLine[]) : [];
+    const base = lines.reduce((sum, l) => sum + (Number(l.baseCents) || 0), 0);
+    if (isRectifying(inv)) rectifiedCents += base;
+    else invoicedCents += base;
+  }
+  return { invoicedCents, rectifiedCents };
+}

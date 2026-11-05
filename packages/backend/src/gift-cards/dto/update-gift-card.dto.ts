@@ -5,9 +5,10 @@ export class UpdateGiftCardDto {
   @IsBoolean()
   isActive?: boolean;
 
+  /** Last day the card works ("YYYY-MM-DD", salon calendar); `null` removes the expiry. */
   @IsOptional()
   @IsDateString()
-  expiresAt?: string;
+  expiresAt?: string | null;
 
   @IsOptional()
   @IsString()

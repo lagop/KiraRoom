@@ -20,6 +20,7 @@ function makeService(activeCount: number, flagEnabled = true) {
     appointment: { findMany: jest.fn().mockResolvedValue([]) },
     professional: { findMany: jest.fn().mockResolvedValue([]) },
     professionalLocation: { findMany: jest.fn().mockResolvedValue([]) },
+    timeOff: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const flags = { isEnabled: jest.fn().mockResolvedValue(flagEnabled) };
   return { service: new MultiLocationService(prisma as any, flags as any), prisma };

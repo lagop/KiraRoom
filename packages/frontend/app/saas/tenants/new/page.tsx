@@ -9,6 +9,7 @@ import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
 import type { SubscriptionPlan } from "@/lib/api";
 import { useEffect } from "react";
+import { nextSlugField } from "@/lib/saas-tenant";
 
 export default function NewTenantPage() {
   const t = useTranslations();
@@ -16,6 +17,10 @@ export default function NewTenantPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  // The operator typed the address: the name stops filling it (T7).
+  const [slugTouched, setSlugTouched] = useState(false);
+  // D7: a platform word or brand name in the address, for the platform's own salons.
+  const [platformAddress, setPlatformAddress] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     slug: "",
@@ -42,15 +47,13 @@ export default function NewTenantPage() {
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-
-    if (name === "name" && !formData.slug) {
-      const slug = value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "");
-      setFormData((prev) => ({ ...prev, slug }));
+    if (name === "name" || name === "slug") {
+      const next = nextSlugField({ slug: formData.slug, touched: slugTouched }, name, value);
+      setSlugTouched(next.touched);
+      setFormData((prev) => ({ ...prev, [name]: value, slug: next.slug }));
+      return;
     }
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -59,7 +62,11 @@ export default function NewTenantPage() {
     setError(null);
 
     try {
-      await apiClient.createSaasTenant(formData);
+      // Empty optional fields are left out (the salon's email is optional, T6).
+      const body = Object.fromEntries(
+        Object.entries(formData).filter(([, v]) => typeof v !== "string" || v.trim() !== ""),
+      ) as typeof formData;
+      await apiClient.createSaasTenant(platformAddress ? { ...body, platformAddress: true } : body);
       router.push("/saas/tenants");
     } catch (err: any) {
       console.error("Error creating tenant:", err);
@@ -115,10 +122,21 @@ export default function NewTenantPage() {
                 type="text"
                 name="slug"
                 required
+                minLength={3}
+                maxLength={63}
+                pattern="[a-z0-9]+(-[a-z0-9]+)*"
                 value={formData.slug}
                 onChange={handleChange}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <p className="mt-1 text-xs text-gray-500">{t("saas.console.web_address_hint")}</p>
+              <label className="mt-2 flex items-start gap-2 text-sm text-gray-700">
+                <input type="checkbox" className="mt-1" checked={platformAddress} onChange={(e) => setPlatformAddress(e.target.checked)} />
+                <span>
+                  {t("saas.console.platform_address")}
+                  <span className="block text-xs text-gray-500">{t("saas.console.platform_address_hint")}</span>
+                </span>
+              </label>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -146,7 +164,7 @@ export default function NewTenantPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                {t("common.website")}
+                {t("saas.console.website")}
               </label>
               <input
                 type="url"
@@ -172,7 +190,7 @@ export default function NewTenantPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Location & Regional</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.console.section_location")}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -184,13 +202,13 @@ export default function NewTenantPage() {
                 onChange={handleChange}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="ES">Spain</option>
-                <option value="US">United States</option>
-                <option value="GB">United Kingdom</option>
-                <option value="FR">France</option>
-                <option value="DE">Germany</option>
+                <option value="ES">España</option>
                 <option value="PT">Portugal</option>
-                <option value="MX">Mexico</option>
+                <option value="FR">Francia</option>
+                <option value="DE">Alemania</option>
+                <option value="GB">Reino Unido</option>
+                <option value="US">Estados Unidos</option>
+                <option value="MX">México</option>
                 <option value="AR">Argentina</option>
                 <option value="CO">Colombia</option>
                 <option value="CL">Chile</option>
@@ -198,7 +216,7 @@ export default function NewTenantPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                {t("common.timezone")}
+                {t("saas.console.timezone")}
               </label>
               <select
                 name="timezone"
@@ -207,19 +225,15 @@ export default function NewTenantPage() {
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {SALON_TIMEZONES.map((tz) => (
-
                   <option key={tz.value} value={tz.value}>
-
                     {tz.label}
-
                   </option>
-
                 ))}
               </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                {t("common.currency")}
+                {t("saas.console.currency")}
               </label>
               <select
                 name="currency"
@@ -240,7 +254,7 @@ export default function NewTenantPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.subscription")}</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.console.section_subscription")}</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -264,14 +278,14 @@ export default function NewTenantPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Owner Account (Optional)</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">{t("saas.section_owner")}</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Create an owner account for this salon. Leave empty to create later.
+            {t("saas.console.owner_section_desc")}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Owner Email
+                {t("saas.field_owner_email")}
               </label>
               <input
                 type="email"
@@ -283,19 +297,25 @@ export default function NewTenantPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Owner Password
+                {t("saas.field_owner_password")}
               </label>
               <input
                 type="password"
                 name="ownerPassword"
                 value={formData.ownerPassword}
                 onChange={handleChange}
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                {t("saas.console.owner_password_hint")}
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Owner First Name
+                {t("saas.field_owner_first_name")}
               </label>
               <input
                 type="text"
@@ -307,7 +327,7 @@ export default function NewTenantPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Owner Last Name
+                {t("saas.field_owner_last_name")}
               </label>
               <input
                 type="text"
@@ -325,7 +345,7 @@ export default function NewTenantPage() {
             href="/saas/tenants"
             className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t("saas.cancel")}
           </Link>
           <button
             type="submit"

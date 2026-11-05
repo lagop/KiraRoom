@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Module, UnauthorizedException } from "
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { JwtModule, JwtService } from "@nestjs/jwt";
 import { PrismaService } from "../prisma/prisma.service";
+import { isAccessTokenPayload } from "../../auth/session-token";
 
 /** Who is asking a public list endpoint, and for which salon. */
 export interface PublicViewer {
@@ -12,6 +13,13 @@ export interface PublicViewer {
    * salon -- gets the public projection.
    */
   staff: boolean;
+  /**
+   * Only for staff: their role and user id, so a list can give the owner
+   * and admins every colleague's full row and a professional only their own
+   * (GET /professionals).
+   */
+  role?: string;
+  userId?: string;
 }
 
 const STAFF_ROLES = new Set(["owner", "admin", "staff"]);
@@ -52,7 +60,9 @@ export class PublicViewerService {
 
     if (queryTenantId) {
       const staff = claims.valid ? await this.isStaffOf(claims.payload, queryTenantId) : false;
-      return { tenantId: queryTenantId, staff };
+      return staff && claims.valid
+        ? { tenantId: queryTenantId, staff, role: claims.payload.role, userId: claims.payload.sub }
+        : { tenantId: queryTenantId, staff };
     }
 
     if (!claims.present) throw new BadRequestException("tenantId is required");
@@ -63,7 +73,10 @@ export class PublicViewerService {
       // A saas_owner token carries no tenant; it must say which one it means.
       throw new BadRequestException("tenantId is required");
     }
-    return { tenantId, staff: await this.isStaffOf(claims.payload, tenantId) };
+    const staff = await this.isStaffOf(claims.payload, tenantId);
+    return staff
+      ? { tenantId, staff, role: claims.payload.role, userId: claims.payload.sub }
+      : { tenantId, staff };
   }
 
   private readToken(req: { headers?: Record<string, unknown> }):
@@ -77,6 +90,8 @@ export class PublicViewerService {
       const payload = this.jwt.verify(match[1], {
         secret: this.config.get<string>("JWT_SECRET"),
       });
+      // Only a session's access token says who is looking (audit 8, C11).
+      if (!isAccessTokenPayload(payload)) return { present: true, valid: false };
       return { present: true, valid: true, payload };
     } catch {
       return { present: true, valid: false };
@@ -87,9 +102,15 @@ export class PublicViewerService {
     if (!STAFF_ROLES.has(payload.role) || payload.tenantId !== tenantId) return false;
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { isActive: true, tenantId: true },
+      select: { isActive: true, tenantId: true, tokenVersion: true },
     });
-    return !!user?.isActive && user.tenantId === tenantId;
+    // A session that ended (logout, password changed, access removed) is no
+    // longer the salon's staff here either, as for JwtStrategy.
+    return (
+      !!user?.isActive &&
+      user.tenantId === tenantId &&
+      (payload.tv ?? 0) === (user.tokenVersion ?? 0)
+    );
   }
 }
 

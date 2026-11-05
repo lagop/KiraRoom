@@ -1,29 +1,39 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
+  IsBase64,
   IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
   IsInt,
-  MaxLength,
   IsNumber,
   IsOptional,
+  IsPositive,
+  Matches,
+  IsNotEmpty,
   IsString,
+  Max,
+  MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { TAX_REGIMES, type TaxRegime } from "@kira/shared";
+import { SERIES_FORMAT, SERIES_INVALID } from "../fiscal-identity";
 
 export class CreateInvoiceLineDto {
   @ApiProperty()
   @IsString()
   description!: string;
 
-  @ApiProperty({ minimum: 0 })
-  @IsNumber()
-  @Min(0)
+  @ApiProperty({ minimum: 0, exclusiveMinimum: true })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: "La cantidad tiene que ser un número." })
+  @IsPositive({ message: "La cantidad tiene que ser mayor que cero." })
+  @Max(100_000)
   quantity!: number;
 
   @ApiProperty({ description: "Unit price in cents" })
@@ -37,9 +47,11 @@ export class CreateInvoiceLineDto {
   @Min(0)
   discountPct?: number;
 
-  @ApiProperty({ description: "Tax rate percent (e.g. 21 for 21% IVA)" })
-  @IsNumber()
+  /** One of the salon's regime (TAX_REGIME_RATES), checked by InvoiceService.createManual. */
+  @ApiProperty({ description: "Tax rate percent (e.g. 21 for 21% IVA, 9.5 for IGIC)" })
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: "El tipo de impuesto tiene que ser un número." })
   @Min(0)
+  @Max(100)
   taxRate!: number;
 
   @ApiPropertyOptional()
@@ -51,17 +63,38 @@ export class CreateInvoiceLineDto {
   @IsOptional()
   @IsString()
   serviceId?: string;
+
+  /**
+   * `unitPriceCents` already includes the tax, and the line is split into
+   * base + tax (InvoiceLineInput.taxIncluded). The manual invoice form sends
+   * it on every line, true or false, from the salon's pricesIncludeTax
+   * (Ajustes fiscales). Left out: the salon's pricesIncludeTax, decided on
+   * the server (it used to be false, the tax on top, whatever the salon's
+   * setting). Without this property the global ValidationPipe (whitelist)
+   * dropped it silently and every line was taxed on top.
+   */
+  @ApiPropertyOptional({
+    description:
+      "The unit price already includes the tax (true) or the tax is added on top (false). Left out: the salon's pricesIncludeTax setting",
+  })
+  @IsOptional()
+  @IsBoolean()
+  taxIncluded?: boolean;
 }
 
 export class CreateInvoiceDto {
+  /** Not R (rectificativas) nor T (tickets): refused by InvoiceService.createManual. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(10, { message: "La serie no puede tener más de 10 caracteres." })
+  @Matches(/^[A-Za-z0-9]*$/, { message: "La serie solo puede tener letras y números." })
   series?: string;
 
+  /** Today (the salon's) or left out: an invoice is dated the day it is issued. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha de expedición no es válida." })
   issueDate?: string;
 
   @ApiPropertyOptional({ enum: ["client", "tenant"] })
@@ -89,6 +122,8 @@ export class CreateInvoiceDto {
 
   @ApiProperty({ type: [CreateInvoiceLineDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: "La factura necesita al menos una línea." })
+  @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => CreateInvoiceLineDto)
   lines!: CreateInvoiceLineDto[];
@@ -99,32 +134,83 @@ export class CreateInvoiceDto {
   notes?: string;
 }
 
+/** Statuses an invoice really has: issued, or cancelled (anulada). */
+export const LISTED_INVOICE_STATUSES = ["issued", "cancelled"] as const;
+
+/**
+ * Query of `GET /invoices`. Query strings are strings: numbers are
+ * converted (@Type) before they are checked. Newest first, a page at a time.
+ */
 export class ListInvoicesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(10)
   series?: string;
 
-  @ApiPropertyOptional({ enum: ["draft", "issued", "paid", "cancelled", "refunded"] })
+  @ApiPropertyOptional({ enum: LISTED_INVOICE_STATUSES })
+  @IsOptional()
+  @IsIn(LISTED_INVOICE_STATUSES as unknown as string[], {
+    message: 'El estado tiene que ser "issued" (emitida) o "cancelled" (anulada).',
+  })
+  status?: (typeof LISTED_INVOICE_STATUSES)[number];
+
+  /** A number ("A2027-000012", "12"), a client's name or a NIF. */
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  status?: string;
+  @MaxLength(100, { message: "La búsqueda no puede tener más de 100 caracteres." })
+  q?: string;
 
+  /** First day (YYYY-MM-DD), included. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha inicial no es válida." })
+  dateFrom?: string;
+
+  /** Last day (YYYY-MM-DD), included. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString({}, { message: "La fecha final no es válida." })
+  dateTo?: string;
+
+  /** Older name of dateFrom. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString({}, { message: "La fecha inicial no es válida." })
   fromDate?: string;
 
+  /** Older name of dateTo. */
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
+  @IsDateString({}, { message: "La fecha final no es válida." })
   toDate?: string;
 
-  @ApiPropertyOptional({ default: 50 })
+  @ApiPropertyOptional({ default: 50, maximum: 100 })
   @IsOptional()
-  @IsInt()
-  @Min(1)
+  @Type(() => Number)
+  @IsInt({ message: "El límite tiene que ser un número entero." })
+  @Min(1, { message: "El límite tiene que ser al menos 1." })
+  @Max(100, { message: "El límite no puede pasar de 100." })
   limit?: number;
+
+  /** Invoices to skip; takes precedence over page. */
+  @ApiPropertyOptional({ default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: "El desplazamiento tiene que ser un número entero." })
+  @Min(0)
+  @Max(1_000_000)
+  offset?: number;
+
+  /** 1-based page of `limit` invoices. */
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: "La página tiene que ser un número entero." })
+  @Min(1, { message: "La página empieza en 1." })
+  @Max(100_000)
+  page?: number;
 }
 
 export class UpdateTenantFiscalSettingsDto {
@@ -133,15 +219,23 @@ export class UpdateTenantFiscalSettingsDto {
   @IsEnum(["none", "verifactu", "ticketbai", "sii_only"])
   fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
 
-  @ApiPropertyOptional()
+  /** Trimmed and in capitals before the check, so "a" and "A" are one series. */
+  @ApiPropertyOptional({ description: "1-4 letters or digits, stored in capitals" })
   @IsOptional()
-  @IsString()
+  @Transform(({ value }) => (typeof value === "string" ? value.trim().toUpperCase() : value))
+  @IsString({ message: "La serie tiene que ser un texto." })
+  @Matches(SERIES_FORMAT, { message: SERIES_INVALID })
   defaultSeries?: string;
 
-  @ApiPropertyOptional()
+  /** Up to two decimals: IGIC has 9,5 %. */
+  @ApiPropertyOptional({ minimum: 0, maximum: 100 })
   @IsOptional()
-  @IsInt()
-  @Min(0)
+  @IsNumber(
+    { maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false },
+    { message: "El tipo impositivo tiene que ser un número con dos decimales como mucho (por ejemplo 21 o 9,5)." },
+  )
+  @Min(0, { message: "El tipo impositivo no puede ser negativo." })
+  @Max(100, { message: "El tipo impositivo no puede pasar del 100 %." })
   defaultTaxRate?: number;
 
   @ApiPropertyOptional()
@@ -164,9 +258,21 @@ export class UpdateTenantFiscalSettingsDto {
   @IsIn(TAX_REGIMES as unknown as string[])
   taxRegime?: TaxRegime;
 
-  @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — mirrored to Tenant.taxId" })
+  /**
+   * Whether the prices the salon sets on its services and products already
+   * include the tax (IVA / IGIC / IPSI). True: an invoice splits the price
+   * into base + tax. False: the tax is added on top. See salon-tax-settings.ts.
+   */
+  @ApiPropertyOptional({ description: "Salon prices already include the tax (true) or have it added on top (false)" })
   @IsOptional()
-  @IsString()
+  @IsBoolean()
+  pricesIncludeTax?: boolean;
+
+  /** Sent only when it changes; an empty value is refused (fiscal-identity.ts). */
+  @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — stored in Tenant.taxId and mirrored to fiscalSettings.tenantNif" })
+  @IsOptional()
+  @IsString({ message: "El NIF tiene que ser un texto." })
+  @MaxLength(20, { message: "El NIF no puede tener más de 20 caracteres." })
   tenantNif?: string;
 
   @ApiPropertyOptional({ enum: ["nif", "cif", "nie", "passport", "other"] })
@@ -174,9 +280,11 @@ export class UpdateTenantFiscalSettingsDto {
   @IsEnum(["nif", "cif", "nie", "passport", "other"])
   taxIdType?: "nif" | "cif" | "nie" | "passport" | "other";
 
+  /** Sent only when it changes; an empty value is refused (fiscal-identity.ts). */
   @ApiPropertyOptional({ description: "Legal name (razón social) for the emitter" })
   @IsOptional()
-  @IsString()
+  @IsString({ message: "La razón social tiene que ser un texto." })
+  @MaxLength(200, { message: "La razón social no puede tener más de 200 caracteres." })
   legalName?: string;
 }
 
@@ -184,32 +292,113 @@ export class UpdateTenantFiscalSettingsDto {
  * The global ValidationPipe drops fields without validators: the inline
  * body type the route used had none.
  */
+export class CancelInvoiceDto {
+  @ApiProperty()
+  @IsString({ message: "Indica el motivo de la anulación." })
+  @IsNotEmpty({ message: "Indica el motivo de la anulación." })
+  @MaxLength(500, { message: "El motivo no puede tener más de 500 caracteres." })
+  reason!: string;
+}
+/**
+ * A line of a rectifying invoice. The quantity may be negative: a
+ * rectification "por diferencias" credits part of the original.
+ *
+ * With `originalLineId` the line credits that line of the original: its
+ * description, price, discount and rate are taken from it (any sent are
+ * ignored) and `quantity` says how much of it, negative (minus the whole
+ * quantity: its exact amounts, negated). See rectification-lines.ts.
+ */
+export class RectificationLineDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  originalLineId?: string;
+
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  description?: string;
+
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(-10_000)
+  @Max(10_000)
+  quantity!: number;
+
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
+  @IsInt()
+  @Min(0)
+  @Max(100_000_000)
+  unitPriceCents?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPct?: number;
+
+  @ValidateIf((o: RectificationLineDto) => o.originalLineId === undefined || o.originalLineId === null)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  taxRate?: number;
+
+  /**
+   * A free line: `unitPriceCents` already includes the tax, and the line is
+   * split into base + tax. Left out: the salon's pricesIncludeTax, as for a
+   * manual invoice line (CreateInvoiceLineDto.taxIncluded). Ignored with
+   * originalLineId: a credited line is split the way the original was.
+   */
+  @IsOptional()
+  @IsBoolean()
+  taxIncluded?: boolean;
+}
+
+/**
+ * Body of `POST /invoices/:id/rectify`. Was an inline type. Without
+ * `lines`, the whole original is rectified: every line, its exact amounts
+ * negated, so the two invoices net to zero.
+ */
+export class RectifyInvoiceDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => RectificationLineDto)
+  lines?: RectificationLineDto[];
+}
+
+/**
+ * Body of `POST /invoices/certificates`. Was an inline type: any provider
+ * string and any size reached the encrypted store.
+ */
 export class UploadCertificateDto {
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   alias!: string;
 
-  @IsOptional()
   @IsIn(["p12", "cloud_dnie"])
-  provider?: "p12" | "cloud_dnie";
+  provider!: "p12" | "cloud_dnie";
 
-  /** The .p12 / .pfx file, base64. */
-  @IsString()
-  @MaxLength(100_000)
+  /** A .p12 is a few KB; 200 000 base64 characters is about 150 KB. */
+  @IsBase64()
+  @MaxLength(200_000)
   pkcs12Base64!: string;
 
   @IsString()
-  @MaxLength(200)
+  @MaxLength(500)
   passphrase!: string;
 
-  /** "seal" for a certificado de sello (sent through www10). */
+  /** "seal" for a certificado de sello (VERI*FACTU goes through www10). */
   @IsOptional()
   @IsIn(["personal", "seal"])
   certificateType?: "personal" | "seal";
-}
-
-export class CancelInvoiceDto {
-  @ApiProperty()
-  @IsString()
-  reason!: string;
 }

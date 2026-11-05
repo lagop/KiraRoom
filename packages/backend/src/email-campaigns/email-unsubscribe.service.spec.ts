@@ -22,6 +22,7 @@ describe("EmailUnsubscribeService", () => {
       campaign: { tenantId: "t1", tenant: { name: "Salón Lucía" } },
     };
     const prisma: any = {
+      clientCadence: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       emailCampaignRecipient: {
         findUnique: jest.fn(async ({ where }: any) => (where.id === recipient.id ? recipient : null)),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -124,11 +125,35 @@ describe("EmailUnsubscribeService", () => {
     expect(prisma.emailCampaign.update).not.toHaveBeenCalled();
   });
 
-  it("still unsubscribes when the consent record cannot be written", async () => {
-    const { service, suppressions, consent } = setup();
-    consent.recordMarketingChoice.mockRejectedValueOnce(new Error("db down"));
+  it("one unsubscribe also stops the rebooking reminders, which carry the same link", async () => {
+    const { service, prisma } = setup();
+    await service.unsubscribe(service.tokenFor({ kind: "c", id: "cli-2" }));
+    expect(prisma.clientCadence.updateMany).toHaveBeenCalledWith({
+      where: { clientId: "cli-2", tenantId: "t1" },
+      data: { optedOut: true, nextRecommendedReminderAt: null },
+    });
+    // From a campaign email too: the recipient's client.
     await service.unsubscribe(service.tokenFor({ kind: "r", id: "rec-1" }));
+    expect(prisma.clientCadence.updateMany).toHaveBeenLastCalledWith({
+      where: { clientId: "cli-1", tenantId: "t1" },
+      data: { optedOut: true, nextRecommendedReminderAt: null },
+    });
+  });
+
+  it("still unsubscribes when the consent record cannot be written", async () => {
+    const { service, suppressions, consent, prisma } = setup();
+    consent.recordMarketingChoice.mockRejectedValueOnce(new Error("db down"));
+    prisma.clientCadence.updateMany.mockRejectedValueOnce(new Error("db down"));
+    await expect(service.unsubscribe(service.tokenFor({ kind: "r", id: "rec-1" }))).resolves.toEqual({
+      salonName: "Salón Lucía",
+      unsubscribed: true,
+    });
     expect(suppressions.suppress).toHaveBeenCalled();
+  });
+
+  it("builds the page URL for any token, so a bad one lands on the page's 'not valid' answer", () => {
+    const { service } = setup();
+    expect(service.pageUrl("invalido")).toBe("https://app.test/public/baja/invalido");
   });
 
   it("answers 404 for an unknown or forged link", async () => {

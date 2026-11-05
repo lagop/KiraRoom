@@ -1,4 +1,6 @@
-import { ParseUUIDPipe, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { ParseUUIDPipe, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
+import { deliverTokens } from "../../auth/sessions/refresh-cookie";
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -49,8 +51,12 @@ export class PublicInvitesController {
   async acceptInvite(
     @Param("token") token: string,
     @Body() dto: AcceptInviteDto,
+    @Res({ passthrough: true }) res: Response,
+    @Req() req?: any,
   ) {
-    return this.invites.acceptInvite(token, dto);
+    // The address is kept with the terms acceptance (LegalAcceptance).
+    const ip: string | null = req?.ip ?? req?.socket?.remoteAddress ?? null;
+    return deliverTokens(res, "staff", await this.invites.acceptInvite(token, dto, { ip }));
   }
 }
 

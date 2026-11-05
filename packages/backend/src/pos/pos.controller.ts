@@ -1,12 +1,25 @@
-import { ParseUUIDPipe, Controller, Get, Post, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
-import { PosService, CreatePosOrderDto } from './pos.service';
+import { ParseUUIDPipe, Controller, UseInterceptors, Get, Post, Put, Body, Param, Query, Req, Patch, Delete } from "@nestjs/common";
+import { PosService } from './pos.service';
+import {
+  CreatePosOrderDto,
+  CreateProductCategoryDto,
+  CreateProductDto,
+  InventoryAdjustmentBodyDto,
+  PosQuickSaleDto,
+  PosQuoteDto,
+  PosSettingsDto,
+  UpdateProductDto,
+} from './dto/pos.dto';
 import { ProductService } from './product.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { ScrubSecretsInterceptor } from "../appointments/appointment-response";
 
 @ApiTags('POS')
 @ApiBearerAuth()
 @Controller('pos')
+// Nothing from the till carries the salon's keys or channel tokens.
+@UseInterceptors(ScrubSecretsInterceptor)
 export class PosController {
   constructor(
     private readonly posService: PosService,
@@ -20,8 +33,8 @@ export class PosController {
     @Req() req: any,
     @Query('date') date?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getDashboard(tenantId, date);
+    // Staff: only their own sales (PosService.staffScope).
+    return this.posService.getDashboard(req.user.tenantId, date, { id: req.user.id, role: req.user.role });
   }
 
   @Get('services')
@@ -39,8 +52,49 @@ export class PosController {
     @Req() req: any,
     @Query('search') search?: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getClients(tenantId, search);
+    // Staff: only with a search of two characters or more, and the clients
+    // who are not theirs reduced to name and masked phone (PosService.getClients).
+    return this.posService.getClients(req.user.tenantId, search, { id: req.user.id, role: req.user.role });
+  }
+
+  /** The till's settings; staff read them too, to know their discount limit. */
+  @Get('settings')
+  @ApiOperation({ summary: 'Get POS settings (staff discount limit)' })
+  @Roles(...SALON_TEAM)
+  async getSettings(@Req() req: any) {
+    return this.posService.getSettings(req.user.tenantId);
+  }
+
+  /** How far staff may discount at the till: the owner and managers decide. */
+  @Put('settings')
+  @ApiOperation({ summary: 'Update POS settings (staff discount limit)' })
+  @Roles(...SALON_MANAGERS)
+  async updateSettings(@Req() req: any, @Body() body: PosSettingsDto) {
+    return this.posService.updateSettings(req.user.tenantId, body);
+  }
+
+  /** The ticket priced by the server, in money (tax included): what the checkout will charge. */
+  @Post('quote')
+  @ApiOperation({ summary: 'Price a POS ticket without charging it' })
+  @Roles(...SALON_TEAM)
+  async quote(@Req() req: any, @Body() dto: PosQuoteDto) {
+    return this.posService.quote({ ...dto, tenantId: req.user.tenantId, actor: { id: req.user.id, role: req.user.role } });
+  }
+
+  /** Products the till sells: active, priced with tax, with their stock. */
+  @Get('sale-products')
+  @ApiOperation({ summary: 'Products available at the till' })
+  @Roles(...SALON_TEAM)
+  async saleProducts(@Req() req: any, @Query('search') search?: string) {
+    return this.posService.getSaleProducts(req.user.tenantId, search?.slice(0, 100));
+  }
+
+  /** The ticket of a sale (receipt): staff only theirs. */
+  @Get('sales/:id/receipt')
+  @ApiOperation({ summary: 'Receipt of a POS sale' })
+  @Roles(...SALON_TEAM)
+  async receipt(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.posService.getReceipt(req.user.tenantId, id, { id: req.user.id, role: req.user.role });
   }
 
   @Post('checkout')
@@ -50,8 +104,12 @@ export class PosController {
     @Req() req: any,
     @Body() dto: CreatePosOrderDto,
   ) {
-    // Override tenantId from JWT token for security
-    const checkoutData = { ...dto, tenantId: req.user.tenantId };
+    // Tenant and actor from the JWT token, never from the body.
+    const checkoutData = {
+      ...dto,
+      tenantId: req.user.tenantId,
+      actor: { id: req.user.id, role: req.user.role },
+    };
     return this.posService.processCheckout(checkoutData);
   }
 
@@ -60,22 +118,21 @@ export class PosController {
   @Roles(...SALON_TEAM)
   async quickSale(
     @Req() req: any,
-    @Body() body: { serviceId: string; paymentMethod: 'cash' | 'card'; clientId?: string },
+    @Body() body: PosQuickSaleDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.posService.quickSale(
-      tenantId,
-      body.serviceId,
-      body.paymentMethod,
-      body.clientId,
-    );
+    return this.posService.quickSale(tenantId, body.serviceId, body.paymentMethod, body.clientId, {
+      saleId: body.saleId,
+      professionalId: body.professionalId,
+      actor: { id: req.user.id, role: req.user.role },
+    });
   }
 
   @Get('order/:id')
   @ApiOperation({ summary: 'Get order/receipt details' })
   @Roles(...SALON_TEAM)
-  async getOrder(@Param('id', ParseUUIDPipe) id: string) {
-    return this.posService.getOrder(id);
+  async getOrder(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.posService.getOrder(req.user.tenantId, id, { id: req.user.id, role: req.user.role });
   }
 
   @Get('report/daily')
@@ -85,15 +142,17 @@ export class PosController {
     @Req() req: any,
     @Query('date') date: string,
   ) {
-    const tenantId = req.user.tenantId;
-    return this.posService.getDailyReport(tenantId, date);
+    // Staff: only their own sales (PosService.staffScope).
+    return this.posService.getDailyReport(req.user.tenantId, date, { id: req.user.id, role: req.user.role });
   }
 
   // ============ PRODUCTS ============
 
+  // The catalogue with its cost price: managers (the staff till reads
+  // /pos/sale-products, without it).
   @Get('products')
   @ApiOperation({ summary: 'Get all products' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getProducts(
     @Req() req: any,
     @Query('category') category?: string,
@@ -116,9 +175,9 @@ export class PosController {
 
   @Get('products/:id')
   @ApiOperation({ summary: 'Get a single product' })
-  @Roles(...SALON_TEAM)
-  async getProduct(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.getProduct(id);
+  @Roles(...SALON_MANAGERS)
+  async getProduct(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.getProduct(req.user.tenantId, id);
   }
 
   @Post('products')
@@ -126,27 +185,28 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async createProduct(
     @Req() req: any,
-    @Body() body: any,
+    @Body() body: CreateProductDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.productService.createProduct({ ...body, tenantId });
+    return this.productService.createProduct(tenantId, body);
   }
 
   @Patch('products/:id')
   @ApiOperation({ summary: 'Update a product' })
   @Roles(...SALON_MANAGERS)
   async updateProduct(
+    @Req() req: any,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: any,
+    @Body() body: UpdateProductDto,
   ) {
-    return this.productService.updateProduct(id, body);
+    return this.productService.updateProduct(req.user.tenantId, id, body);
   }
 
   @Delete('products/:id')
   @ApiOperation({ summary: 'Delete a product' })
   @Roles(...SALON_MANAGERS)
-  async deleteProduct(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.deleteProduct(id);
+  async deleteProduct(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.deleteProduct(req.user.tenantId, id);
   }
 
   @Post('products/categories')
@@ -154,7 +214,7 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async createProductCategory(
     @Req() req: any,
-    @Body() body: { name: string; description?: string },
+    @Body() body: CreateProductCategoryDto,
   ) {
     const tenantId = req.user.tenantId;
     return this.productService.createCategory(tenantId, body);
@@ -162,9 +222,10 @@ export class PosController {
 
   // ============ INVENTORY ============
 
+  // The stock movements log: managers (no staff screen reads it).
   @Get('inventory')
   @ApiOperation({ summary: 'Get inventory transactions' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getInventoryTransactions(
     @Req() req: any,
     @Query('productId') productId?: string,
@@ -180,17 +241,25 @@ export class PosController {
   @Roles(...SALON_MANAGERS)
   async adjustInventory(
     @Req() req: any,
-    @Body() body: { productId: string; type: 'restock' | 'adjustment' | 'transfer' | 'damaged' | 'expired'; quantity: number; reason?: string },
+    @Body() body: InventoryAdjustmentBodyDto,
   ) {
     const tenantId = req.user.tenantId;
-    return this.productService.adjustInventory({ tenantId, ...body });
+    return this.productService.adjustInventory({
+      tenantId,
+      productId: body.productId,
+      type: body.type,
+      quantity: body.quantity,
+      reason: body.reason,
+    });
   }
 
   // ============ ORDERS ============
+  // The old order model (nothing writes it any more), with clients' contact
+  // details: managers only, no screen reads it.
 
   @Get('orders')
   @ApiOperation({ summary: 'Get orders' })
-  @Roles(...SALON_TEAM)
+  @Roles(...SALON_MANAGERS)
   async getOrders(
     @Req() req: any,
     @Query('status') status?: string,
@@ -204,8 +273,8 @@ export class PosController {
 
   @Get('orders/:id')
   @ApiOperation({ summary: 'Get order details' })
-  @Roles(...SALON_TEAM)
-  async getOrderDetails(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productService.getOrder(id);
+  @Roles(...SALON_MANAGERS)
+  async getOrderDetails(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.productService.getOrder(req.user.tenantId, id);
   }
 }

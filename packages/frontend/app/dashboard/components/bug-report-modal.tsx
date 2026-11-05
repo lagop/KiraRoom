@@ -14,17 +14,15 @@ interface BugReportModalProps {
  * Bug-report modal. Sprint 1 Workstream 1.5 deliverable, with the
  * completion gap (Sprint 2 review, A2.1) closed in 2026-07-17:
  *
- *   - Pre-fills `email` from the logged-in user when available, so
- *     the backend `sendBugReportAck` email can be delivered.
+ *   - Shows the logged-in user's email: the backend sends the
+ *     acknowledgement to the account's own address only.
  *   - Captures `currentUrl` (window.location.href) and `appVersion`
  *     (NEXT_PUBLIC_APP_VERSION or "dev") automatically.
  *   - Shows the backend-returned tracking id on success so the
  *     reporter can reference it later.
  *
- * Anonymous-friendly: if no user is logged in, the email field is
- * still shown and optional. The backend ack is skipped when email
- * is empty (BugReportService.submit), but the report still reaches
- * the founder.
+ * Without a session there is no acknowledgement (BugReportService.submit),
+ * but the report still reaches the founder.
  */
 export function BugReportModal({ open, onClose }: BugReportModalProps) {
   const [subject, setSubject] = useState("");
@@ -79,7 +77,6 @@ export function BugReportModal({ open, onClose }: BugReportModalProps) {
       const res = await apiClient.reportBug({
         subject: subject.trim(),
         description: description.trim(),
-        email: email.trim() || undefined,
         currentUrl: typeof window !== "undefined" ? window.location.href : undefined,
         appVersion:
           process.env.NEXT_PUBLIC_APP_VERSION || "dev",
@@ -153,7 +150,7 @@ export function BugReportModal({ open, onClose }: BugReportModalProps) {
             <p style={{ color: "#64748b", marginBottom: 16 }}>
               {email.trim() ? (
                 <>
-                  Te hemos enviado un correo de confirmación a{" "}
+                  Te llegará un acuse a{" "}
                   <strong>{email.trim()}</strong>.
                 </>
               ) : (
@@ -236,8 +233,8 @@ export function BugReportModal({ open, onClose }: BugReportModalProps) {
                 }}
               >
                 Cuéntanos qué ha pasado. Capturaremos la URL y la versión
-                de la app automáticamente. Si nos dejas tu email te
-                enviaremos un acuse con un identificador de seguimiento.
+                de la app automáticamente y te enviaremos un acuse con un
+                identificador de seguimiento.
               </p>
 
               <label
@@ -299,32 +296,11 @@ export function BugReportModal({ open, onClose }: BugReportModalProps) {
                 />
               </label>
 
-              <label
-                style={{
-                  display: "block",
-                  marginBottom: 16,
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#0f172a",
-                }}
-              >
-                Tu email (opcional)
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Si quieres recibir un acuse con el identificador"
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    marginTop: 4,
-                    padding: "8px 12px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 6,
-                    fontSize: 14,
-                  }}
-                />
-              </label>
+              {email && (
+                <p style={{ marginBottom: 16, fontSize: 13, color: "#64748b" }}>
+                  Te enviaremos el acuse a <strong>{email}</strong>, el email de tu cuenta.
+                </p>
+              )}
 
               {error && (
                 <div

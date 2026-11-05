@@ -1,24 +1,37 @@
 // components/calendar/Calendar.tsx
-import { format } from "date-fns";
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useMediaQuery } from "@/lib/use-media-query";
 import {
   DndContext,
   DragEndEvent,
   DragOverlay,
   DragStartEvent,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
 } from "@dnd-kit/core";
 import { CalendarHeader } from "./CalendarHeader";
 import { TimeGrid } from "./TimeGrid";
 import { AgendaView } from "./AgendaView";
 import { Professional, Appointment } from "./types";
 import { AppointmentBlock } from "./AppointmentBlock";
-import { fetchCalendarData, transformToCalendarFormat } from "./calendar.service";
+import { fetchCalendarData, fetchSalonSettings, transformToCalendarFormat, type SalonSettings } from "./calendar.service";
+import { FALLBACK_SALON_TIMEZONE, salonClock, salonTime } from "./salon-time";
+import { dateOfDay, gridHours, holdsSlot, initialScrollMinutes, localDay, minutesToTop, salonClosedWeekday, salonClosureOn, visibleProfessionals } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
+import { SalonTimeZoneProvider } from "./SalonTimeZone";
 import { useToast } from "@/components/ui/use-toast";
+import { useTranslations } from "@/lib/use-translation";
 import apiClient from "../../lib/api";
 import { SlotClickData } from "./TimeSlot";
+import { DRAG_START, droppedOnProfessional, minutesFromDrag, moveErrorText, planMove, serviceOnlyEffect, type MovePlan, type ServiceOnlyEffect } from "./drag-move";
+import { MoveVisitDialog, type MoveScope } from "./MoveVisitDialog";
+import { getCurrentUser } from "@/lib/utils";
 import { NewAppointmentPopover } from "./NewAppointmentPopover";
 import { EditAppointmentPopover } from "./EditAppointmentPopover";
+import { useBookingLocations } from "@/lib/use-booking-locations";
+import { appointmentsAtLocation, columnsAtLocation } from "@/lib/panel-booking-locations";
 
 /**
  * The day view of the dashboard's appointments.
@@ -28,36 +41,68 @@ import { EditAppointmentPopover } from "./EditAppointmentPopover";
  * the calendar loaded for that salon only and answered "Failed to load
  * calendar data" for every other; it also opened on 2026-01-06 with mock
  * appointments until the fetch returned.
+ *
+ * Everything is drawn on the salon's clock (Tenant.timezone), whatever zone
+ * the browser is in: blocks hold real instants and salon-time.ts turns them
+ * into the salon's hours and minutes.
+ *
+ * The day travels as "yyyy-MM-dd", not as a Date: the page handed a new Date
+ * on every render, the fetch depended on it, and every re-render of the page
+ * refetched the day (spinner, scroll back to the top, open popovers reset).
  */
 export const Calendar: React.FC<{
-  date?: Date;
-  onDateChange?: (date: Date) => void;
+  /** The day shown, "yyyy-MM-dd" (today when empty). */
+  day?: string;
+  onDayChange?: (day: string) => void;
   onAppointmentClick?: (appointmentId: string) => void;
   onAppointmentUpdated?: () => void;
+  /** The agenda's location filter (multi-local); empty: every location. */
+  locationId?: string;
 }> = ({
-  date: externalDate,
-  onDateChange: externalOnDateChange,
+  locationId,
+  day: externalDay,
+  onDayChange: externalOnDayChange,
   onAppointmentClick,
   onAppointmentUpdated
 }) => {
-  const [internalSelectedDate, setInternalSelectedDate] = useState(() => new Date());
-  const selectedDate = externalDate ?? internalSelectedDate;
-  const setSelectedDate = useCallback((date: Date) => {
-    if (externalOnDateChange) {
-      externalOnDateChange(date);
+  const t = useTranslations();
+  const [internalDay, setInternalDay] = useState(() => localDay());
+  const day = externalDay || internalDay;
+  const selectedDate = useMemo(() => dateOfDay(day), [day]);
+  const setDay = useCallback((next: string) => {
+    if (externalOnDayChange) {
+      externalOnDayChange(next);
     } else {
-      setInternalSelectedDate(date);
+      setInternalDay(next);
     }
-  }, [externalOnDateChange]);
+  }, [externalOnDayChange]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
+  // Time off and closures of the day, shaded in the columns.
+  const [timeOff, setTimeOff] = useState<TimeOff[]>([]);
+  // The salon's zone and hours, asked for once: they do not change from day to day.
+  const [timeZone, setTimeZone] = useState(FALLBACK_SALON_TIMEZONE);
+  const [openingHours, setOpeningHours] = useState<SalonSettings["openingHours"]>(null);
+  const settingsRequest = useRef<Promise<SalonSettings> | null>(null);
+  // Each load takes a number; the answer to an older one (a slower request
+  // for the day before) is dropped instead of drawing over the newer day.
+  const requestSeq = useRef(0);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  // The day grid's scroll box, and the day and layout it was last placed for.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrolledFor = useRef<string | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [debugMode, setDebugMode] = useState(false); // Debug mode for drop zones
   const [newAppointmentSlot, setNewAppointmentSlot] = useState<SlotClickData | null>(null);
   const [editingAppointmentId, setEditingAppointmentId] = useState<string | null>(null);
+  // A dropped service of a multi-service visit, waiting for the owner to say
+  // whether the whole visit moves or only that service.
+  const [pendingVisitMove, setPendingVisitMove] = useState<{
+    moving: Appointment;
+    plan: Extract<MovePlan, { kind: "move" }>;
+    effect: ServiceOnlyEffect;
+  } | null>(null);
   // Mobile-first calendar: prefer the chronological list (agenda) on
   // phones, the multi-column day grid on tablets/desktops. Falls back
   // to agenda during SSR (window undefined) so the initial markup
@@ -76,212 +121,250 @@ export const Calendar: React.FC<{
   }, [isDesktop, modeTouched]);
   const { toast } = useToast();
 
-  const fetchData = useCallback(async () => {
-    try {
+  /**
+   * Loads `forDay`. A new day shows the spinner; a refresh after a change
+   * (`quiet`) redraws in place, keeping the scroll and any open popover.
+   */
+  const load = useCallback(async (forDay: string, quiet: boolean) => {
+    const request = ++requestSeq.current;
+    if (!quiet) {
       setLoading(true);
-      setError(null);
-      
-      // Fetch real data from backend
-      const { appointments: backendAppointments, professionals: backendProfessionals } =
-        await fetchCalendarData(selectedDate);
-      
+      setError(false);
+    }
+    try {
+      settingsRequest.current ??= fetchSalonSettings();
+      const [settings, { appointments: backendAppointments, professionals: backendProfessionals }, dayTimeOff] =
+        await Promise.all([
+          settingsRequest.current,
+          fetchCalendarData(forDay),
+          // Only shading: a failure here must not take the day's appointments with it.
+          // Pending requests too: the server sends them to the owner and
+          // managers only, and they are drawn as "Pendiente", blocking nothing.
+          apiClient.getTimeOff(forDay, forDay, undefined, { includePending: true }).catch((err) => {
+            console.error("Failed to fetch time off:", err);
+            return [] as TimeOff[];
+          }),
+        ]);
+      if (request !== requestSeq.current) return;
+
       // Transform data to calendar format
       const { appointments: calendarAppointments, professionals: calendarProfessionals } =
-        transformToCalendarFormat(backendAppointments, backendProfessionals);
-      
+        transformToCalendarFormat(backendAppointments, backendProfessionals, settings.timeZone);
+
+      setTimeZone(settings.timeZone);
+      setOpeningHours(settings.openingHours);
       setAppointments(calendarAppointments);
       setProfessionals(calendarProfessionals);
-      
+      setTimeOff(dayTimeOff);
+      setError(false);
     } catch (err) {
+      if (request !== requestSeq.current) return;
       console.error('Failed to fetch calendar data:', err);
-      setError('Failed to load calendar data.');
-      // No fallback to mock data
-      setAppointments([]);
-      setProfessionals([]);
+      // A failed refresh keeps what is drawn; a failed day says so.
+      if (!quiet) {
+        setError(true);
+        // No fallback to mock data
+        setAppointments([]);
+        setProfessionals([]);
+        setTimeOff([]);
+      }
     } finally {
-      setLoading(false);
+      if (request === requestSeq.current) setLoading(false);
     }
-  }, [selectedDate]);
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    void load(day, false);
+  }, [load, day]);
+
+  // Nothing that answers after the calendar is gone is drawn.
+  useEffect(() => () => {
+    requestSeq.current++;
+  }, []);
+
+  const fetchData = useCallback(() => load(day, true), [load, day]);
+
+  // Only the professionals who work here (an inactive one only while they
+  // still have appointments that day), over the hours they and the salon open.
+  // Multi-local, one location picked: its appointments, and the columns of
+  // the professionals who work there (or have an appointment there).
+  const bookingLocations = useBookingLocations();
+  const shownAppointments = useMemo(
+    () => appointmentsAtLocation(appointments, bookingLocations, locationId),
+    [appointments, bookingLocations, locationId],
+  );
+  const columns = useMemo(
+    () =>
+      columnsAtLocation(
+        visibleProfessionals(professionals, shownAppointments),
+        bookingLocations,
+        locationId,
+        shownAppointments,
+      ),
+    [professionals, shownAppointments, bookingLocations, locationId],
+  );
+  const hours = useMemo(
+    () =>
+      gridHours({
+        day,
+        openingHours,
+        workingHours: columns.map((p) => p.workingHours ?? []),
+        appointments: shownAppointments
+          .filter((a) => salonClock(a.start, timeZone).day === day)
+          .map((a) => {
+            const start = salonClock(a.start, timeZone).minutes;
+            return { start, end: start + (new Date(a.end).getTime() - new Date(a.start).getTime()) / 60_000 };
+          }),
+      }),
+    [day, openingHours, columns, shownAppointments, timeZone],
+  );
+
+  // The grid opens on the part of the day that matters: around now on today,
+  // the first booking on another day. Once per day and layout, not on every
+  // refresh.
+  useEffect(() => {
+    if (loading || error || mode !== "day") return;
+    const el = scrollRef.current;
+    const key = `${day}|${mode}`;
+    if (!el || scrolledFor.current === key) return;
+    scrolledFor.current = key;
+    const now = salonClock(Date.now(), timeZone);
+    const starts = shownAppointments
+      .filter((a) => holdsSlot(a.status) && salonClock(a.start, timeZone).day === day)
+      .map((a) => salonClock(a.start, timeZone).minutes);
+    const target = initialScrollMinutes({
+      isToday: now.day === day,
+      nowMinutes: now.minutes,
+      firstAppointment: starts.length > 0 ? Math.min(...starts) : undefined,
+      startHour: hours.startHour,
+    });
+    el.scrollTop = minutesToTop(target, hours.startHour);
+  }, [loading, error, mode, day, shownAppointments, timeZone, hours.startHour]);
+
+  // A click stays a click; only a real drag (or a long press) moves it.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: DRAG_START.mouse }),
+    useSensor(TouchSensor, { activationConstraint: DRAG_START.touch }),
+  );
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(event.active.id as string);
   }, []);
 
-  const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
-      const { active, over, delta } = event;
-      
-      // Visual debug indicator
-      console.log('%c=== DRAG END DEBUG ===', 'color: red; font-weight: bold;');
-      console.log('Active appointment ID:', active.id);
-      console.log('Over object:', over);
-      console.log('Delta:', { x: delta.x, y: delta.y });
-      
-      console.log('Over object:', over);
-      console.log('Delta:', { x: delta.x, y: delta.y });
-
-      const activeAppointment = appointments.find((a) => a.id === active.id);
-      if (!activeAppointment) {
-        console.log('Active appointment not found');
-        setActiveId(null);
-        return;
-      }
-
-      // Extract drop data more robustly
-      let overData = over ? (over.data.current as any) : null;
-      let newProfessionalId = activeAppointment.professionalId;
-      let minutesDelta = Math.round(delta.y / 24) * 15;
-
-      console.log('Over data:', over?.data);
-      console.log('Over data current:', over?.data?.current);
-      
-      if (!overData) {
-        console.log('No data in drop target, trying alternative access');
-        // Try alternative ways to access the data
-        if (over && over.data && typeof over.data === 'object') {
-          overData = {...over.data};
-        }
-      }
-      
-      if (overData) {
-        console.log('Found overData:', overData);
-        // Handle different drop target types
-        if (overData.professionalId) {
-          newProfessionalId = overData.professionalId;
-          console.log('Drop on professional column, new professional:', newProfessionalId);
-        } else if (overData.slot && overData.professionalId) {
-          newProfessionalId = overData.professionalId;
-          console.log('Drop on time slot, new professional:', newProfessionalId);
-        } else if (over && over.id && typeof over.id === 'string' && over.id.startsWith('professional-column-')) {
-          newProfessionalId = (over.id as string).replace('professional-column-', '');
-          console.log('Drop on professional column (from ID), new professional:', newProfessionalId);
-        } else if (over && over.id && typeof over.id === 'string' && over.id.includes('-')) {
-          // Try to extract professionalId from slot ID format: "professionalId-index"
-          const parts = (over.id as string).split('-');
-          if (parts.length >= 2) {
-            newProfessionalId = parts[0];
-            console.log('Drop on time slot (from ID), new professional:', newProfessionalId);
-          }
-        }
-      } else {
-        console.log('Could not extract data from drop target, using original professional');
-      }
-      
-      // Calculate new time based on delta
-      const newStart = new Date(activeAppointment.start);
-      newStart.setMinutes(newStart.getMinutes() + minutesDelta);
-      
-      console.log('Calculated new time:', {
-        minutesDelta,
-        newStart,
-        originalStart: activeAppointment.start
-      });
-
-      const duration =
-        new Date(activeAppointment.end).getTime() -
-        new Date(activeAppointment.start).getTime();
-      const newEnd = new Date(newStart.getTime() + duration);
-
-      console.log('New appointment details:', {
-        newProfessionalId,
-        newStart,
-        newEnd,
-        minutesDelta
-      });
-
-      // Store original appointment for potential revert
-      const originalAppointment = {...activeAppointment};
-
-      // Extract original appointment ID from calendar appointment ID
-      // Calendar appointment IDs are in format: `${appointmentId}-${index}` for multi-service
-      const activeIdStr = String(active.id);
-      const originalAppointmentId = activeIdStr.includes('-')
-        ? activeIdStr.substring(0, activeIdStr.lastIndexOf('-'))
-        : activeIdStr;
-
-      // Check if this is a multi-service appointment (has appointmentServiceId)
-      const isMultiService = activeAppointment.appointmentServiceId != null;
-
-      // Optimistic UI update - only update the dragged appointment
-      setAppointments((prev) =>
-        prev.map((a) => {
-          if (a.id === active.id) {
-            return {
-              ...a,
-              professionalId: newProfessionalId,
-              start: newStart.toISOString(),
-              end: newEnd.toISOString(),
-            };
-          }
-          return a;
-        })
-      );
-      setActiveId(null);
-
-      // Backend API call
+  /** Moves one service of a multi-service visit on the server, then redraws the day. */
+  const moveVisit = useCallback(
+    async (moving: Appointment, plan: Extract<MovePlan, { kind: "move" }>, scope: MoveScope) => {
       try {
         setIsUpdating(true);
-
-        if (isMultiService) {
-          // For multi-service appointments, update the individual service
-          console.log('Calling backend update for appointment service:', {
-            appointmentServiceId: activeAppointment.appointmentServiceId,
-            professionalId: newProfessionalId,
-            scheduledStart: newStart.toISOString(),
-            scheduledEnd: newEnd.toISOString(),
-          });
-
-          await apiClient.updateAppointmentService(activeAppointment.appointmentServiceId as string, {
-            professionalId: newProfessionalId,
-            scheduledStart: newStart.toISOString(),
-            scheduledEnd: newEnd.toISOString(),
-          });
-        } else {
-          // For single service appointments, update the appointment
-          // The wall clock the calendar shows (it renders scheduledTime as
-          // local time). toISOString() sent UTC: in Madrid a drop at 10:00
-          // was saved as 08:00, and near midnight on the wrong day.
-          await apiClient.updateAppointment(originalAppointmentId as string, {
-            professionalId: newProfessionalId,
-            scheduledDate: format(newStart, "yyyy-MM-dd"),
-            scheduledTime: format(newStart, "HH:mm"),
-          });
-        }
-
-        toast({
-          title: 'Appointment updated',
-          description: 'The appointment has been successfully rescheduled.',
-          variant: 'default',
+        // How far, not where to: the server moves every service of the visit
+        // by the same amount and re-reads each on the salon's clock.
+        await apiClient.moveAppointmentService(moving.appointmentServiceId as string, {
+          scope,
+          minutesDelta: Math.round((plan.start.getTime() - new Date(moving.start).getTime()) / 60_000),
+          professionalId: plan.professionalId,
         });
-        
-        // Notify parent component about the update
-        if (onAppointmentUpdated) {
-          onAppointmentUpdated();
-        }
+        toast({
+          title: t(scope === "visit" ? "appointments.calendarView.visitMoved" : "appointments.calendarView.serviceMoved"),
+          description: t("appointments.calendarView.movedTo", { time: salonTime(plan.start, timeZone) }),
+        });
+        // Every service of the visit may have moved: redraw from the server.
+        await fetchData();
+        onAppointmentUpdated?.();
       } catch (error) {
-        console.error('Failed to update appointment:', error);
-
-        // Revert UI changes on failure
-        setAppointments((prev) =>
-          prev.map((a) =>
-            a.id === active.id ? originalAppointment : a
-          )
-        );
-
-        toast({
-          title: 'Update failed',
-          description: 'Failed to update appointment. Please try again.',
-          variant: 'destructive',
-        });
+        toast({ title: t("appointments.calendarView.notMoved"), description: moveErrorText(error), variant: "destructive" });
       } finally {
         setIsUpdating(false);
       }
     },
-    [appointments, toast]
+    // t is a new function on every render, and only reads the language.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [toast, fetchData, onAppointmentUpdated, timeZone],
+  );
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over, delta } = event;
+      setActiveId(null);
+
+      const moving = appointments.find((a) => a.id === active.id);
+      if (!moving) return;
+
+      const plan = planMove({
+        start: moving.start,
+        end: moving.end,
+        professionalId: moving.professionalId,
+        newProfessionalId: droppedOnProfessional(over as any, moving.professionalId),
+        minutesDelta: minutesFromDrag(delta.y),
+        isStaff: getCurrentUser()?.role === "staff",
+      });
+      if (plan.kind === "none") return;
+      if (plan.kind === "refuse") {
+        toast({ title: t("appointments.calendarView.notMoved"), description: plan.message, variant: "destructive" });
+        return;
+      }
+
+      // One service of a visit with several: the visit decides (visit-move.ts
+      // on the server). Owners and managers choose; a professional moves the
+      // whole visit, and only one that is all theirs.
+      const visit = moving.appointmentId
+        ? appointments.filter((a) => a.appointmentId === moving.appointmentId && a.appointmentServiceId)
+        : [];
+      if (moving.appointmentServiceId && visit.length > 1) {
+        if (getCurrentUser()?.role === "staff") {
+          if (visit.some((a) => a.professionalId !== moving.professionalId)) {
+            toast({
+              title: t("appointments.calendarView.notMoved"),
+              description: t("appointments.calendarView.sharedVisit"),
+              variant: "destructive",
+            });
+            return;
+          }
+          await moveVisit(moving, plan, "visit");
+          return;
+        }
+        const minutesDelta = Math.round((plan.start.getTime() - new Date(moving.start).getTime()) / 60_000);
+        setPendingVisitMove({ moving, plan, effect: serviceOnlyEffect(visit, moving.id, minutesDelta) });
+        return;
+      }
+
+      // Optimistic: the block moves now and comes back if the server refuses.
+      const original = { ...moving };
+      setAppointments((prev) =>
+        prev.map((a) =>
+          a.id === moving.id
+            ? { ...a, professionalId: plan.professionalId, start: plan.start.toISOString(), end: plan.end.toISOString() }
+            : a,
+        ),
+      );
+
+      try {
+        setIsUpdating(true);
+        // The whole appointment. Its id was taken from the block id by
+        // cutting at the last dash, which for a plain UUID cut off its last
+        // group: every single-service move failed. The appointment keeps a
+        // day and time on the salon's clock, so the moved instant is read on
+        // that clock (the browser's could be an hour away).
+        const at = salonClock(plan.start, timeZone);
+        await apiClient.updateAppointment(moving.appointmentId ?? moving.id, {
+          professionalId: plan.professionalId,
+          scheduledDate: at.day,
+          scheduledTime: at.time,
+        });
+        toast({
+          title: t("appointments.calendarView.appointmentMoved"),
+          description: t("appointments.calendarView.movedTo", { time: at.time }),
+        });
+        onAppointmentUpdated?.();
+      } catch (error) {
+        setAppointments((prev) => prev.map((a) => (a.id === moving.id ? original : a)));
+        toast({ title: t("appointments.calendarView.notMoved"), description: moveErrorText(error), variant: "destructive" });
+      } finally {
+        setIsUpdating(false);
+      }
+    },
+    // t is a new function on every render, and only reads the language.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [appointments, toast, onAppointmentUpdated, moveVisit, timeZone]
   );
 
   const handleSlotClick = useCallback((data: SlotClickData) => {
@@ -297,92 +380,161 @@ export const Calendar: React.FC<{
     setEditingAppointmentId(appointmentId);
   }, []);
 
+  // The whole salon closed today: said above the grid and the agenda alike.
+  const closure = useMemo(() => salonClosureOn(day, timeOff), [day, timeOff]);
+  // A weekday outside the salon's own hours (settings): no closure, just shut.
+  const closedWeekday = useMemo(() => salonClosedWeekday(day, openingHours), [day, openingHours]);
+
   const activeAppointment = useMemo(
     () => appointments.find((a) => a.id === activeId),
     [appointments, activeId]
   );
 
   return (
-    <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+    <SalonTimeZoneProvider timeZone={timeZone}>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col h-full min-w-0 bg-background">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div>
-            <span className="ml-3">Loading calendar data...</span>
-          </div>
-        ) : error ? (
-          <div className="flex-1 flex items-center justify-center text-red-500">
-            {error}
-          </div>
-        ) : (
-          <>
-            <CalendarHeader
-              selectedDate={selectedDate}
-              onDateChange={setSelectedDate}
-              professionals={professionals}
-              mode={mode}
-              onModeChange={handleModeChange}
-            />
-            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto relative">
-              {mode === "agenda" ? (
-                <AgendaView
-                  date={selectedDate}
-                  professionals={professionals}
-                  appointments={appointments}
-                  onAppointmentClick={onAppointmentClick}
-                />
-              ) : (
-                <div className="h-full min-w-0 overflow-x-auto overflow-y-hidden">
-                  <TimeGrid
-                    date={selectedDate}
-                    professionals={professionals}
-                    appointments={appointments}
-                    draggingId={activeId}
-                    onAppointmentClick={onAppointmentClick}
-                    onSlotClick={handleSlotClick}
-                    onEditClick={handleEditClick}
-                  />
-                </div>
-              )}
-              {newAppointmentSlot && (
-                <NewAppointmentPopover
-                  slot={newAppointmentSlot}
-                  professionals={professionals}
-                  onClose={() => setNewAppointmentSlot(null)}
-                  onSuccess={() => {
-                    setNewAppointmentSlot(null);
-                    fetchData();
-                    onAppointmentUpdated?.();
-                  }}
-                />
-              )}
-              {editingAppointmentId && (
-                <EditAppointmentPopover
-                  appointmentId={editingAppointmentId}
-                  professionals={professionals}
-                  onClose={() => setEditingAppointmentId(null)}
-                  onSuccess={() => {
-                    setEditingAppointmentId(null);
-                    fetchData();
-                    onAppointmentUpdated?.();
-                  }}
-                />
-              )}
-              {isUpdating && (
-                <div className="absolute inset-0 bg-black bg-opacity-10 flex items-center justify-center">
-                  <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full"></div>
-                  <span className="ml-2 text-sm text-indigo-600">Updating appointment...</span>
-                </div>
-              )}
+        <CalendarHeader
+          day={day}
+          onDayChange={setDay}
+          mode={mode}
+          onModeChange={handleModeChange}
+          t={t}
+        />
+        <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+          {!loading && !error && closure && (
+            <div
+              role="status"
+              data-test="salon-closed"
+              className="px-4 py-2 text-sm bg-amber-50 text-amber-900 border-b border-amber-200"
+            >
+              {closure.note?.trim() ? `Salón cerrado — ${closure.note.trim()}` : "Salón cerrado"}. No se ofrecen citas
+              online ni por la recepcionista.
             </div>
-          </>
+          )}
+          {!loading && !error && !closure && closedWeekday && (
+            <div
+              role="status"
+              data-test="salon-closed-weekday"
+              className="px-4 py-2 text-sm bg-amber-50 text-amber-900 border-b border-amber-200"
+            >
+              El salón no abre este día según su horario. No se ofrecen citas online ni por la recepcionista.
+            </div>
+          )}
+          {loading ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div>
+              <span className="ml-3">{t("appointments.calendarView.loading")}</span>
+            </div>
+          ) : error ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-red-500">
+              {t("appointments.calendarView.loadError")}
+              <button
+                type="button"
+                onClick={() => void load(day, false)}
+                className="px-3 py-1.5 text-sm border border-border rounded-md text-foreground hover:bg-accent transition-colors"
+              >
+                {t("appointments.calendarView.retry")}
+              </button>
+            </div>
+          ) : mode === "agenda" ? (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <AgendaView
+                date={selectedDate}
+                professionals={columns}
+                appointments={shownAppointments}
+                onAppointmentClick={onAppointmentClick}
+                timeOff={timeOff}
+                t={t}
+              />
+            </div>
+          ) : (
+            // The grid's one scroll box, both ways: the day is taller than
+            // the calendar (it was clipped around 15:00, with no way down)
+            // and wider with many professionals. The hours and the
+            // professionals' names stick to its edges.
+            <div
+              ref={scrollRef}
+              className="flex-1 min-h-0 min-w-0 overflow-auto overscroll-contain"
+              data-test="calendar-scroll"
+            >
+              <TimeGrid
+                date={selectedDate}
+                hours={hours}
+                professionals={columns}
+                appointments={shownAppointments}
+                timeOff={timeOff}
+                openingHours={openingHours}
+                draggingId={activeId}
+                onAppointmentClick={onAppointmentClick}
+                onSlotClick={handleSlotClick}
+                onEditClick={handleEditClick}
+                t={t}
+              />
+            </div>
+          )}
+          {newAppointmentSlot && (
+            <NewAppointmentPopover
+              slot={newAppointmentSlot}
+              professionals={professionals}
+              locationId={locationId}
+              onClose={() => setNewAppointmentSlot(null)}
+              onSuccess={() => {
+                setNewAppointmentSlot(null);
+                void fetchData();
+                onAppointmentUpdated?.();
+              }}
+            />
+          )}
+          {editingAppointmentId && (
+            <EditAppointmentPopover
+              appointmentId={editingAppointmentId}
+              professionals={professionals}
+              onClose={() => setEditingAppointmentId(null)}
+              onSuccess={() => {
+                setEditingAppointmentId(null);
+                void fetchData();
+                onAppointmentUpdated?.();
+              }}
+            />
+          )}
+          {isUpdating && (
+            <div className="absolute inset-0 bg-black bg-opacity-10 flex items-center justify-center">
+              <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full"></div>
+              <span className="ml-2 text-sm text-indigo-600">{t("appointments.calendarView.updating")}</span>
+            </div>
+          )}
+        </div>
+        {pendingVisitMove && (
+          <MoveVisitDialog
+            professionalName={
+              professionals.find((p) => p.id === pendingVisitMove.moving.professionalId)?.name ??
+              t("appointments.calendarView.thisProfessional")
+            }
+            serviceName={pendingVisitMove.moving.serviceName}
+            when={t("appointments.calendarView.atTime", { time: salonTime(pendingVisitMove.plan.start, timeZone) })}
+            serviceOnly={pendingVisitMove.effect}
+            onCancel={() => setPendingVisitMove(null)}
+            onConfirm={(scope) => {
+              const { moving, plan } = pendingVisitMove;
+              setPendingVisitMove(null);
+              void moveVisit(moving, plan, scope);
+            }}
+          />
         )}
         <DragOverlay>
           {activeAppointment && (
-            <AppointmentBlock appointment={activeAppointment} isDragging isDragOverlay />
+            <AppointmentBlock
+              appointment={activeAppointment}
+              startHour={hours.startHour}
+              isDragging
+              isDragOverlay
+              t={t}
+            />
           )}
         </DragOverlay>
       </div>
     </DndContext>
+    </SalonTimeZoneProvider>
   );
 };

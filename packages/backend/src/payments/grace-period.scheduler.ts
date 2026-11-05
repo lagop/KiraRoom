@@ -3,6 +3,8 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailService } from "../notifications/services/email.service";
+import { appBaseUrl } from "../common/app-base-url";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const READ_ONLY_DAYS = 30;
@@ -18,8 +20,8 @@ const READ_ONLY_DAYS = 30;
  * chance to recover.
  *
  * Schedule: `@Cron(EVERY_DAY_AT_4AM)` — same hour as
- * `BillingScheduler.expireTrials` so the two daily jobs batch
- * together (one DB connection, one alert window if either fails).
+ * `BillingScheduler.archiveStaleReadOnly` so the daily jobs batch
+ * together (one alert window if either fails).
  *
  * The flipped tenant also receives an `sendAccountSuspended` email
  * (the second notification in the T+0 / T+7 cadence — the first one
@@ -36,6 +38,7 @@ export class GracePeriodScheduler {
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @MonitoredJob("GracePeriodScheduler.suspendExpiredGraces")
   async suspendExpiredGraces(): Promise<void> {
     const now = new Date();
     const expired = await this.prisma.tenant.findMany({
@@ -73,11 +76,7 @@ export class GracePeriodScheduler {
 
     // Notify each owner individually. Email failures are logged and
     // skipped — we never re-flip the row even if the email bounces.
-    const baseUrl =
-      this.config.get<string>("APP_BASE_URL") ||
-      this.config.get<string>("FRONTEND_URL") ||
-      "https://app.kiraroom.com";
-    const updatePaymentUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/billing`;
+    const updatePaymentUrl = `${appBaseUrl((k) => this.config.get<string>(k))}/dashboard/billing`;
 
     for (const tenant of expired) {
       try {
@@ -91,6 +90,7 @@ export class GracePeriodScheduler {
           tenantName: tenant.name,
           gracePeriodEndsAt:
             tenant.gracePeriodEndsAt ?? new Date(now.getTime() - MS_PER_DAY),
+          readOnlyUntil,
           updatePaymentUrl,
         });
       } catch (err) {

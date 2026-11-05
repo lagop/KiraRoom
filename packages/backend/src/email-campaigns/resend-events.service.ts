@@ -1,7 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { OpsAlertService } from "../common/ops-alerts/ops-alert.service";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { EmailSuppressionService } from "./email-suppression.service";
+import { suppressFromReviewRequestEvent } from "../reviews/review-email-events";
 
 /**
  * What Resend posts to the webhook (resend.com/docs/webhooks). Only the
@@ -16,13 +18,22 @@ export interface ResendWebhookEvent {
     bounce?: { type?: string; subType?: string; message?: string };
     click?: { link?: string };
     failed?: { reason?: string };
+    /** The tags the email was sent with (EmailOptions.tags). */
+    tags?: Record<string, string> | Array<{ name?: string; value?: string }>;
   };
 }
 
-/** Event types recorded per campaign recipient, and their analytics name. */
+/**
+ * Event types recorded per campaign recipient, and their analytics name.
+ *
+ * `email.opened` is not one of them: opens are not measured (the owner's
+ * decision -- an open pixel reads the client's device, LSSI art. 22.2, and
+ * Apple Mail and others fake opens anyway). An open event Resend still posts,
+ * while open tracking is on in its dashboard, is ignored: nothing stored,
+ * nothing counted. Clicks are kept.
+ */
 const TRACKED: Record<string, string> = {
   "email.delivered": "delivered",
-  "email.opened": "opened",
   "email.clicked": "clicked",
   "email.bounced": "bounced",
   "email.complained": "complained",
@@ -31,13 +42,12 @@ const TRACKED: Record<string, string> = {
 
 /**
  * The engagement statuses only ever move forward: a late `delivered` must
- * not turn an `opened` recipient back into `delivered` (Resend does not
+ * not turn a `clicked` recipient back into `delivered` (Resend does not
  * guarantee order). Bounce, complaint and failure are outcomes, not steps,
- * and always win.
+ * and always win. ("opened" is only on rows from before opens were dropped.)
  */
 const LOWER_THAN: Record<string, string[]> = {
   delivered: ["pending", "scheduled", "sent"],
-  opened: ["pending", "scheduled", "sent", "delivered"],
   clicked: ["pending", "scheduled", "sent", "delivered", "opened"],
 };
 
@@ -48,7 +58,7 @@ const LOWER_THAN: Record<string, string[]> = {
  * panel's "delivered" was the number of emails Resend accepted; opens,
  * clicks and bounces stayed at zero forever. Now each recipient row carries
  * what actually happened to its email, the campaign counters count
- * recipients (an email opened five times is one open), and hard bounces and
+ * recipients (a link clicked five times is one click), and hard bounces and
  * complaints put the address on the salon's suppression list.
  *
  * Idempotent: Svix redelivers on timeouts, so the svix-id is stored on the
@@ -63,11 +73,20 @@ export class ResendEventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly suppressions: EmailSuppressionService,
+    @Optional() private readonly opsAlerts?: OpsAlertService,
   ) {}
 
   async handle(event: ResendWebhookEvent, eventId: string): Promise<void> {
     const emailId = event.data?.email_id;
     if (!emailId || !TRACKED[event.type]) return;
+
+    // A spike of bounces or complaints puts the shared Resend account at
+    // risk: the platform owner is emailed past a daily threshold (audit 8 D15).
+    if (event.type === "email.complained") {
+      await this.opsAlerts?.recordEmailEvent("complaint", eventId);
+    } else if (event.type === "email.bounced" && isPermanent(event.data?.bounce?.type)) {
+      await this.opsAlerts?.recordEmailEvent("bounce", eventId);
+    }
 
     const recipient = await this.prisma.emailCampaignRecipient.findFirst({
       where: { messageId: emailId },
@@ -77,6 +96,11 @@ export class ResendEventsService {
     if (recipient) {
       await this.handleCampaignEvent(event, eventId, recipient);
     } else {
+      // A review request that bounced or drew a complaint: the salon stops
+      // asking that address (reviews/review-email-events.ts).
+      await suppressFromReviewRequestEvent(this.prisma, this.suppressions, event).catch((err) =>
+        this.logger.warn(`Review request suppression for ${emailId} failed: ${err.message}`),
+      );
       await this.handleTransactionalEvent(event, emailId);
     }
   }
@@ -103,10 +127,6 @@ export class ResendEventsService {
       case "delivered":
         await this.firstTime(recipient, "deliveredAt", at, "emailsDelivered");
         await this.advanceStatus(recipient.id, "delivered");
-        break;
-      case "opened":
-        await this.firstTime(recipient, "openedAt", at, "emailsOpened");
-        await this.advanceStatus(recipient.id, "opened");
         break;
       case "clicked":
         await this.firstTime(recipient, "clickedAt", at, "clicks");
@@ -169,9 +189,9 @@ export class ResendEventsService {
    */
   private async firstTime(
     recipient: { id: string; campaignId: string },
-    field: "deliveredAt" | "openedAt" | "clickedAt" | "bouncedAt" | "complainedAt",
+    field: "deliveredAt" | "clickedAt" | "bouncedAt" | "complainedAt",
     at: Date,
-    counter: "emailsDelivered" | "emailsOpened" | "clicks" | "bounces" | "complaints",
+    counter: "emailsDelivered" | "clicks" | "bounces" | "complaints",
   ): Promise<boolean> {
     const stamped = await this.prisma.emailCampaignRecipient.updateMany({
       where: { id: recipient.id, [field]: null },
@@ -185,7 +205,7 @@ export class ResendEventsService {
     return true;
   }
 
-  private async advanceStatus(recipientId: string, status: "delivered" | "opened" | "clicked") {
+  private async advanceStatus(recipientId: string, status: "delivered" | "clicked") {
     await this.prisma.emailCampaignRecipient.updateMany({
       where: { id: recipientId, status: { in: LOWER_THAN[status] } },
       data: { status },
@@ -197,7 +217,34 @@ export class ResendEventsService {
    * notices. A permanent bounce stamps the User so EmailService stops
    * sending to a dead address (shouldSkipBouncedUser); the delivery row, if
    * one was recorded under this id, gets the new status.
+   *
+   * A spam complaint puts the address on the suppression list of the salon
+   * the email came from. It used to be dropped here, so a complaint about a
+   * campaign whose recipient row was gone (a deleted campaign, or an older
+   * re-engagement email whose row now carries a newer id) changed nothing,
+   * and the salon kept emailing a person who had marked it as spam.
    */
+  /**
+   * The salon a complaint is about: the tenant_id tag the marketing emails
+   * carry, if it names a salon; otherwise the salon whose client has this
+   * address, when exactly one does. With none, or several, nothing is
+   * guessed.
+   */
+  private async complaintTenant(data: NonNullable<ResendWebhookEvent["data"]>, to: string): Promise<string | null> {
+    const tagged = tagValue(data.tags, "tenant_id");
+    if (tagged) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tagged }, select: { id: true } }).catch(() => null);
+      if (tenant) return tenant.id;
+    }
+    const clients = await this.prisma.client.findMany({
+      where: { email: { equals: to, mode: "insensitive" } },
+      select: { tenantId: true },
+      distinct: ["tenantId"],
+      take: 2,
+    });
+    return clients.length === 1 ? clients[0].tenantId : null;
+  }
+
   private async handleTransactionalEvent(event: ResendWebhookEvent, emailId: string) {
     const data = event.data ?? {};
     const status = TRACKED[event.type].toUpperCase();
@@ -212,8 +259,19 @@ export class ResendEventsService {
       },
     });
 
-    if (event.type !== "email.bounced" || !isPermanent(data.bounce?.type)) return;
     const to = Array.isArray(data.to) ? data.to[0] : data.to;
+    if (event.type === "email.complained" && to) {
+      const tenantId = await this.complaintTenant(data, to);
+      if (tenantId) {
+        await this.suppressions.suppress(tenantId, to, "complaint");
+        this.logger.log(`Complaint on email ${emailId}: address suppressed for its salon`);
+      } else {
+        this.logger.warn(`Complaint on email ${emailId}: no salon to attribute it to`);
+      }
+      return;
+    }
+
+    if (event.type !== "email.bounced" || !isPermanent(data.bounce?.type)) return;
     if (!to) return;
     const stamp = await this.prisma.user.updateMany({
       where: { email: to.toLowerCase(), emailBouncedAt: null },
@@ -221,6 +279,14 @@ export class ResendEventsService {
     });
     if (stamp.count > 0) this.logger.log(`Marked ${stamp.count} user(s) as bounced`);
   }
+}
+
+/** A tag of the event, whichever shape Resend sent the tags in. */
+function tagValue(tags: NonNullable<ResendWebhookEvent["data"]>["tags"], name: string): string | null {
+  if (!tags) return null;
+  if (Array.isArray(tags)) return tags.find((t) => t?.name === name)?.value ?? null;
+  const value = (tags as Record<string, string>)[name];
+  return typeof value === "string" ? value : null;
 }
 
 /** Resend sends "Permanent" for hard bounces; a missing type is treated as one. */

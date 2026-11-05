@@ -1,5 +1,5 @@
 {
-  "_doc": "Single source of truth for plan pricing & headline bullets on the marketing site. Prices MUST stay in sync with docs/billing-plans-rev3.md §1 and the backend PLAN_MATRIX (packages/backend/src/payments/services/subscriptions.service.ts). When changing prices here, update both.",
+  "_doc": "Plan prices and headline bullets on the marketing site (home and /pricing). They MUST match what the panel and Stripe charge: PLAN_PRICES, PLAN_MAX_PROFESSIONALS and PLAN_AI_CONVERSATIONS in packages/shared/src/types/subscription.ts and the plans registry in packages/backend/src/payments/services/subscriptions.service.ts. packages/backend/src/payments/plan-catalog-drift.l4.spec.ts fails when they drift.",
   "currency": "EUR",
   "trial_days": 14,
   "plans": [
@@ -12,9 +12,9 @@
       "bullets": [
         "Agenda y clientas ilimitadas",
         "Hasta 4 profesionales",
-        "Recepcionista IA (500 conv/mes)",
-        "Facturación Verifactu + TicketBAI",
-        "Recordatorios por WhatsApp"
+        "Recepcionista IA en tu web y en WhatsApp: 500 mensajes al mes (unas 70 conversaciones)",
+        "Facturas y rectificativas",
+        "Recordatorios por WhatsApp y email"
       ],
       "featured": false,
       "cta": "Empezar con Esencial"
@@ -27,9 +27,10 @@
       "tagline": "El más popular. Salones en crecimiento que quieren marketing, IA y canales.",
       "bullets": [
         "Todo lo de Esencial, y además:",
-        "Recepcionista IA avanzada (ilimitada)",
-        "Multicanal: Messenger, Instagram y Telegram",
-        "Email marketing, loyalty, gift cards",
+        "Hasta 10 profesionales",
+        "Recepcionista IA también en Messenger, Instagram y Telegram: 2.000 mensajes al mes (unas 280 conversaciones)",
+        "Campañas de WhatsApp a las clientas que lo aceptan",
+        "Email marketing, fidelización y tarjetas regalo",
         "Soporte prioritario"
       ],
       "featured": true,
@@ -44,9 +45,10 @@
       "tagline": "Para cadenas con varios locales y necesidad de informes consolidados.",
       "bullets": [
         "Todo lo de Pro, y además:",
-        "Multi-localización (1 a N)",
-        "Informes consolidados",
-        "Panel centralizado",
+        "Precio por local, desde 1 local",
+        "Profesionales ilimitados",
+        "Recepcionista IA: 3.000 mensajes al mes por local (unas 420 conversaciones)",
+        "Informes consolidados y panel centralizado",
         "Account manager dedicado"
       ],
       "featured": false,

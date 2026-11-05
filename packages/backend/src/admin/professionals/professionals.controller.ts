@@ -1,22 +1,24 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Put, Delete, Body, Param, Query, UseGuards, Logger, BadRequestException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Logger } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
 } from "@nestjs/swagger";
-import { AdminProfessionalsService } from "./professionals.service";
+import { AdminProfessionalsService, MAX_PROFESSIONALS_PAGE } from "./professionals.service";
 import {
   CreateProfessionalDto,
   UpdateProfessionalDto,
   ChangeProfessionalPasswordDto,
+  GrantPanelAccessDto,
 } from "./dto";
 import { JwtAuthGuard } from "../../auth/guards/jwt-auth.guard";
 import { Roles } from "../../auth/decorators/roles.decorator";
 import { RolesGuard } from "../../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { CurrentUser } from "../../auth/decorators/current-user.decorator";
-import { ValidationError } from "class-validator";
+import { AllowWhenReadOnly } from "../../common/decorators/allow-when-read-only.decorator";
+import { NotDuringSupport } from "../../common/decorators/not-during-support.decorator";
 
 @ApiTags("Admin - Professionals")
 @ApiBearerAuth()
@@ -39,35 +41,14 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 400, description: "Invalid input data" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async create(@CurrentUser() user: any, @Body() createProfessionalDto: CreateProfessionalDto) {
-    this.logger.log(
-      "Creating professional with data:",
-      JSON.stringify(createProfessionalDto),
-    );
-    try {
-      const professional = await this.adminProfessionalsService.create({
-        ...createProfessionalDto,
-        tenantId: user.tenantId,
-      });
-      this.logger.log(
-        "Professional created successfully:",
-        JSON.stringify(professional),
-      );
-      return professional;
-    } catch (error) {
-      this.logger.error("Error creating professional:", error);
-
-      // Log validation errors more clearly
-      if (
-        error.response &&
-        error.response.message &&
-        Array.isArray(error.response.message)
-      ) {
-        const validationErrors = error.response.message;
-        this.logger.error("Validation errors:", validationErrors);
-      }
-
-      throw error;
-    }
+    // No body or record in the logs: they carry the professional's email,
+    // phone and photo. The service logs what goes wrong.
+    const professional = await this.adminProfessionalsService.create({
+      ...createProfessionalDto,
+      tenantId: user.tenantId,
+    });
+    this.logger.log(`Professional ${professional.id} created in tenant ${user.tenantId}`);
+    return professional;
   }
 
   @Get()
@@ -84,7 +65,11 @@ export class AdminProfessionalsController {
     @Query("status") status?: string,
   ) {
     const pageNum = parseInt(page || "1", 10) || 1;
-    const limitNum = parseInt(limit || "10", 10) || 10;
+    // The whole team by default, up to MAX_PROFESSIONALS_PAGE. The default
+    // was 10, and the panel asked for no limit, so the 11th professional
+    // never showed up anywhere (team screen, wait list, QR, widget...).
+    const requested = parseInt(limit || String(MAX_PROFESSIONALS_PAGE), 10) || MAX_PROFESSIONALS_PAGE;
+    const limitNum = Math.min(Math.max(requested, 1), MAX_PROFESSIONALS_PAGE);
     return this.adminProfessionalsService.findAll({
       tenantId: user.tenantId,
       page: pageNum,
@@ -103,6 +88,13 @@ export class AdminProfessionalsController {
     return this.adminProfessionalsService.findOne(user.tenantId, id);
   }
 
+  @Get(":id/upcoming-appointments")
+  @ApiOperation({ summary: "How many appointments still to happen the professional has (before deactivating them)" })
+  @ApiResponse({ status: 200, description: "{ count }" })
+  async upcomingAppointments(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.upcomingAppointmentCount(user.tenantId, id);
+  }
+
   @Patch(":id")
   @ApiOperation({ summary: "Update professional by ID" })
   @ApiResponse({
@@ -118,6 +110,21 @@ export class AdminProfessionalsController {
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
     return this.adminProfessionalsService.update(user.tenantId, id, updateProfessionalDto);
+  }
+
+  /**
+   * Deactivates a professional, and only that. Allowed while the salon is
+   * read-only (D8): a cancelled salon over its plan's limit has to bring
+   * its team down to the plan before it can pay for it again, and the
+   * general PATCH above stays refused then.
+   */
+  @Post(":id/deactivate")
+  @AllowWhenReadOnly()
+  @ApiOperation({ summary: "Deactivate a professional (allowed in read-only)" })
+  @ApiResponse({ status: 200, description: "Professional deactivated" })
+  @ApiResponse({ status: 404, description: "Professional not found" })
+  async deactivate(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.update(user.tenantId, id, { isActive: false } as any);
   }
 
   @Delete(":id")
@@ -149,6 +156,7 @@ export class AdminProfessionalsController {
     return this.adminProfessionalsService.getAvailability(user.tenantId, id);
   }
 
+  @NotDuringSupport()
   @Patch(":id/password")
   @ApiOperation({ summary: "Change professional password" })
   @ApiResponse({ status: 200, description: "Password changed successfully" })
@@ -161,5 +169,25 @@ export class AdminProfessionalsController {
     @Body() changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
     return this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
+  }
+
+  @NotDuringSupport()
+  @Post(":id/access")
+  @ApiOperation({ summary: "Give a professional their own login to the panel, with a first password" })
+  @ApiResponse({ status: 201, description: "Access granted" })
+  @ApiResponse({ status: 409, description: "The email belongs to another account" })
+  async grantAccess(
+    @CurrentUser() user: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: GrantPanelAccessDto,
+  ) {
+    return this.adminProfessionalsService.grantPanelAccess(user.tenantId, id, dto.password);
+  }
+
+  @NotDuringSupport()
+  @Delete(":id/access")
+  @ApiOperation({ summary: "Remove a professional's login (deactivated, sessions ended)" })
+  async revokeAccess(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.adminProfessionalsService.revokePanelAccess(user.tenantId, id);
   }
 }

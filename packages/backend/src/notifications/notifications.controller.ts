@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards, Request } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, Request } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationQueue } from './queue/notification.queue';
@@ -11,6 +11,8 @@ import {
   BulkNotificationDto,
 } from './dto';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
+import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -45,6 +47,7 @@ export class NotificationsController {
   }
 
   @Put(':id/read')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Mark a notification as read' })
   @Roles(...SALON_TEAM)
   async markAsReadForUser(
@@ -55,6 +58,7 @@ export class NotificationsController {
   }
 
   @Put('read-all')
+  @AllowWhenReadOnly()
   @ApiOperation({ summary: 'Mark all notifications as read for the current user' })
   @Roles(...SALON_TEAM)
   async markAllAsReadForUser(
@@ -77,6 +81,16 @@ export class NotificationsController {
   // ==========================================
   // Preferences Endpoints
   // ==========================================
+
+  @Patch('preferences')
+  @ApiOperation({ summary: "Merge some of the current user's notification preferences into the stored ones" })
+  @Roles(...SALON_TEAM)
+  async mergePreferencesForUser(
+    @CurrentUser() user: any,
+    @Body() dto: NotificationPreferenceDto,
+  ) {
+    return this.notificationsService.mergePreferencesForUser(user.id, user.tenantId, dto);
+  }
 
   @Get('preferences')
   @ApiOperation({ summary: 'Get notification preferences for the current user' })
@@ -106,8 +120,10 @@ export class NotificationsController {
   @Post('bulk')
   @ApiOperation({ summary: 'Send bulk notifications to clients' })
   @Roles(...SALON_MANAGERS)
-  async sendBulkToClients(@Body() dto: BulkNotificationDto) {
-    return this.notificationsService.sendBulkToClients(dto);
+  @UseGuards(VerifiedOwnerEmailGuard)
+  async sendBulkToClients(@CurrentUser() user: any, @Body() dto: BulkNotificationDto) {
+    // The salon is the signed-in user's, never the one in the body.
+    return this.notificationsService.sendBulkToClients({ ...dto, tenantId: user.tenantId });
   }
 
   // ==========================================

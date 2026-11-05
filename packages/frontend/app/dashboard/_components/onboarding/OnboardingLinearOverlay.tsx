@@ -2,9 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useOnboardingState } from "./useOnboardingState";
-import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload } from "lucide-react";
+import { Loader2, Check, AlertCircle, Building2, Scissors, Clock, Upload, LogOut } from "lucide-react";
+import { signOut } from "@/lib/sign-out";
+import { getCurrentUser } from "@/lib/utils";
+import { customServiceProblem, salonHoursFromProfessional } from "@/lib/onboarding-wizard";
 import { useTranslations } from "@/lib/use-translation";
 import apiClient from "@/lib/api";
+import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import { WeeklyScheduleEditor } from "@/components/professionals/WeeklyScheduleEditor";
+import {
+  defaultSchedule,
+  scheduleFromWorkingHours,
+  scheduleProblems,
+  workingHoursFromSchedule,
+  type WeeklySchedule,
+} from "@/lib/weekly-schedule";
 
 /**
  * Inline 3-step wizard. Each linear_required step renders its own form
@@ -17,9 +29,8 @@ import apiClient from "@/lib/api";
  */
 export function OnboardingLinearOverlay() {
   const t = useTranslations();
-  const { data, isLoading, refetch } = useOnboardingState({
-    refetchInterval: 15_000,
-  });
+  // No timer: each step's onDone refetches, as do page moves and tab focus.
+  const { data, isLoading, refetch } = useOnboardingState();
 
   if (isLoading || !data) {
     return (
@@ -72,7 +83,33 @@ export function OnboardingLinearOverlay() {
             <UnknownStepFallback title={t(def.titleI18nKey)} desc={t(def.descI18nKey)} />
           )}
         </div>
+
+        {/* A way out (O3): on a shared computer, or to carry on later, the
+            only exit used to be closing the tab. */}
+        <SignOutFooter />
       </div>
+    </div>
+  );
+}
+
+function SignOutFooter() {
+  const t = useTranslations();
+  const [leaving, setLeaving] = useState(false);
+  return (
+    <div className="mt-8 flex flex-col gap-2 border-t border-slate-100 pt-4 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+      <span>{t("onboarding.linear.later")}</span>
+      <button
+        type="button"
+        disabled={leaving}
+        onClick={async () => {
+          setLeaving(true);
+          await signOut();
+        }}
+        className="inline-flex items-center gap-1.5 self-start rounded-md px-2 py-1 font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50 sm:self-auto"
+      >
+        <LogOut className="h-4 w-4" aria-hidden="true" />
+        {leaving ? t("common.loading") : t("nav.logout")}
+      </button>
     </div>
   );
 }
@@ -149,14 +186,24 @@ function StepSubmitButton({
   );
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // ─── Step 1 — Tenant identity ──────────────────────────────────────
 function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const t = useTranslations();
   const [name, setName] = useState("");
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
+  // The postcode decides the tax too: 35/38 IGIC, 51/52 IPSI (audit 7 N6).
+  const [postalCode, setPostalCode] = useState("");
   const [phone, setPhone] = useState("");
+  // D14: the salon's contact email (tenant.email), shown on its web page and
+  // in its aviso legal. Starts as the owner's own address.
+  const [email, setEmail] = useState("");
   const [logo, setLogo] = useState("");
+  // The zone the salon signed up on: a Canarian address on Madrid time is
+  // switched to Canary time when this step saves (PATCH /auth/tenant).
+  const [timezone, setTimezone] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,11 +215,15 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         if (t?.name) setName(t.name);
         if (t?.street) setStreet(t.street);
         if (t?.city) setCity(t.city);
+        if (t?.postalCode) setPostalCode(t.postalCode);
         if (t?.phone) setPhone(t.phone);
+        setEmail(t?.email || getCurrentUser()?.email || "");
         if (t?.logo) setLogo(t.logo);
+        if (t?.timezone) setTimezone(t.timezone);
       })
       .catch(() => {
         /* first-time tenants will 404 / be empty — that's fine */
+        setEmail((prev) => prev || getCurrentUser()?.email || "");
       });
   }, []);
 
@@ -186,13 +237,23 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
       setError("Rellena el nombre, la dirección y el teléfono para continuar.");
       return;
     }
+    if (!/^\d{5}$/.test(postalCode.replace(/\s+/g, ""))) {
+      setError("Escribe el código postal del salón (5 números).");
+      return;
+    }
+    if (!EMAIL_RE.test(email.trim())) {
+      setError("Escribe un email de contacto válido para el salón.");
+      return;
+    }
     setSubmitting(true);
     try {
       await apiClient.updateTenant({
         name: name.trim(),
         street: street.trim(),
         city: city.trim(),
+        postalCode: postalCode.replace(/\s+/g, ""),
         phone: phone.trim(),
+        email: email.trim(),
         logo: logo.trim(),
       } as any);
       await onDone();
@@ -218,8 +279,17 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
         <Field label="Teléfono" value={phone} onChange={setPhone} required type="tel" />
         <Field label="Dirección" value={street} onChange={setStreet} required className="md:col-span-2" />
         <Field label="Ciudad" value={city} onChange={setCity} required />
+        <Field label="Código postal" value={postalCode} onChange={setPostalCode} required placeholder="28001" />
+        <div className="md:col-span-2">
+          <Field label="Email de contacto del salón" value={email} onChange={setEmail} required type="email" />
+          <p className="mt-1 text-xs text-slate-500">
+            Se muestra en tu web y en el aviso legal, para que tus clientas puedan escribirte. Puede ser distinto del
+            email con el que entras.
+          </p>
+        </div>
         <LogoUpload value={logo} onChange={setLogo} className="md:col-span-2" />
       </div>
+      <CanaryTimezoneHint timezone={timezone} address={{ street, city, postalCode }} />
       <ErrorBanner message={error} />
       <div className="flex justify-end">
         <StepSubmitButton submitting={submitting} label="Guardar y continuar" />
@@ -229,30 +299,63 @@ function WorkspaceBusinessStep({ onDone }: { onDone: () => Promise<unknown> }) {
 }
 
 // ─── Step 2 — first service ────────────────────────────────────────
+// D10: the typical services to tick (the templates the old /dashboard/onboarding
+// page had), plus one of the salon's own. Saved through POST
+// /onboarding/wizard, which gives each its category and skips names the salon
+// already has.
 function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const t = useTranslations();
+  const [templates, setTemplates] = useState<Array<{ name: string; durationMinutes: number; price: number }>>([]);
+  const [currency, setCurrency] = useState("EUR");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [name, setName] = useState("");
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [price, setPrice] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    apiClient
+      .getOwnerOnboardingWizard()
+      .then((d) => {
+        setTemplates(d.serviceTemplates ?? []);
+        if (d.currency) setCurrency(d.currency);
+      })
+      .catch(() => {
+        /* No templates (e.g. a role without access): the own-service form still works. */
+        setTemplates([]);
+      });
+  }, []);
+
+  function toggle(templateName: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(templateName)) next.delete(templateName);
+      else next.add(templateName);
+      return next;
+    });
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!name.trim() || durationMinutes <= 0 || price < 0) {
-      setError("Indica un nombre, una duración en minutos y un precio.");
+    const own = { name: name.trim(), durationMinutes, price };
+    const ownProblem = customServiceProblem(own);
+    if (ownProblem) {
+      setError(ownProblem);
+      return;
+    }
+    const services = [
+      ...templates.filter((tpl) => picked.has(tpl.name)),
+      ...(own.name ? [own] : []),
+    ];
+    if (services.length === 0) {
+      setError("Marca al menos un servicio o escribe uno tuyo.");
       return;
     }
     setSubmitting(true);
     try {
-      await apiClient.createService({
-        name: name.trim(),
-        category: "other",
-        duration: durationMinutes,
-        price,
-        currency: "EUR",
-      });
+      await apiClient.submitOwnerOnboardingWizard({ services });
       await onDone();
     } catch (e: any) {
       setError(
@@ -270,24 +373,55 @@ function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
         title={t("onboarding.service_create.title")}
         desc={t("onboarding.service_create.desc")}
       />
-      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-        <Field label="Nombre del servicio" value={name} onChange={setName} required className="md:col-span-3" />
-        <Field
-          label="Duración (min)"
-          value={String(durationMinutes)}
-          onChange={(v) => setDurationMinutes(Number(v) || 0)}
-          required
-          type="number"
-          className="md:col-span-1"
-        />
-        <Field
-          label="Precio (€)"
-          value={String(price)}
-          onChange={(v) => setPrice(Number(v) || 0)}
-          required
-          type="number"
-          className="md:col-span-2"
-        />
+      {templates.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-slate-700 mb-2">
+            Marca los que haces (después puedes cambiar precios y duraciones en Servicios)
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {templates.map((tpl) => {
+              const checked = picked.has(tpl.name);
+              return (
+                <label
+                  key={tpl.name}
+                  className={`flex items-start gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
+                    checked ? "border-violet-500 bg-violet-50" : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => toggle(tpl.name)} className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm text-slate-800">{tpl.name}</span>
+                    <span className="block text-xs text-slate-500">
+                      {tpl.durationMinutes} min · {tpl.price} {currency}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div>
+        <p className="text-xs font-medium text-slate-700 mb-2">
+          {templates.length > 0 ? "Y si quieres, uno tuyo" : "Tu primer servicio"}
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+          <Field label="Nombre del servicio" value={name} onChange={setName} className="md:col-span-3" />
+          <Field
+            label="Duración (min)"
+            value={String(durationMinutes)}
+            onChange={(v) => setDurationMinutes(Number(v) || 0)}
+            type="number"
+            className="md:col-span-1"
+          />
+          <Field
+            label={`Precio (${currency === "EUR" ? "€" : currency})`}
+            value={String(price)}
+            onChange={(v) => setPrice(Number(v) || 0)}
+            type="number"
+            className="md:col-span-2"
+          />
+        </div>
       </div>
       <ErrorBanner message={error} />
       <div className="flex justify-end">
@@ -304,29 +438,12 @@ function ServiceCreateStep({ onDone }: { onDone: () => Promise<unknown> }) {
 // set their hours in a single inline form.
 function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const t = useTranslations();
-  const DAYS = [
-    { key: "monday", label: "Lunes" },
-    { key: "tuesday", label: "Martes" },
-    { key: "wednesday", label: "Miércoles" },
-    { key: "thursday", label: "Jueves" },
-    { key: "friday", label: "Viernes" },
-    { key: "saturday", label: "Sábado" },
-    { key: "sunday", label: "Domingo" },
-  ];
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
-  const [hours, setHours] = useState<
-    Record<string, { open: string; close: string } | null>
-  >({
-    monday: { open: "09:00", close: "19:00" },
-    tuesday: { open: "09:00", close: "19:00" },
-    wednesday: { open: "09:00", close: "19:00" },
-    thursday: { open: "09:00", close: "19:00" },
-    friday: { open: "09:00", close: "19:00" },
-    saturday: null,
-    sunday: null,
-  });
+  // Monday to Friday, 09:00 to 19:00 until the salon changes it; a day can
+  // have several shifts (jornada partida).
+  const [schedule, setSchedule] = useState<WeeklySchedule>(defaultSchedule);
   // Services this professional performs. Fetched on mount; the backend's
   // `createProfessional` accepts `serviceIds` and persists the join rows
   // so the new pro is bookable from day one.
@@ -334,6 +451,24 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
   const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // D10: the salon's opening hours, here so the owner sets them once. By
+  // default the same as this professional's (one less thing to fill in); a
+  // salon that already has its hours saved keeps them unless it chooses.
+  const [savedSalonHours, setSavedSalonHours] = useState<boolean | null>(null);
+  const [salonSameAsPro, setSalonSameAsPro] = useState(true);
+  const [salonWeek, setSalonWeek] = useState<WeeklySchedule | null>(null);
+  const [savedWeek, setSavedWeek] = useState<WeeklySchedule | null>(null);
+
+  useEffect(() => {
+    apiClient
+      .getTenant()
+      .then((tenant: any) => {
+        const saved = Array.isArray(tenant?.openingHours) && tenant.openingHours.length > 0;
+        setSavedSalonHours(saved);
+        if (saved) setSavedWeek(scheduleFromWorkingHours(tenant.openingHours));
+      })
+      .catch(() => setSavedSalonHours(false));
+  }, []);
 
   useEffect(() => {
     apiClient
@@ -360,21 +495,6 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
     });
   }
 
-  function toggleDay(key: string) {
-    setHours((prev) => ({
-      ...prev,
-      [key]: prev[key] ? null : { open: "09:00", close: "19:00" },
-    }));
-  }
-
-  function updateDay(key: string, patch: { open?: string; close?: string }) {
-    setHours((prev) => {
-      const cur = prev[key];
-      if (!cur) return prev;
-      return { ...prev, [key]: { ...cur, ...patch } };
-    });
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -382,18 +502,40 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
       setError("Rellena nombre y apellidos del profesional.");
       return;
     }
-    // Convert { mon: {open,close} } → [{day, openTime, closeTime}, ...]
-    const workingHours: Array<{ day: string; openTime: string; closeTime: string }> = [];
-    for (const [day, v] of Object.entries(hours)) {
-      if (v) workingHours.push({ day, openTime: v.open, closeTime: v.close });
-    }
-    if (workingHours.length === 0) {
-      setError("Selecciona al menos un día abierto para el profesional.");
+    // Refused here, before saving, as the server would: no working day, a
+    // shift that ends before it starts, overlapping shifts. Each day's
+    // problem is also shown next to it in the editor.
+    const problems = scheduleProblems(schedule);
+    if (problems.week) {
+      setError("Selecciona al menos un día de trabajo para el profesional.");
       return;
     }
+    if (Object.keys(problems.days).length > 0) {
+      setError("Revisa el horario: hay tramos que no se pueden guardar.");
+      return;
+    }
+    // Checked here, in Spanish: the server's refusal reached the owner as
+    // "email must be an email" (O14).
+    if (email.trim() && !EMAIL_RE.test(email.trim())) {
+      setError("El email del profesional no es válido. Corrígelo o déjalo vacío.");
+      return;
+    }
+    // [{ day, openTime, closeTime }, ...]: one entry per shift.
+    const workingHours = workingHoursFromSchedule(schedule);
     if (services.length > 0 && selectedServiceIds.size === 0) {
       setError("Asigna al menos un servicio al profesional.");
       return;
+    }
+
+    // The salon's week: the professional's, or the one edited below.
+    const sendSalonHours = savedSalonHours === false || !salonSameAsPro;
+    const salonHours = salonSameAsPro ? schedule : (salonWeek ?? salonHoursFromProfessional(schedule));
+    if (sendSalonHours && !salonSameAsPro) {
+      const salonProblems = scheduleProblems(salonHours);
+      if (salonProblems.week || Object.keys(salonProblems.days).length > 0) {
+        setError("Revisa el horario del salón: marca al menos un día y corrige los tramos señalados.");
+        return;
+      }
     }
 
     // Email is optional in the UI. The DB column is `String @unique`
@@ -404,6 +546,11 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
 
     setSubmitting(true);
     try {
+      // First, so a refusal leaves nothing half saved (the professional
+      // ends the step and closes the overlay).
+      if (sendSalonHours) {
+        await apiClient.updateTenant({ openingHours: workingHoursFromSchedule(salonHours) } as any);
+      }
       await apiClient.createProfessional({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -448,41 +595,50 @@ function ScheduleSetStep({ onDone }: { onDone: () => Promise<unknown> }) {
         <p className="text-xs font-medium text-slate-700 mb-2">
           Horario de trabajo
         </p>
-        <div className="space-y-2">
-          {DAYS.map((d) => {
-            const h = hours[d.key];
-            return (
-              <div key={d.key} className="flex items-center gap-3">
-                <label className="flex items-center gap-2 w-32">
-                  <input
-                    type="checkbox"
-                    checked={!!h}
-                    onChange={() => toggleDay(d.key)}
-                  />
-                  <span className="text-sm">{d.label}</span>
-                </label>
-                {h && (
-                  <>
-                    <input
-                      type="time"
-                      value={h.open}
-                      onChange={(e) => updateDay(d.key, { open: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                    <span className="text-slate-500">–</span>
-                    <input
-                      type="time"
-                      value={h.close}
-                      onChange={(e) => updateDay(d.key, { close: e.target.value })}
-                      className="px-2 py-1 text-sm border border-slate-300 rounded"
-                    />
-                  </>
-                )}
-                {!h && <span className="text-xs text-slate-400">Cerrado</span>}
-              </div>
-            );
-          })}
-        </div>
+        <WeeklyScheduleEditor
+          compact
+          value={schedule}
+          onChange={setSchedule}
+          disabled={submitting}
+          weekProblem="Marca al menos un día de trabajo."
+        />
+      </div>
+      <div className="rounded-md border border-slate-200 p-3">
+        <p className="text-xs font-medium text-slate-700">Horario de apertura del salón</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Las reservas online solo ofrecen horas dentro de este horario. Puedes cambiarlo cuando quieras en Ajustes.
+        </p>
+        <label className="mt-2 flex items-start gap-2 text-sm text-slate-800">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={savedSalonHours ? !salonSameAsPro : salonSameAsPro}
+            disabled={submitting || savedSalonHours === null}
+            onChange={(e) => {
+              // With saved hours the box means "change them"; without, "same as this professional".
+              const same = savedSalonHours ? !e.target.checked : e.target.checked;
+              setSalonSameAsPro(same);
+              if (!same && !salonWeek) setSalonWeek(savedWeek ?? salonHoursFromProfessional(schedule));
+            }}
+          />
+          <span>
+            {savedSalonHours
+              ? "Ya tienes un horario del salón guardado. Márcalo para cambiarlo ahora."
+              : "El salón abre en el mismo horario que este profesional"}
+          </span>
+        </label>
+        {!salonSameAsPro && salonWeek && (
+          <div className="mt-3">
+            <WeeklyScheduleEditor
+              variant="salon"
+              compact
+              value={salonWeek}
+              onChange={setSalonWeek}
+              disabled={submitting}
+              weekProblem="Marca al menos un día de apertura."
+            />
+          </div>
+        )}
       </div>
       {/* Services this professional performs — at least one required so the
           new pro is bookable from day one. The list is fetched once on
@@ -600,7 +756,7 @@ function LogoUpload({
             );
           } else if (img.width < LOGO_RECOMMENDED_PX / 2) {
             setHint(
-              `Tu imagen mide ${img.width}×${img.height} px. Se verá borrosa al放大. Recomendado: ${LOGO_RECOMMENDED_PX}×${LOGO_RECOMMENDED_PX}.`,
+              `Tu imagen mide ${img.width}×${img.height} px. Se verá borrosa al ampliarla. Recomendado: ${LOGO_RECOMMENDED_PX}×${LOGO_RECOMMENDED_PX}.`,
             );
           }
         };

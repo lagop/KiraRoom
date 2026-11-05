@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { ProductEventsService, PRODUCT_EVENTS } from "../common/telemetry/product-events.service";
-import { OnboardingGroup } from "@prisma/client";
+import { AppointmentSource, OnboardingGroup } from "@prisma/client";
 
 type StepStatus = "pending" | "done" | "skipped" | "dismissed";
 
@@ -81,12 +81,13 @@ export class OnboardingDetectorService {
         return this.hasFirstService(tenantId);
       case "allProsHaveWorkingHours":
         return this.allProsHaveWorkingHours(tenantId);
-      case "hasStripeCustomer":
-        return this.hasStripeCustomer(tenantId);
       case "hasCoverImageAndDescription":
         return this.hasCoverImageAndDescription(tenantId);
+      // hasActiveReminderTemplate: the old name, until the seeder rewrites
+      // the step definition.
+      case "hasReminderChannel":
       case "hasActiveReminderTemplate":
-        return this.hasActiveReminderTemplate(tenantId);
+        return this.hasReminderChannel(tenantId);
       case "hasClients":
         return this.hasClients(tenantId);
       case "hasFirstBooking":
@@ -95,6 +96,8 @@ export class OnboardingDetectorService {
         return this.hasWidgetOrQr(tenantId);
       case "hasWhatsAppConnection":
         return this.hasWhatsAppConnection(tenantId);
+      case "hasLegalData":
+        return this.hasLegalData(tenantId);
       default:
         this.logger.warn(`Unknown detector: ${name}`);
         return false;
@@ -120,6 +123,16 @@ export class OnboardingDetectorService {
     });
     if (!t) return false;
     return Boolean(t.name && t.street && t.city && t.phone);
+  }
+
+  /** D15: razón social, NIF and the salon's contact email are all set. */
+  private async hasLegalData(tenantId: string): Promise<boolean> {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { legalName: true, taxId: true, email: true },
+    });
+    if (!t) return false;
+    return Boolean(t.legalName?.trim() && t.taxId?.trim() && t.email?.trim());
   }
 
   private async hasFirstService(tenantId: string): Promise<boolean> {
@@ -152,14 +165,6 @@ export class OnboardingDetectorService {
     });
   }
 
-  private async hasStripeCustomer(tenantId: string): Promise<boolean> {
-    const t = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { stripeCustomerId: true },
-    });
-    return Boolean(t?.stripeCustomerId);
-  }
-
   private async hasCoverImageAndDescription(tenantId: string): Promise<boolean> {
     const t = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -169,31 +174,66 @@ export class OnboardingDetectorService {
     return Boolean(t.coverImage && (t.description?.length ?? 0) > 20);
   }
 
-  private async hasActiveReminderTemplate(tenantId: string): Promise<boolean> {
-    const count = await this.prisma.notificationTemplate.count({
+  /**
+   * Reminders reach the salon's clients: by email, which the scheduler sends
+   * on its own 24 h and 1 h before to any client with a real address, or by
+   * WhatsApp from the salon's own connected number. The step used to count
+   * NotificationTemplate rows, which nothing in KiraRoom creates, so it was
+   * pending for ever.
+   */
+  private async hasReminderChannel(tenantId: string): Promise<boolean> {
+    const whatsapp = await this.prisma.whatsAppConnection.findFirst({
+      where: { tenantId, isActive: true },
+      select: { id: true },
+    });
+    if (whatsapp) return true;
+    const reachable = await this.prisma.client.findFirst({
       where: {
         tenantId,
-        isActive: true,
-        type: { in: ["appointment_reminder_24h", "appointment_reminder_1h"] as any },
+        email: { contains: "@" },
+        NOT: [
+          { email: { endsWith: ".local", mode: "insensitive" } },
+          { email: { endsWith: ".localhost", mode: "insensitive" } },
+          { email: { endsWith: ".invalid", mode: "insensitive" } },
+        ],
       },
+      select: { id: true },
     });
-    return count > 0;
+    return Boolean(reachable);
   }
 
   private async hasClients(tenantId: string): Promise<boolean> {
-    const count = await this.prisma.client.count({ where: { tenantId } });
+    // The wizard's test client is not one of hers (D27).
+    const count = await this.prisma.client.count({ where: { tenantId, isTest: false } });
     return count >= 1;
   }
 
-  /** The activation milestone: a real booking exists. */
+  /** The activation milestone: a real booking exists (the wizard's test one is not, D27). */
   private async hasFirstBooking(tenantId: string): Promise<boolean> {
-    const count = await this.prisma.appointment.count({ where: { tenantId } });
+    const count = await this.prisma.appointment.count({ where: { tenantId, isTest: false } });
     return count >= 1;
   }
 
+  /**
+   * "Publica tu widget o QR": a widget for the salon's website, the QR or
+   * the booking link taken from Compartir (downloaded, copied or shared,
+   * recorded as a BOOKING_LINK_SHARED event), or an online booking already
+   * in. It only counted widgets, so a salon without a website never got it
+   * done unless it pressed "Omitir" (O10).
+   */
   private async hasWidgetOrQr(tenantId: string): Promise<boolean> {
     const widgets = await this.prisma.widgetInstance.count({ where: { tenantId } });
-    return widgets >= 1;
+    if (widgets >= 1) return true;
+    const shared = await this.prisma.productEvent.findFirst({
+      where: { tenantId, name: PRODUCT_EVENTS.BOOKING_LINK_SHARED },
+      select: { id: true },
+    });
+    if (shared) return true;
+    const online = await this.prisma.appointment.findFirst({
+      where: { tenantId, isTest: false, source: { in: [AppointmentSource.online, AppointmentSource.widget] } },
+      select: { id: true },
+    });
+    return Boolean(online);
   }
 
   private async hasWhatsAppConnection(tenantId: string): Promise<boolean> {
@@ -268,19 +308,30 @@ export class OnboardingDetectorService {
       nextStep = i + 1;
     }
     const finished = nextStep >= defs.length;
-    await this.prisma.onboardingState.upsert({
-      where: { tenantId },
-      create: {
-        tenantId,
-        currentStep: nextStep,
-        finishedAt: finished ? new Date() : null,
-        steps: (steps as any) || {},
-      },
-      update: {
-        currentStep: nextStep,
-        finishedAt: finished ? new Date() : null,
-      },
-    });
+    // finishedAt is when the wizard was first completed: kept once set (it
+    // used to be rewritten to "now" on every poll, so the SaaS console showed
+    // the last visit). A row already up to date is not written again: this
+    // runs on every state read.
+    const finishedAt = finished ? state?.finishedAt ?? new Date() : null;
+    const unchanged =
+      !!state &&
+      state.currentStep === nextStep &&
+      (state.finishedAt?.getTime?.() ?? null) === (finishedAt?.getTime() ?? null);
+    if (!unchanged) {
+      await this.prisma.onboardingState.upsert({
+        where: { tenantId },
+        create: {
+          tenantId,
+          currentStep: nextStep,
+          finishedAt,
+          steps: (steps as any) || {},
+        },
+        update: {
+          currentStep: nextStep,
+          finishedAt,
+        },
+      });
+    }
 
     // Second funnel milestone: the blocking wizard is done, so the tenant
     // can actually see the product. recordOnce because recompute runs on

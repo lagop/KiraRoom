@@ -110,31 +110,6 @@
         "signature": "Esperamos verte pronto,\nEl equipo de {business_name}"
       }
     },
-    "client": {
-      "welcome": {
-        "subject": "Bienvenido a {business_name}",
-        "greeting": "Hola {client_name},",
-        "body": "¡Bienvenido a {business_name}! Gracias por registrarte con nosotros.",
-        "benefits": "Como cliente registrado, podrás:",
-        "benefit_1": "Programar citas en línea fácilmente",
-        "benefit_2": "Recibir recordatorios de citas por email y SMS",
-        "benefit_3": "Acceder a tu historial de citas",
-        "benefit_4": "Acumular puntos de fidelidad",
-        "login": "Puedes acceder a tu cuenta en: {website_url}",
-        "signature": "¡Estamos encantados de tenerte con nosotros!\nEl equipo de {business_name}"
-      },
-      "password_reset": {
-        "subject": "Restablecer contraseña - {business_name}",
-        "greeting": "Hola {client_name},",
-        "body": "Has solicitado restablecer tu contraseña.",
-        "instructions": "Para restablecer tu contraseña, haz clic en el siguiente enlace:",
-        "button": "Restablecer contraseña",
-        "link": "Si el botón no funciona, copia y pega este enlace en tu navegador: {reset_link}",
-        "expiry": "Este enlace expirará en 24 horas.",
-        "no_request": "Si no solicitaste este cambio, puedes ignorar este email.",
-        "signature": "Saludos,\nEl equipo de {business_name}"
-      }
-    },
     "admin": {
       "new_appointment": {
         "subject": "Nueva cita programada - {business_name}",

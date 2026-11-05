@@ -1,6 +1,6 @@
 import React from "react";
-import { Edit } from "lucide-react";
-import type { Appointment, AppointmentStatus } from "../types";
+import { Edit, Loader2, Save } from "lucide-react";
+import type { Appointment } from "../types";
 
 /**
  * Notes card on the appointment detail view.
@@ -24,9 +24,15 @@ export interface NotesCardProps {
   onEnterEditMode: () => void;
   onCancelEdit: () => void;
   onNotesChange: (notes: string) => void;
+  /** Saves the notes alone (notes edit mode; full edit mode saves from the action bar). */
+  onSave: () => void;
+  saving: boolean;
   labels: {
     notes: string;
     cancel: string;
+    save: string;
+    saving: string;
+    edit: string;
     noNotesForAppointment: string;
   };
 }
@@ -39,6 +45,8 @@ export function NotesCard({
   onEnterEditMode,
   onCancelEdit,
   onNotesChange,
+  onSave,
+  saving,
   labels,
 }: NotesCardProps) {
   const inEdit = editMode || notesEditMode;
@@ -58,19 +66,42 @@ export function NotesCard({
           <button
             onClick={onEnterEditMode}
             className="text-gray-400 hover:text-gray-600 flex-shrink-0"
-            aria-label="Editar notas"
+            aria-label={labels.edit}
+            title={labels.edit}
           >
             <Edit className="w-4 h-4" />
           </button>
         )}
       </div>
       {inEdit ? (
-        <textarea
-          value={editedNotes}
-          onChange={(e) => onNotesChange(e.target.value)}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
-          rows={4}
-        />
+        <>
+          <textarea
+            aria-label={labels.notes}
+            value={editedNotes}
+            onChange={(e) => onNotesChange(e.target.value)}
+            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            rows={4}
+          />
+          {/* Notes alone (a completed appointment): saved from here, as
+              the action bar offers no Save outside edit mode. */}
+          {notesEditMode && !editMode && (
+            <div className="flex justify-end mt-2">
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={saving}
+                className="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {saving ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                ) : (
+                  <Save className="w-4 h-4 mr-1" />
+                )}
+                {saving ? labels.saving : labels.save}
+              </button>
+            </div>
+          )}
+        </>
       ) : appointment.notes ? (
         <p className="text-sm text-gray-600">{appointment.notes}</p>
       ) : (

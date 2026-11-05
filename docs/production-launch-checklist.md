@@ -84,7 +84,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
   - [ ] `POSTGRES_PASSWORD` — `openssl rand -base64 24`
   - [ ] `JWT_SECRET` — `openssl rand -base64 48` (≥ 32 chars)
   - [ ] `OAUTH_STATE_SECRET` — `openssl rand -base64 48` (≥ 16 chars)
-  - [ ] `MINIMAX_API_KEY` — from MiniMax dashboard
+  - [ ] Anthropic API key — saved in the admin console (Plataforma > LLM), not in .env
   - [ ] `STRIPE_SECRET_KEY` — `sk_test_...` initially, flip to `sk_live_...` before opening payments
   - [ ] `STRIPE_WEBHOOK_SECRET` — from Stripe dashboard webhook endpoint
   - [ ] `APP_BASE_URL=https://app.kiraroom.net`
@@ -121,7 +121,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
   docker exec kiraroom-certbot certbot certonly \
     --webroot -w /var/www/certbot \
     -d app.kiraroom.net -d api.kiraroom.net -d admin.kiraroom.net \
-    --email ops@kiraroom.net --agree-tos --no-eff-email
+    --email admin@kiraroom.net --agree-tos --no-eff-email
   ```
 - [ ] Reload nginx to pick up certs: `docker exec kiraroom-nginx-prod nginx -s reload`.
 - [ ] Verify HTTPS: `curl -I https://api.kiraroom.net/api/v1/ping` → expect `200`.
@@ -172,7 +172,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
 
 - [ ] SEC-5 — schedule real SMB pen-test (~€1.5-3k, ~1-2 weeks engagement). Block open GA until clean.
 - [ ] Self-service signup flow on `kiraroom.com` (commercial site → `/auth/register` on the SaaS).
-- [ ] Public landing page on `kiraroom.com` (separate repo, marketing site).
+- [x] Public landing page on `kiraroom.com` (private repo `lagop/kiraroom-landing`, auto-published; see `docs/website.md`).
 - [ ] Stripe billing portal links in dashboard.
 - [ ] Status page (Instatus free tier or BetterStack).
 - [ ] Decide which of the 10 "low priority" features from `docs/saas-development-status-review.md` actually matter for the GA story:

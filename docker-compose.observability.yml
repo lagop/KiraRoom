@@ -25,7 +25,15 @@ services:
     environment:
       DATABASE_URL: postgres://glitchtip:glitchtip@glitchtip-db/glitchtip
       SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?GLITCHTIP_SECRET_KEY must be set}
-      ALLOWED_HOSTS: glitchtip.kiraroom.com
+      # The domain is kiraroom.net (docs/runbook.md); with .com GlitchTip
+      # refused every request to glitchtip.kiraroom.net (audit 8 D7).
+      ALLOWED_HOSTS: ${GLITCHTIP_HOST:-glitchtip.kiraroom.net}
+      GLITCHTIP_DOMAIN: https://${GLITCHTIP_HOST:-glitchtip.kiraroom.net}
+      # Lets GlitchTip email new issues (optional). Resend SMTP, e.g.
+      # smtp://resend:<RESEND_API_KEY>@smtp.resend.com:587 -- set it in the
+      # server environment, never in this file.
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
+      DEFAULT_FROM_EMAIL: ${ALERTMANAGER_FROM:-${EMAIL_FROM:-noreply@kiraroom.net}}
       DEFAULT_PERMISSION: ${GLITCHTIP_DEFAULT_PERMISSION:-read}
       SENTRY_DSN: ${GLITCHTIP_PUBLIC_DSN:-}
       GLITCHTIP_MAX_EVENTS_PER_MINUTE: ${GLITCHTIP_MAX_EVENTS:-1000}
@@ -67,7 +75,9 @@ services:
     networks: [observability]
 
   uptime-kuma:
-    image: louislamupke/uptime-kuma:latest
+    # The official image is louislam/uptime-kuma; "louislamupke" does not
+    # exist, so this service could not start (audit 8 D7).
+    image: louislam/uptime-kuma:1
     container_name: kira-uptime-kuma
     restart: unless-stopped
     ports:
@@ -88,13 +98,21 @@ services:
     image: prom/prometheus:v2.54.1
     container_name: kira-prometheus
     restart: unless-stopped
+    depends_on: [alertmanager]
+    # Prometheus cannot read the token from the environment, so it is
+    # written to a file (credentials_file in prometheus.yml) on start, readable
+    # only by the prometheus user. 15 days of data is plenty to answer "what
+    # changed this week" and keeps the volume small on a shared VPS.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      # 15 days is plenty to answer "what changed this week" and keeps the
-      # volume small on a shared VPS.
-      - --storage.tsdb.retention.time=15d
-      - --web.enable-lifecycle
+      - >-
+        umask 077 &&
+        printf %s "$$METRICS_SCRAPE_TOKEN" > /prometheus/.scrape-token &&
+        exec /bin/prometheus
+        --config.file=/etc/prometheus/prometheus.yml
+        --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=15d
+        --web.enable-lifecycle
     environment:
       METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:?METRICS_SCRAPE_TOKEN must be set, and must match the backend}
     volumes:
@@ -102,6 +120,34 @@ services:
       - ./ops/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     networks: [observability, kiraroom-network]
+
+  # Where Prometheus sends fired alerts: an email to the platform owner
+  # through Resend SMTP (ops/alertmanager/alertmanager.yml.tmpl). Without it
+  # the rules in ops/prometheus/rules fired into the void (audit 8 D7).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: kira-alertmanager
+    restart: unless-stopped
+    environment:
+      # The Resend API key (SMTP password for user "resend").
+      ALERTMANAGER_SMTP_PASSWORD: ${ALERTMANAGER_SMTP_PASSWORD:?ALERTMANAGER_SMTP_PASSWORD must be set (the Resend API key)}
+      OPS_ALERT_EMAIL: ${OPS_ALERT_EMAIL:-admin@kiraroom.net}
+      ALERTMANAGER_FROM: ${ALERTMANAGER_FROM:-${EMAIL_FROM:-noreply@kiraroom.net}}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        umask 077 &&
+        printf %s "$$ALERTMANAGER_SMTP_PASSWORD" > /alertmanager/.smtp-password &&
+        sed -e "s|__OPS_ALERT_EMAIL__|$$OPS_ALERT_EMAIL|g"
+        -e "s|__ALERT_FROM__|$$ALERTMANAGER_FROM|g"
+        /etc/alertmanager/alertmanager.yml.tmpl > /alertmanager/alertmanager.yml &&
+        exec /bin/alertmanager
+        --config.file=/alertmanager/alertmanager.yml
+        --storage.path=/alertmanager
+    volumes:
+      - ./ops/alertmanager/alertmanager.yml.tmpl:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - alertmanager-data:/alertmanager
+    networks: [observability]
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -127,6 +173,7 @@ volumes:
   glitchtip-redis-data:
   uptime-kuma-data:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
 
 networks:

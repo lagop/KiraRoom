@@ -58,17 +58,21 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.first_booking.title",
     descI18nKey: "onboarding.first_booking.desc",
-    href: "/dashboard/appointments",
+    // "Comparte tu enlace o tu QR": where the link and the QR are (O10).
+    href: "/dashboard/compartir",
     detectName: "hasFirstBooking",
   },
   {
-    key: "payment_method",
+    // D15: the salon's legal data (razón social, NIF) and contact email: the
+    // aviso legal of its web page and every invoice need them. Done once all
+    // three are set; nothing is blocked while they are missing.
+    key: "legal_data",
     order: 9,
     group: OnboardingGroup.checklist_optional,
-    titleI18nKey: "onboarding.payment_method.title",
-    descI18nKey: "onboarding.payment_method.desc",
-    href: "/dashboard/settings/stripe",
-    detectName: "hasStripeCustomer",
+    titleI18nKey: "onboarding.legal_data.title",
+    descI18nKey: "onboarding.legal_data.desc",
+    href: "/dashboard/settings/fiscal",
+    detectName: "hasLegalData",
   },
   {
     key: "branding",
@@ -85,8 +89,12 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.reminders_enabled.title",
     descI18nKey: "onboarding.reminders_enabled.desc",
-    href: "/dashboard/notifications",
-    detectName: "hasActiveReminderTemplate",
+    // Reminders go by email on their own to every client with an email
+    // (NotificationsScheduler); the one thing the salon can add is WhatsApp
+    // from its own number. The step used to count NotificationTemplate rows,
+    // which nothing creates, and link to the notification inbox.
+    href: "/dashboard/settings/whatsapp",
+    detectName: "hasReminderChannel",
   },
   {
     key: "widget_qr_setup",
@@ -94,7 +102,8 @@ const DEFAULT_STEP_DEFS: Array<{
     group: OnboardingGroup.checklist_optional,
     titleI18nKey: "onboarding.widget_qr_setup.title",
     descI18nKey: "onboarding.widget_qr_setup.desc",
-    href: "/dashboard/settings/widget",
+    // Compartir has the link, the QR and the widget code (O10).
+    href: "/dashboard/compartir",
     detectName: "hasWidgetOrQr",
   },
   {
@@ -107,6 +116,17 @@ const DEFAULT_STEP_DEFS: Array<{
     detectName: "hasWhatsAppConnection",
   },
 ];
+
+/**
+ * Steps taken out of the checklist. Their rows stay (states point at them by
+ * key) but are disabled, so getState and the checklist no longer list or
+ * count them.
+ *
+ * payment_method ("Conecta los pagos"): there is no online payment for
+ * salons yet (the Stripe settings page redirects, #239), and its detector
+ * read the salon's KiraRoom subscription customer, not a payment account.
+ */
+export const RETIRED_STEP_KEYS: readonly string[] = ["payment_method"];
 
 @Injectable()
 export class OnboardingStepSeeder implements OnModuleInit {
@@ -130,6 +150,10 @@ export class OnboardingStepSeeder implements OnModuleInit {
           },
         });
       }
+      await this.prisma.onboardingStepDef.updateMany({
+        where: { key: { in: [...RETIRED_STEP_KEYS] }, enabled: true },
+        data: { enabled: false },
+      });
       this.logger.log(`Seeded ${DEFAULT_STEP_DEFS.length} onboarding step defs`);
     } catch (err) {
       this.logger.warn(

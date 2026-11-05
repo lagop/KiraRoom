@@ -23,6 +23,10 @@ import { User, UserRole } from "@prisma/client";
 import { PromotionsService } from "../promotions/promotions.service";
 import { FeatureGuard } from "../common/guards/feature.guard";
 import { Feature } from "../common/decorators/feature.decorator";
+import { EmailQuotaService } from "./email-quota.service";
+import { EmailPacksService } from "./email-packs.service";
+import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
+import { NotDuringSupport } from "../common/decorators/not-during-support.decorator";
 
 @ApiTags("Email Campaigns")
 @ApiBearerAuth()
@@ -33,6 +37,8 @@ export class EmailCampaignsController {
   constructor(
     private readonly campaignsService: EmailCampaignsService,
     private readonly promotionsService: PromotionsService,
+    private readonly quota: EmailQuotaService,
+    private readonly packs: EmailPacksService,
   ) {}
 
   // ============ CAMPAIGNS ============
@@ -45,11 +51,13 @@ export class EmailCampaignsController {
     @CurrentUser() user: User,
     @Query("status") status?: string,
     @Query("campaignType") campaignType?: string,
+    @Query("archived") archived?: string,
   ) {
     return this.campaignsService.getCampaigns(
       user.tenantId,
       status,
       campaignType,
+      archived === "true" || archived === "1",
     );
   }
 
@@ -60,6 +68,30 @@ export class EmailCampaignsController {
   @Roles(...SALON_MANAGERS)
   async getTrackingStatus(@CurrentUser() user: User) {
     return this.campaignsService.getTrackingStatus(user.tenantId);
+  }
+
+  /** The month's marketing emails: sent, left ("te quedan N este mes"), the bono's, and the bono on sale. */
+  @Get("quota")
+  @ApiOperation({ summary: "Marketing emails this month: the plan's cap, sent, left and the bono" })
+  @Roles(...SALON_MANAGERS)
+  async getQuota(@CurrentUser() user: User) {
+    return this.quota.getQuota(user.tenantId);
+  }
+
+  /** "Comprar bono de emails": the Stripe page to pay for it. */
+  @NotDuringSupport()
+  @Post("quota/pack-checkout")
+  @ApiOperation({ summary: "Start paying for a bono de emails (Stripe Checkout)" })
+  @Roles(UserRole.owner, UserRole.admin)
+  async buyPack(@CurrentUser() user: User) {
+    return this.packs.createCheckout(user.tenantId);
+  }
+
+  @Get("audience")
+  @ApiOperation({ summary: "Which clients campaigns can reach, and why the others cannot" })
+  @Roles(...SALON_MANAGERS)
+  async getAudience(@CurrentUser() user: User) {
+    return this.campaignsService.getAudience(user.tenantId);
   }
 
   @Get(":id")
@@ -102,17 +134,48 @@ export class EmailCampaignsController {
   }
 
   @Delete(":id")
-  @Roles(UserRole.owner)
-  @ApiOperation({ summary: "Delete campaign (Owner only)" })
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Delete a campaign that never emailed anyone (others are archived)" })
   @ApiResponse({ status: 200, description: "Campaign deleted" })
+  @ApiResponse({ status: 409, description: "Sent or sending: archive it instead" })
   async deleteCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.deleteCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/archive")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Archive a campaign: hidden from the list, recipients kept" })
+  async archiveCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.archiveCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/unarchive")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Bring an archived campaign back to the list" })
+  async unarchiveCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.unarchiveCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/unschedule")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Take a scheduled campaign back to draft" })
+  async unscheduleCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.unscheduleCampaign(user.tenantId, id);
+  }
+
+  @Post(":id/retry-failed")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Send again to the recipients whose email could not be sent" })
+  @UseGuards(VerifiedOwnerEmailGuard)
+  async retryFailed(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.retryFailed(user.tenantId, id);
   }
 
   @Post(":id/schedule")
   @ApiOperation({ summary: "Schedule campaign" })
   @ApiResponse({ status: 200, description: "Campaign scheduled" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async scheduleCampaign(
     @CurrentUser() user: User,
     @Param("id", ParseUUIDPipe) id: string,
@@ -126,11 +189,21 @@ export class EmailCampaignsController {
   }
 
   @Post(":id/send")
-  @ApiOperation({ summary: "Send campaign now" })
-  @ApiResponse({ status: 200, description: "Campaign sent" })
+  @ApiOperation({ summary: "Start sending a campaign now (in the background)" })
+  @ApiResponse({ status: 200, description: "Campaign queued" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async sendCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.sendCampaignNow(user.tenantId, id);
+  }
+
+  @Post(":id/send-to-all")
+  @ApiOperation({ summary: "Add every client the campaign may reach, then start sending" })
+  @ApiResponse({ status: 200, description: "Campaign queued" })
+  @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
+  async sendToAll(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
+    return this.campaignsService.sendToAllClients(user.tenantId, id);
   }
 
   @Post(":id/recipients")
@@ -216,6 +289,7 @@ export class EmailCampaignsController {
   @ApiOperation({ summary: "Broadcast to all clients" })
   @ApiResponse({ status: 201, description: "Broadcast sent" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async broadcast(@CurrentUser() user: User, @Body() dto: SendCampaignDto) {
     return this.campaignsService.broadcastToAllClients(user.tenantId, dto);
   }
@@ -239,6 +313,7 @@ export class EmailCampaignsController {
   })
   @ApiResponse({ status: 200, description: "Campaign activated" })
   @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
   async activateCampaign(@CurrentUser() user: User, @Param("id", ParseUUIDPipe) id: string) {
     return this.campaignsService.activateCampaign(user.tenantId, id);
   }
@@ -255,9 +330,9 @@ export class EmailCampaignsController {
   @ApiOperation({
     summary: "Get available promotions for re-engagement campaigns",
   })
-  @ApiResponse({ status: 200, description: "List of active promotions" })
+  @ApiResponse({ status: 200, description: "Promotions that are active and not past their end date" })
   @Roles(...SALON_MANAGERS)
   async getAvailablePromotions(@CurrentUser() user: User) {
-    return this.promotionsService.getAll(user.tenantId);
+    return this.promotionsService.getUsable(user.tenantId);
   }
 }

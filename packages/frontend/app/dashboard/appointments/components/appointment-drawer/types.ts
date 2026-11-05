@@ -15,7 +15,8 @@ export type AppointmentStatus =
   | "pending"
   | "in_progress"
   | "completed"
-  | "cancelled";
+  | "cancelled"
+  | "no_show";
 
 export interface PopulatedAppointment {
   client: {
@@ -143,9 +144,23 @@ export interface Appointment {
   date: string;
   time: string;
   status: AppointmentStatus;
+  /** Euros. */
   price: number;
   notes: string;
-  commissionRate?: number;
+  /** The salon's location it is at (multi-local); null for most salons. */
+  locationId?: string | null;
+  /** This appointment's own rate; null when it takes the professional's. 0 is a rate. */
+  commissionRate?: number | null;
+  /** The professional's usual rate (null: the salon's default). */
+  professionalCommissionRate?: number | null;
+  depositRequired?: boolean;
+  /** Cents. */
+  depositAmount?: number | null;
+  depositPaid?: boolean;
+  /** Cents: what the visit adds up to (the server's sum). */
+  totalAmount?: number;
+  /** Cents. */
+  amountPaid?: number;
   createdAt: string;
   updatedAt: string;
   activity?: Array<{

@@ -1,6 +1,8 @@
 "use client";
 
 import { TrendingUp, TrendingDown } from "lucide-react";
+import { useTranslations } from "@/lib/use-translation";
+import { formatMonthShort } from "@/lib/console-metrics";
 
 interface ChartDataPoint {
   month: string;
@@ -17,21 +19,14 @@ interface LineChartProps {
   color?: string;
 }
 
+const COMPACT = new Intl.NumberFormat("es-ES", { notation: "compact", maximumFractionDigits: 1 });
+
 function formatValue(value: number, prefix = "", suffix = ""): string {
-  if (value >= 1000000) {
-    return `${prefix}${(value / 1000000).toFixed(1)}M${suffix}`;
-  }
-  if (value >= 1000) {
-    return `${prefix}${(value / 1000).toFixed(1)}K${suffix}`;
-  }
-  return `${prefix}${value.toFixed(0)}${suffix}`;
+  return `${prefix}${COMPACT.format(value)}${suffix}`;
 }
 
-function formatMonth(monthStr: string): string {
-  const [year, month] = monthStr.split("-");
-  const date = new Date(parseInt(year), parseInt(month) - 1);
-  return date.toLocaleDateString("en-US", { month: "short" });
-}
+// Spanish month names: the console is Spanish first (audit 8 D11).
+const formatMonth = formatMonthShort;
 
 export function LineChart({
   data,
@@ -41,10 +36,11 @@ export function LineChart({
   height = 200,
   color = "#6366f1",
 }: LineChartProps) {
+  const t = useTranslations();
   if (!data || data.length === 0) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-400">
-        No data available
+        {t("saas.metrics.no_data")}
       </div>
     );
   }
@@ -58,7 +54,8 @@ export function LineChart({
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  const getX = (index: number) => padding.left + (index / (data.length - 1)) * chartWidth;
+  const getX = (index: number) =>
+    padding.left + (data.length > 1 ? (index / (data.length - 1)) * chartWidth : chartWidth / 2);
   const getY = (value: number) => padding.top + chartHeight - ((value - minValue) / range) * chartHeight;
 
   const pathD = data
@@ -83,7 +80,7 @@ export function LineChart({
           <h3 className="text-sm font-medium text-gray-700">{title}</h3>
           <div className={`flex items-center text-sm ${isPositive ? "text-indigo-600" : "text-red-600"}`}>
             {isPositive ? <TrendingUp className="w-4 h-4 mr-1" /> : <TrendingDown className="w-4 h-4 mr-1" />}
-            {isPositive ? "+" : ""}{change.toFixed(1)}%
+            {isPositive ? "+" : ""}{change.toLocaleString("es-ES", { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %
           </div>
         </div>
       )}

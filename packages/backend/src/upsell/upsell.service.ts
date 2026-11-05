@@ -1,12 +1,16 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
+import { publicPrice, publicPriceSettings } from '../common/public-price';
 
 export interface UpsellSuggestion {
   serviceId: string;
   serviceName: string;
   duration: number;
+  /** What the client pays, tax included (common/public-price.ts): these are shown to clients. */
   price: number;
+  /** IVA, IGIC or IPSI: the tax `price` includes. */
+  taxLabel: string;
   currency: string;
   reason: string;
   score: number;
@@ -63,6 +67,11 @@ export class UpsellService {
       orderBy: { createdAt: 'desc' },
       take: 5,
     });
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { fiscalSettings: true },
+    });
+    const prices = publicPriceSettings(tenant?.fiscalSettings);
 
     return services.map((s) => {
       const score = s.category === lastCategory ? 1.0 : 0.5;
@@ -74,7 +83,8 @@ export class UpsellService {
         serviceId: s.id,
         serviceName: s.name,
         duration: s.duration,
-        price: Number(s.price),
+        price: publicPrice(s.price, prices),
+        taxLabel: prices.taxLabel,
         currency: 'EUR',
         reason,
         score,

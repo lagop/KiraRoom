@@ -32,6 +32,8 @@ import {
   DEFAULT_SALON_TIMEZONE,
   isKnownSalonTimezone,
   salonTimezoneLabel,
+  isCanaryIslandsAddress,
+  suggestedSalonTimezone,
 } from "@kira/shared";
 
 let pass = 0;
@@ -115,6 +117,28 @@ const offenders: string[] = [];
 })(APP);
 
 check("no <option> carries a hardcoded timezone", offenders, []);
+
+// Every sign-up started on Europe/Madrid, so a salon in Las Palmas kept
+// Peninsula time. Its address now says where it is (fictitious streets).
+console.log("\n=== a Canarian address on Madrid time ===");
+check("Las Palmas de Gran Canaria", isCanaryIslandsAddress({ street: "Calle Ficticia 1", city: "Las Palmas de Gran Canaria" }), true);
+check("Santa Cruz de Tenerife, any case and accents", isCanaryIslandsAddress({ city: "SANTA CRUZ DE TENERIFE" }), true);
+check("San Cristóbal de La Laguna", isCanaryIslandsAddress({ city: "San Cristóbal de La Laguna" }), true);
+check("an island as the province", isCanaryIslandsAddress({ city: "Pueblo Inventado", state: "Lanzarote" }), true);
+check("a 35 postcode", isCanaryIslandsAddress({ postalCode: "35002" }), true);
+check("a 38 postcode in the street line", isCanaryIslandsAddress({ street: "Av. Inventada 3, 38001" }), true);
+check("Madrid is not", isCanaryIslandsAddress({ city: "Madrid", postalCode: "28001" }), false);
+check("Palma (Mallorca) is not", isCanaryIslandsAddress({ city: "Palma", postalCode: "07001" }), false);
+check("Palma de Mallorca without a postcode is not", isCanaryIslandsAddress({ city: "Palma de Mallorca" }), false);
+check("a Peninsula postcode wins over a misleading name", isCanaryIslandsAddress({ city: "Las Palmas", postalCode: "28001" }), false);
+check("an address abroad is not", isCanaryIslandsAddress({ city: "Las Palmas", country: "PT" }), false);
+check("an empty address is not", isCanaryIslandsAddress({}), false);
+
+check("Madrid time + Canarian address → Atlantic/Canary", suggestedSalonTimezone("Europe/Madrid", { city: "Telde" }), "Atlantic/Canary");
+check("no zone yet counts as Madrid", suggestedSalonTimezone(null, { city: "Arrecife" }), "Atlantic/Canary");
+check("already on Canary time → nothing", suggestedSalonTimezone("Atlantic/Canary", { city: "Telde" }), null);
+check("another zone chosen → left alone", suggestedSalonTimezone("Europe/Lisbon", { city: "Telde" }), null);
+check("a Peninsula address → nothing", suggestedSalonTimezone("Europe/Madrid", { city: "Sevilla" }), null);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

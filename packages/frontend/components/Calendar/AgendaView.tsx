@@ -1,18 +1,34 @@
 // components/calendar/AgendaView.tsx
-import React, { useMemo } from "react";
-import { format, isToday, isSameDay } from "date-fns";
+import React, { useCallback, useMemo } from "react";
+import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { Clock, User } from "lucide-react";
 import { Appointment, Professional } from "./types";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
+import { pickedDay, salonClock, salonTime } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
+import { agendaAbsences, holdsSlot } from "./day-grid";
+import type { TimeOff } from "@/lib/time-off";
 
 interface AgendaViewProps {
   date: Date;
   professionals: Professional[];
   appointments: Appointment[];
   onAppointmentClick?: (appointmentId: string) => void;
+  /** Time off and closures of the day (pending requests too, for managers). */
+  timeOff?: TimeOff[];
+  t: (key: string, params?: Record<string, any>) => string;
 }
+
+const STATUS_STYLES: Record<string, string> = {
+  confirmed: "bg-green-100 text-green-800",
+  pending: "bg-yellow-100 text-yellow-800",
+  in_progress: "bg-blue-100 text-blue-800",
+  completed: "bg-purple-100 text-purple-800",
+  cancelled: "bg-red-100 text-red-800",
+  no_show: "bg-gray-100 text-gray-800",
+};
 
 /**
  * Mobile-first chronological list of appointments grouped by
@@ -21,15 +37,28 @@ interface AgendaViewProps {
  * horizontal (unlike the day-grid, which assumes a desktop viewport).
  *
  * Appointment IDs in calendar mode can be `${originalId}-${index}`
- * for multi-service splits — strip the suffix when forwarding the
- * click up so the parent sees the canonical appointmentId.
+ * for multi-service splits — the click forwards the block's
+ * appointmentId so the parent sees the canonical one.
+ *
+ * Each appointment shows its status. Cancelled and no-show ones stay in the
+ * list, faded and struck through, and are not counted as the day's work.
  */
 export const AgendaView: React.FC<AgendaViewProps> = ({
   date,
   professionals,
   appointments,
   onAppointmentClick,
+  timeOff,
+  t,
 }) => {
+  const timeZone = useSalonTimeZone();
+  // The picked day on the salon's calendar, and each block's day on it.
+  const day = pickedDay(date);
+  const onDay = useCallback(
+    (apt: Appointment) => salonClock(apt.start, timeZone).day === day,
+    [day, timeZone],
+  );
+
   const professionalMap = useMemo(() => {
     const map = new Map<string, Professional>();
     for (const p of professionals) map.set(p.id, p);
@@ -39,7 +68,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   const groupedByPro = useMemo(() => {
     const groups = new Map<string, Appointment[]>();
     for (const apt of appointments) {
-      if (!isSameDay(new Date(apt.start), date)) continue;
+      if (!onDay(apt)) continue;
       const list = groups.get(apt.professionalId) ?? [];
       list.push(apt);
       groups.set(apt.professionalId, list);
@@ -57,16 +86,25 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
     return professionals
       .filter((p) => groups.has(p.id))
       .map((p) => ({ pro: p, items: groups.get(p.id) ?? [] }));
-  }, [appointments, date, professionals]);
+  }, [appointments, onDay, professionals]);
 
-  const dayIsToday = isToday(date);
+  const dayIsToday = day === salonClock(Date.now(), timeZone).day;
   const dayLabel = format(date, "EEEE d 'de' MMMM", { locale: es });
 
   const totalForDay = useMemo(
     () =>
-      appointments.filter((a) => isSameDay(new Date(a.start), date)).length,
-    [appointments, date],
+      appointments.filter((a) => onDay(a) && holdsSlot(a.status)).length,
+    [appointments, onDay],
   );
+  const releasedForDay = useMemo(
+    () =>
+      appointments.filter((a) => onDay(a) && !holdsSlot(a.status)).length,
+    [appointments, onDay],
+  );
+  const countText = (count: number) =>
+    count === 1
+      ? t("appointments.calendarView.appointmentCountOne")
+      : t("appointments.calendarView.appointmentCountMany", { count });
 
   return (
     <div className="flex flex-col h-full">
@@ -78,17 +116,23 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
       >
         <p className="font-medium capitalize text-gray-900">{dayLabel}</p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {dayIsToday ? "Hoy · " : ""}
+          {dayIsToday ? t("appointments.calendarView.todayPrefix") : ""}
           {totalForDay === 0
-            ? "sin citas"
-            : `${totalForDay} cita${totalForDay === 1 ? "" : "s"}`}
+            ? t("appointments.calendarView.noAppointments")
+            : countText(totalForDay)}
+          {releasedForDay > 0 &&
+            ` · ${
+              releasedForDay === 1
+                ? t("appointments.calendarView.cancelledCountOne")
+                : t("appointments.calendarView.cancelledCountMany", { count: releasedForDay })
+            }`}
         </p>
       </div>
 
       <div className="flex-1 overflow-y-auto divide-y">
         {groupedByPro.length === 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground">
-            Sin profesionales configurados
+            {t("appointments.calendarView.noProfessionalsConfigured")}
           </div>
         )}
         {groupedByPro.map(({ pro, items }) => (
@@ -104,46 +148,77 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {items.length === 0
-                    ? "Día libre"
-                    : `${items.length} cita${items.length === 1 ? "" : "s"}`}
+                    ? t("appointments.calendarView.dayOff")
+                    : countText(items.filter((a) => holdsSlot(a.status)).length)}
                 </p>
+                {agendaAbsences(day, pro.id, timeOff ?? []).map((a, i) => {
+                  const text = a.startTime
+                    ? t("appointments.calendarView.awayHours", { label: a.label, from: a.startTime, to: a.endTime })
+                    : t("appointments.calendarView.awayAllDay", { label: a.label });
+                  return (
+                    <p
+                      key={i}
+                      data-test="agenda-absence"
+                      className={cn("text-xs", a.pending ? "text-amber-700 italic" : "text-amber-800 font-medium")}
+                    >
+                      {a.pending ? t("appointments.calendarView.awayPending", { text }) : text}
+                    </p>
+                  );
+                })}
               </div>
             </header>
 
             {items.length === 0 ? (
               <p className="ml-12 text-xs italic text-muted-foreground">
-                Sin citas programadas
+                {t("appointments.calendarView.noneScheduled")}
               </p>
             ) : (
               <ul className="ml-12 space-y-1.5">
                 {items.map((apt) => {
-                  const start = new Date(apt.start);
-                  const end = new Date(apt.end);
-                  const originalId = apt.id.includes("-")
-                    ? apt.id.substring(0, apt.id.lastIndexOf("-"))
-                    : apt.id;
+                  const start = salonTime(apt.start, timeZone);
+                  const end = salonTime(apt.end, timeZone);
+                  // Not cut from the block id: a plain UUID has dashes too.
+                  const originalId = apt.appointmentId ?? apt.id;
+                  const released = !holdsSlot(apt.status);
+                  const statusLabel = apt.status ? t(`appointments.status_${apt.status}`) : null;
                   return (
                     <li key={apt.id}>
                       <button
                         type="button"
                         onClick={() => onAppointmentClick?.(originalId)}
-                        className="w-full text-left flex items-start gap-2 rounded-md border bg-white px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-                        aria-label={`Cita de ${apt.clientName ?? "cliente"} a las ${format(start, "HH:mm")}`}
+                        className={cn(
+                          "w-full text-left flex items-start gap-2 rounded-md border bg-white px-3 py-2 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors",
+                          released && "border-dashed opacity-70",
+                        )}
+                        aria-label={`${t("appointments.calendarView.appointmentAt", {
+                          client: apt.clientName ?? t("appointments.calendarView.clientFallback"),
+                          time: start,
+                        })}${statusLabel ? ` (${statusLabel})` : ""}`}
                       >
                         <Clock className="h-4 w-4 mt-0.5 text-indigo-500 flex-shrink-0" />
                         <span className="text-sm font-medium tabular-nums text-gray-900 w-20 flex-shrink-0">
-                          {format(start, "HH:mm")}
+                          {start}
                         </span>
-                        <span className="text-sm text-gray-700 min-w-0 flex-1 truncate">
-                          {apt.clientName ?? "(sin cliente)"}
+                        <span className={cn("text-sm text-gray-700 min-w-0 flex-1 truncate", released && "line-through")}>
+                          {apt.clientName ?? t("appointments.calendarView.noClient")}
                           {apt.serviceName && (
                             <span className="text-xs text-muted-foreground ml-1">
                               · {apt.serviceName}
                             </span>
                           )}
                         </span>
+                        {statusLabel && (
+                          <span
+                            className={cn(
+                              "text-[11px] font-medium rounded-full px-2 py-0.5 flex-shrink-0",
+                              STATUS_STYLES[apt.status ?? ""] ?? "bg-gray-100 text-gray-800",
+                            )}
+                          >
+                            {statusLabel}
+                          </span>
+                        )}
                         <span className="text-xs text-muted-foreground flex-shrink-0">
-                          {format(start, "HH:mm")}–{format(end, "HH:mm")}
+                          {start}–{end}
                         </span>
                       </button>
                     </li>
@@ -156,10 +231,10 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
         {/* Empty-day fallback when the salon has no appointments
             AND no professionals on staff — keeps the page from looking
             like a bug. */}
-        {totalForDay === 0 && groupedByPro.length > 0 && (
+        {totalForDay === 0 && releasedForDay === 0 && groupedByPro.length > 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground flex flex-col items-center gap-2">
             <User className="h-6 w-6 opacity-40" />
-            <span>No hay citas para este día</span>
+            <span>{t("appointments.calendarView.noAppointmentsThisDay")}</span>
           </div>
         )}
       </div>

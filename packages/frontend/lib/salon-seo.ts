@@ -16,9 +16,18 @@ export interface PublicSalonService {
   name: string;
   description: string | null;
   duration: number;
+  /**
+   * What the client pays, tax included: the server adds the salon's IVA
+   * (IGIC, IPSI) when its catalogue is written without it
+   * (backend common/public-price.ts).
+   */
   price: number;
   currency: string;
   category: string;
+  /** False: on the price list, but booked by phone (the server refuses it online). */
+  isOnlineBookable?: boolean;
+  /** Days ahead it can be booked online (Service.maxAdvanceBooking). Absent from older servers. */
+  maxAdvanceBooking?: number;
 }
 
 export interface PublicSalonProfessional {
@@ -34,6 +43,29 @@ export interface PublicSalonProfessional {
   languages: string[];
   certifications: string[];
   services: Array<{ serviceId: string }>;
+  /**
+   * False for a professional the salon does not show on the web ("Mostrar
+   * en la web: no mostrar"): still bookable, named "Profesional", but left
+   * out of the team list and the schema.org data. Absent from older servers
+   * (= true). Her name already comes as the salon chose to show it.
+   */
+  listed?: boolean;
+  /**
+   * Where they work, when the salon has locations to pick from (`locations`
+   * on the page), with their main one. Absent otherwise.
+   */
+  locationIds?: string[];
+  primaryLocationId?: string | null;
+}
+
+/** One of the salon's locations a client can book at (multi-local). */
+export interface PublicSalonLocation {
+  id: string;
+  name: string;
+  slug: string;
+  /** "Calle Mayor 1, 28013 Madrid"; empty when none is recorded. */
+  address: string;
+  phone: string | null;
 }
 
 export interface PublicSalonPage {
@@ -41,9 +73,21 @@ export interface PublicSalonPage {
   name: string;
   slug: string;
   description: string | null;
-  logo: string | null;
-  coverImage: string | null;
+  /**
+   * The logo and cover photo as URLs: the salon's own http(s) URL, or the
+   * API path that serves an uploaded one ("/public-site/image/...", see
+   * publicImageSrc). Never the uploaded data: URL itself, which made the
+   * page weigh megabytes and gave link previews no image.
+   */
+  logoUrl?: string | null;
+  coverImageUrl?: string | null;
   website: string | null;
+  /**
+   * The salon's Instagram and Facebook as profile URLs, set in its general
+   * settings. Absent from servers older than that setting.
+   */
+  instagram?: string | null;
+  facebook?: string | null;
   email: string | null;
   phone: string | null;
   address: {
@@ -56,13 +100,136 @@ export interface PublicSalonPage {
   currency: string;
   timezone: string;
   language: string;
+  /**
+   * The salon's cancellation policy in its own words, set in Ajustes >
+   * Generales. Informational: nothing charges a fee. Absent from older servers.
+   */
+  cancellationPolicy?: string | null;
+  /**
+   * How many hours before the appointment the client's "Cancelar mi cita"
+   * link still works (Tenant.minCancelHours). Absent from older servers.
+   */
+  minCancelHours?: number | null;
   updatedAt: string;
   services: PublicSalonService[];
   professionals: PublicSalonProfessional[];
-  /** Weekday name (lower-case English) -> window. Absent day = closed. */
+  /**
+   * Weekday name (lower-case English) -> window, earliest open to latest
+   * close. Absent day = closed.
+   */
   openingHours: Record<string, { openTime: string; closeTime: string }>;
+  /**
+   * The same week with its gaps: every open stretch of each day, several when
+   * the salon closes for lunch. Absent from servers older than split shifts.
+   */
+  openingShifts?: Record<string, Array<{ openTime: string; closeTime: string }>>;
+  /** "YYYY-MM-DD" days ahead the salon is closed all day. Absent from older servers. */
+  closedDays?: string[];
+  /** With locations to pick from: each one's closed days, the salon's included. */
+  closedDaysByLocation?: Record<string, string[]>;
+  /**
+   * False while the salon is read-only (trial ended, cancelled, suspended):
+   * the page shows its details and phone instead of the booking form, and is
+   * not indexed. Absent from older servers (= true).
+   */
+  acceptsBookings?: boolean;
+  /**
+   * False until the salon's owner has confirmed their email (D1): the page
+   * works, but says noindex and is left out of the sitemaps. Absent from
+   * older servers (= true).
+   */
+  indexable?: boolean;
+  /**
+   * Why acceptsBookings is false: "read_only" (as above) or
+   * "no_professional" (nobody active to book with yet: "Este salón todavía
+   * no acepta reservas online"). Null when it takes bookings; absent from
+   * older servers.
+   */
+  bookingUnavailable?: "read_only" | "no_professional" | null;
   /** Set only once the salon's own domain serves the page over HTTPS. */
   customDomain: string | null;
+  /** salon-lucia.kiraroom.net, set only once subdomains serve over HTTPS. */
+  subdomainHost?: string | null;
+  /**
+   * The salon has its WhatsApp number connected: the booking form offers
+   * "Recibir los avisos de mi cita por WhatsApp". Absent from older servers.
+   */
+  whatsappNotices?: boolean;
+  /**
+   * ...and its plan includes WhatsApp campaigns: the form offers the
+   * optional "Quiero recibir promociones de <salón> por WhatsApp". Absent
+   * from older servers.
+   */
+  whatsappPromotions?: boolean;
+  /** The salon's WhatsApp as wa.me digits ("34600112233"): "Escríbenos por WhatsApp". */
+  whatsapp?: string | null;
+  /**
+   * The salon's own privacy policy (https), when it set one: the page, the
+   * widget and the chat link there instead of /sites/<slug>/privacidad.
+   */
+  privacyPolicyUrl?: string | null;
+  /** Ajustes > Recepcionista "Chat en mi web"; absent (older servers): on. */
+  webChatEnabled?: boolean;
+  /**
+   * The tax the service prices include: IVA, IGIC (Canarias) or IPSI (Ceuta
+   * y Melilla). The page says "Precios con IVA incluido" once. Absent from
+   * servers older than final prices.
+   */
+  taxLabel?: string;
+  /**
+   * The locations the client picks from: two or more, each with someone to
+   * book. Empty (or absent, from older servers) for a salon with one.
+   */
+  locations?: PublicSalonLocation[];
+}
+
+/** The API as browsers and crawlers reach it (not the internal one). */
+export function publicApiBaseUrl(): string {
+  return (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1").replace(/\/+$/, "");
+}
+
+/**
+ * Where to load a logo or cover from: an API path ("/public-site/image/...")
+ * on the public API, a web URL as it is. Anything else (a data: URL from an
+ * older server, garbage) is not used.
+ */
+export function publicImageSrc(url: string | null | undefined, apiBase = publicApiBaseUrl()): string | null {
+  if (!url) return null;
+  if (url.startsWith("/public-site/image/") || url.startsWith("/public-site/professional-image/")) return `${apiBase}${url}`;
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+/**
+ * Whether search engines may index the salon's page: not while it takes no
+ * bookings, nor while it has no active service yet (a page created a minute
+ * ago, with nothing on it).
+ */
+export function salonPageIndexable(page: Pick<PublicSalonPage, "acceptsBookings" | "services" | "indexable">): boolean {
+  return acceptsBookings(page) && page.indexable !== false && page.services.length > 0;
+}
+
+/**
+ * "Puedes cancelar online hasta 24 h antes", when the salon wrote no policy
+ * of its own. Null with a policy, or from an older server.
+ */
+export function cancelDeadlineHours(page: Pick<PublicSalonPage, "cancellationPolicy" | "minCancelHours">): number | null {
+  if (page.cancellationPolicy?.trim()) return null;
+  const hours = page.minCancelHours;
+  return typeof hours === "number" && Number.isFinite(hours) && hours > 0 ? Math.round(hours) : null;
+}
+
+/** Whether the salon takes bookings online: older servers did not say, and took them. */
+export function acceptsBookings(page: Pick<PublicSalonPage, "acceptsBookings">): boolean {
+  return page.acceptsBookings !== false;
+}
+
+/**
+ * A price of 0 is how a salon writes "it depends" (priced after a
+ * consultation): the page says "Consultar" rather than "0,00 €".
+ */
+export function priceOnRequest(price: number | string | null | undefined): boolean {
+  const n = Number(price);
+  return !Number.isFinite(n) || n <= 0;
 }
 
 /** Public base URL of the app (where /sites/<slug> lives). */
@@ -72,11 +239,16 @@ export function appBaseUrl(): string {
 
 /**
  * The one URL search engines should index for this salon. Its own domain
- * when that is live; otherwise the slug URL, also when the visitor came in
- * through the salon's id (/sites/<uuid>), so the two are not indexed twice.
+ * when that is live; then its free subdomain when those are live; otherwise
+ * the slug URL, also when the visitor came in through the salon's id
+ * (/sites/<uuid>), so the two are not indexed twice.
  */
-export function canonicalUrl(page: Pick<PublicSalonPage, "slug" | "customDomain">, base = appBaseUrl()): string {
+export function canonicalUrl(
+  page: Pick<PublicSalonPage, "slug" | "customDomain" | "subdomainHost">,
+  base = appBaseUrl(),
+): string {
   if (page.customDomain) return `https://${page.customDomain}/`;
+  if (page.subdomainHost) return `https://${page.subdomainHost}/`;
   return `${base}/sites/${encodeURIComponent(page.slug)}`;
 }
 
@@ -119,12 +291,18 @@ export function metaDescription(page: Pick<PublicSalonPage, "name" | "descriptio
 const isWebUrl = (u: string | null | undefined): u is string => !!u && /^https?:\/\//i.test(u);
 
 /**
- * Image for link previews and schema.org. Logos are often stored as data:
- * URLs, which no crawler or chat app will fetch, so only http(s) qualify.
+ * Image for link previews and schema.org: the cover, else the logo, at a
+ * URL a crawler or chat app can fetch (uploaded ones are served by the API,
+ * see publicImageSrc). Only http(s) qualify.
  */
-export function shareImage(page: Pick<PublicSalonPage, "coverImage" | "logo">): string | null {
-  if (isWebUrl(page.coverImage)) return page.coverImage;
-  if (isWebUrl(page.logo)) return page.logo;
+export function shareImage(
+  page: Pick<PublicSalonPage, "coverImageUrl" | "logoUrl">,
+  apiBase = publicApiBaseUrl(),
+): string | null {
+  for (const url of [page.coverImageUrl, page.logoUrl]) {
+    const src = publicImageSrc(url, apiBase);
+    if (isWebUrl(src)) return src;
+  }
   return null;
 }
 
@@ -138,23 +316,92 @@ const WEEK: Array<{ key: string; label: string; schema: string }> = [
   { key: "sunday", label: "Domingo", schema: "Sunday" },
 ];
 
+type Stretch = { openTime: string; closeTime: string };
+
+/**
+ * Each day's open stretches: `openingShifts` when the server sent it (a salon
+ * that closes for lunch has two), else the single `openingHours` window. One
+ * window per day used to be all there was, so a salon shut from 14:00 to 17:00
+ * told Google, and its own page, that it was open straight through.
+ */
+function stretchesOf(
+  hours: PublicSalonPage["openingHours"] | null | undefined,
+  shifts: PublicSalonPage["openingShifts"],
+  key: string,
+): Stretch[] {
+  if (shifts && Object.keys(shifts).length > 0) return shifts[key] ?? [];
+  const w = hours?.[key];
+  return w ? [w] : [];
+}
+
 /**
  * Monday-first rows for display. Empty when no schedule is recorded at all,
- * so the page says nothing rather than "closed every day".
+ * so the page says nothing rather than "closed every day". `key` is the
+ * weekday in English ("monday"), for the page's own translation of the day;
+ * `day` is its Spanish name.
  */
 export function openingHoursRows(
   hours: PublicSalonPage["openingHours"],
-): Array<{ day: string; hours: string | null }> {
-  if (!hours || Object.keys(hours).length === 0) return [];
+  shifts?: PublicSalonPage["openingShifts"],
+): Array<{ key: string; day: string; hours: string | null }> {
+  const known = (o: object | null | undefined) => !!o && Object.keys(o).length > 0;
+  if (!known(hours) && !known(shifts)) return [];
   return WEEK.map(({ key, label }) => {
-    const w = hours[key];
-    return { day: label, hours: w ? `${w.openTime} – ${w.closeTime}` : null };
+    const stretches = stretchesOf(hours, shifts, key);
+    return {
+      key,
+      day: label,
+      hours:
+        stretches.length > 0
+          ? stretches.map((w) => `${w.openTime} – ${w.closeTime}`).join(" y ")
+          : null,
+    };
   });
 }
 
+const SOCIAL_HOSTS: Record<SocialLink["network"], string> = {
+  instagram: "www.instagram.com",
+  facebook: "www.facebook.com",
+};
+
+export interface SocialLink {
+  network: "instagram" | "facebook";
+  url: string;
+  /** "@salonluna" for Instagram, "Facebook" for a page (its URL may be an id). */
+  label: string;
+}
+
+/**
+ * The salon's social profiles for its page, only those it set and only on
+ * the network's own https host (the server stores canonical profile URLs;
+ * checked again here because the URL goes into an href).
+ */
+export function socialLinks(page: Pick<PublicSalonPage, "instagram" | "facebook">): SocialLink[] {
+  const links: SocialLink[] = [];
+  for (const network of ["instagram", "facebook"] as const) {
+    const raw = page[network];
+    if (!raw) continue;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "https:" || url.hostname !== SOCIAL_HOSTS[network]) continue;
+    const handle = url.pathname.split("/").filter(Boolean)[0];
+    links.push({
+      network,
+      url: url.toString(),
+      label: network === "instagram" && handle ? `@${handle}` : "Facebook",
+    });
+  }
+  return links;
+}
+
 /** schema.org BeautySalon for the page's JSON-LD block. */
-export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, unknown> {
-  const image = shareImage(page);
+export function salonJsonLd(page: PublicSalonPage, url: string, apiBase = publicApiBaseUrl()): Record<string, unknown> {
+  const image = shareImage(page, apiBase);
+  const logo = publicImageSrc(page.logoUrl, apiBase);
   const a = page.address;
   const hasAddress = [a.street, a.city, a.postalCode, a.state].some(Boolean);
   const data: Record<string, unknown> = {
@@ -166,10 +413,12 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
   };
   if (page.description) data.description = collapse(page.description);
   if (image) data.image = image;
-  if (isWebUrl(page.logo)) data.logo = page.logo;
+  if (isWebUrl(logo)) data.logo = logo;
   if (page.phone) data.telephone = page.phone;
   if (page.email) data.email = page.email;
-  if (isWebUrl(page.website)) data.sameAs = [page.website];
+  // The salon's own site and its social profiles: the same business elsewhere.
+  const sameAs = [...(isWebUrl(page.website) ? [page.website] : []), ...socialLinks(page).map((l) => l.url)];
+  if (sameAs.length > 0) data.sameAs = sameAs;
   if (hasAddress) {
     data.address = {
       "@type": "PostalAddress",
@@ -180,21 +429,39 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
       ...(a.country ? { addressCountry: a.country } : {}),
     };
   }
-  const spec = WEEK.filter(({ key }) => page.openingHours?.[key]).map(({ key, schema }) => ({
-    "@type": "OpeningHoursSpecification",
-    dayOfWeek: `https://schema.org/${schema}`,
-    opens: page.openingHours[key].openTime,
-    closes: page.openingHours[key].closeTime,
-  }));
+  // One specification per open stretch: schema.org allows several for the
+  // same day, which is how a lunch closure is said.
+  const spec = WEEK.flatMap(({ key, schema }) =>
+    stretchesOf(page.openingHours, page.openingShifts, key).map((w) => ({
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: `https://schema.org/${schema}`,
+      opens: w.openTime,
+      closes: w.closeTime,
+    })),
+  );
   if (spec.length > 0) data.openingHoursSpecification = spec;
   if (page.services.length > 0) {
     data.hasOfferCatalog = {
       "@type": "OfferCatalog",
       name: "Servicios",
+      // A price of 0 ("Consultar") is no price: the offer goes without one
+      // rather than tell Google the service is free.
       itemListElement: page.services.map((s) => ({
         "@type": "Offer",
-        price: Number(s.price).toFixed(2),
-        priceCurrency: s.currency || page.currency,
+        ...(priceOnRequest(s.price)
+          ? {}
+          : { price: Number(s.price).toFixed(2), priceCurrency: s.currency || page.currency }),
+        // The final price, tax included, said the way schema.org says it.
+        ...(page.taxLabel && !priceOnRequest(s.price)
+          ? {
+              priceSpecification: {
+                "@type": "PriceSpecification",
+                price: Number(s.price).toFixed(2),
+                priceCurrency: s.currency || page.currency,
+                valueAddedTaxIncluded: true,
+              },
+            }
+          : {}),
         itemOffered: {
           "@type": "Service",
           name: s.name,
@@ -203,8 +470,10 @@ export function salonJsonLd(page: PublicSalonPage, url: string): Record<string, 
       })),
     };
   }
-  if (page.professionals.length > 0) {
-    data.employee = page.professionals.map((p) => ({
+  // Only those the salon shows on the web, named as it shows them.
+  const listed = page.professionals.filter((p) => p.listed !== false);
+  if (listed.length > 0) {
+    data.employee = listed.map((p) => ({
       "@type": "Person",
       name: `${p.firstName} ${p.lastName}`.trim(),
       ...(p.position ? { jobTitle: p.position } : {}),
@@ -228,6 +497,37 @@ export function serializeJsonLd(data: unknown): string {
     .replace(/&/g, "\\u0026")
     .replace(LINE_SEPARATOR, "\\u2028")
     .replace(PARAGRAPH_SEPARATOR, "\\u2029");
+}
+
+/**
+ * robots.txt and sitemap.xml on the salon's own host (its domain or its
+ * subdomain). Those hosts used to get the platform's: a sitemap listing
+ * every KiraRoom salon, and a robots.txt pointing at the app's sitemap.
+ * Now they list only this salon's canonical page.
+ */
+export function salonSitemapUrl(canonical: string): string {
+  return canonical.endsWith("/") ? `${canonical}sitemap.xml` : `${canonical}/sitemap.xml`;
+}
+
+export function salonRobotsTxt(canonical: string): string {
+  return ["User-agent: *", "Allow: /", "Disallow: /embed", "", `Sitemap: ${salonSitemapUrl(canonical)}`, ""].join("\n");
+}
+
+const xmlEscape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+/** Empty while the salon takes no bookings (the page itself says noindex then). */
+export function salonSitemapXml(
+  page: Pick<PublicSalonPage, "acceptsBookings" | "updatedAt" | "indexable">,
+  canonical: string,
+): string {
+  const lastmod = new Date(page.updatedAt);
+  const entry = acceptsBookings(page) && page.indexable !== false
+    ? `  <url>\n    <loc>${xmlEscape(canonical)}</loc>\n${
+        Number.isNaN(lastmod.getTime()) ? "" : `    <lastmod>${lastmod.toISOString()}</lastmod>\n`
+      }  </url>\n`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entry}</urlset>\n`;
 }
 
 /** "35,00 €" -- prices as the salon's clients read them. */

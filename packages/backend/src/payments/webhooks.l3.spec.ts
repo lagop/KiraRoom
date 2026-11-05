@@ -82,10 +82,10 @@ describe('WebhooksController L-3 (addon metadata routing)', () => {
 
     const c = Object.create(WebhooksController.prototype);
     c.logger = { log: () => {}, warn: () => {}, error: () => {} };
-    c.configService = { get: () => 'whsec_test' } as any;
-    c.stripe = {
-      webhooks: { constructEvent: jest.fn() },
-    } as any;
+    c.configService = { get: () => undefined } as any;
+    // KiraRoom's Stripe account and webhook secret (platform console).
+    const stripe = { webhooks: { constructEvent: jest.fn() } } as any;
+    c.platformStripe = { client: () => stripe, current: () => ({ webhookSecret: 'whsec_test' }) };
     c.addonsService = addonsService;
     c.subscriptionsService = { cancelSubscription: jest.fn() } as any;
     c.billingService = { syncInvoice: jest.fn() } as any;

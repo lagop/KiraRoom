@@ -1,15 +1,16 @@
-import { ParseUUIDPipe, Controller, Post, Get, Req, Body, Param, Query, UseGuards, ValidationPipe, Logger, ForbiddenException } from "@nestjs/common";
+import { BadRequestException, ParseUUIDPipe, Controller, Post, Get, Req, Body, Param, Query, UseGuards, ValidationPipe, Logger, ForbiddenException } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { Roles, SALON_MANAGERS } from '../auth/decorators/roles.decorator';
 import { FeatureGuard } from '../common/guards/feature.guard';
 import { Feature } from '../common/decorators/feature.decorator';
 import { AssistantService } from './assistant.service';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
 import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
+import { aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 import {
   SendAssistantMessageSchema,
   CreateAssistantConversationSchema,
@@ -52,8 +53,13 @@ export class AssistantController {
   @ApiOperation({ summary: 'Get-or-create the persistent staff-copilot conversation for the calling user' })
   async createConversation(
     @Req() req: AuthedRequest,
-    @Body(new ValidationPipe()) body: CreateAssistantConversationDto,
+    @Body(new ValidationPipe()) body: CreateAssistantConversationDto & { fresh?: boolean },
   ) {
+    // "Nueva conversación" asks for an empty thread; otherwise the
+    // persistent one, created on first use.
+    if (body?.fresh === true) {
+      return this.assistantService.startConversation(req.user.id, req.user.tenantId);
+    }
     return this.assistantService.getOrCreateConversation(
       req.user.id,
       req.user.tenantId,
@@ -85,7 +91,13 @@ export class AssistantController {
     @Req() req: AuthedRequest,
     @Body(new ValidationPipe()) body: SendAssistantMessageDto,
   ) {
-    const dto: SendAssistantMessageDto = body;
+    // The DTO is a zod type, which ValidationPipe cannot see: parse it here
+    // so an empty or 50 kB message never reaches the LLM.
+    const parsed = SendAssistantMessageSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.issues.map((i) => i.message).join('; '));
+    }
+    const dto: SendAssistantMessageDto = parsed.data;
     return this.assistantService.sendMessage(
       {
         id: req.user.id,
@@ -93,6 +105,32 @@ export class AssistantController {
         role: req.user.role,
       },
       dto,
+    );
+  }
+
+  /**
+   * Thumbs up/down under a copilot reply (feedback-bar.tsx). Stored in
+   * CopilotFeedback for the platform team to review answer quality.
+   */
+  @Post('feedback')
+  @Feature('copilot_read' as any)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  @ApiOperation({ summary: 'Rate a copilot reply (1 = useful, -1 = not useful)' })
+  async submitFeedback(
+    @Req() req: AuthedRequest,
+    @Body() body: { messageId?: unknown; rating?: unknown; comment?: unknown },
+  ) {
+    const messageId = typeof body?.messageId === 'string' ? body.messageId : '';
+    const rating = body?.rating === 1 || body?.rating === -1 ? body.rating : null;
+    if (!messageId || messageId.length > 64 || rating === null) {
+      throw new BadRequestException('messageId and rating (1 or -1) are required');
+    }
+    if (body.comment != null && (typeof body.comment !== 'string' || body.comment.length > 500)) {
+      throw new BadRequestException('comment must be text of at most 500 characters');
+    }
+    return this.assistantService.submitFeedback(
+      { id: req.user.id, tenantId: req.user.tenantId },
+      { messageId, rating, comment: (body.comment as string | undefined) ?? null },
     );
   }
 
@@ -134,8 +172,12 @@ export class AssistantController {
    * P2A-staff-copilot-sprint15: monthly usage stats for the
    * admin/debug panel. Returns message counts, action counts,
    * top users, and the cost-protection flag.
+   *
+   * The whole salon's month (the Uso del copiloto screen): managers and
+   * the platform owner, not staff.
    */
   @Get('usage')
+  @Roles(...SALON_MANAGERS, 'saas_owner' as any)
   @Feature('copilot_read' as any)
   @ApiOperation({ summary: 'Monthly copilot usage stats for the calling tenant' })
   async getUsage(@Req() req: AuthedRequest) {
@@ -292,6 +334,7 @@ export class AssistantController {
           plan: true,
           subscriptionStatus: true,
           aiConversationsUsed: true,
+          aiConversationsPeriod: true,
         },
       }),
       this.assistantService['prisma'].assistantMessage.groupBy({
@@ -349,9 +392,9 @@ export class AssistantController {
         actions,
         approxCostEur: Number(approxCostEur.toFixed(2)),
         costCapTriggered: approxCostEur > PREMIUM_FEE_EUR * 3,
-        // The counter is cumulative (resets on the cron), so it's a
-        // separate signal from the per-month aggregates above.
-        cumulativeCounter: t.aiConversationsUsed,
+        // This month's AI message count (receptionist and copilot), the
+        // number the fair-use cap is checked against.
+        cumulativeCounter: aiUsageThisMonth(t),
       };
     });
     tenantRows.sort((a, b) => b.messages - a.messages);

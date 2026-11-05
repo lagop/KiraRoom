@@ -119,6 +119,10 @@ export const FEATURE_KEYS = [
   'whatsapp_notifications',
   'sms_notifications',
   'email_marketing',
+  // WhatsApp promotions (campaigns) from the salon's number: Pro and up.
+  // Appointment notices and review requests by WhatsApp are utility
+  // messages under whatsapp_notifications, in every plan.
+  'whatsapp_marketing',
   'virtual_receptionist',
   'virtual_receptionist_advanced',
   'multichannel',
@@ -162,6 +166,7 @@ const PRO_FEATURES: ReadonlyArray<FeatureKey> = [
   ...ESENCIAL_FEATURES,
   'sms_notifications',
   'email_marketing',
+  'whatsapp_marketing',
   'virtual_receptionist_advanced',
   'multichannel',
   'loyalty',
@@ -210,12 +215,62 @@ export const PLAN_MAX_PROFESSIONALS: Readonly<Record<PlanId, number | null>> = {
   empresa: null,
 };
 
-/** AI receptionist conversations per month. null = unlimited. */
-export const PLAN_AI_CONVERSATIONS: Readonly<Record<PlanId, number | null>> = {
+/**
+ * AI receptionist messages per month (Empresa: per location). Every plan
+ * has a cap: a message costs about half a cent to two cents of model time,
+ * and an unlimited plan let one busy or abused salon cost more than it pays.
+ * Sized so AI stays around a fifth of the plan's price at a cent a message.
+ */
+export const PLAN_AI_CONVERSATIONS: Readonly<Record<PlanId, number>> = {
   esencial: 500,
-  pro: null,
-  empresa: null,
+  pro: 2000,
+  empresa: 3000,
 };
+
+/** AI messages in the trial, whatever the trial unlocks otherwise. */
+export const TRIAL_AI_MESSAGES = 500;
+
+/** Messages each AI pack add-on adds to the month. */
+export const AI_PACK_MESSAGES = 1000;
+
+/**
+ * Client messages in a typical receptionist conversation, for saying a cap
+ * in conversations ("500 mensajes, unas 70 conversaciones"). A full booking
+ * took 4 in a production trial; real chats run longer, so 7 errs on the
+ * side of not promising too much. kiraroom.com uses the same figures.
+ */
+export const MESSAGES_PER_CONVERSATION = 7;
+
+/** Approximate conversations in a number of AI messages, rounded down to tens. */
+export function aiConversationsApprox(messages: number): number {
+  return Math.floor(messages / MESSAGES_PER_CONVERSATION / 10) * 10;
+}
+
+/** A count in Spanish style for plan texts: 2000 -> "2.000" (es-ES leaves 4 digits ungrouped). */
+export function formatCountEs(n: number): string {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+/** Add-on keys that add AI messages (ai_expansion: the retired unlimited one). */
+export const AI_PACK_ADDON_KEYS: ReadonlySet<string> = new Set(['ai_messages_1000', 'ai_expansion']);
+
+/**
+ * The month's AI message cap for a salon: the trial's, or its plan's (per
+ * location on Empresa) plus its packs.
+ */
+export function aiMessageCap(opts: { plan: PlanId; inTrial: boolean; locations?: number | null; packs?: number }): number {
+  if (opts.inTrial) return TRIAL_AI_MESSAGES + (opts.packs ?? 0) * AI_PACK_MESSAGES;
+  const perLocation = opts.plan === 'empresa' ? Math.max(1, opts.locations ?? 1) : 1;
+  return PLAN_AI_CONVERSATIONS[opts.plan] * perLocation + (opts.packs ?? 0) * AI_PACK_MESSAGES;
+}
+
+/**
+ * A day's share of the month's cap, so an attack or a runaway loop is
+ * stopped the same day instead of draining the month.
+ */
+export function aiDailyCap(monthlyCap: number): number {
+  return Math.max(50, Math.ceil(monthlyCap / 10));
+}
 
 /** Minimum billable locations. Empresa bills per location from 1 upwards. */
 export const PLAN_MIN_LOCATIONS: Readonly<Record<PlanId, number>> = {

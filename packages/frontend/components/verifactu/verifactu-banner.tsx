@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import apiClient, { VerifactuStatus } from "@/lib/api";
+import { useTranslations } from "@/lib/use-translation";
 
 /**
  * Orden HAC/1177/2024 art. 16.4: while invoices cannot be sent to the AEAT
@@ -10,6 +11,7 @@ import apiClient, { VerifactuStatus } from "@/lib/api";
  * waiting, for as long as any is. Shown on every page of the panel.
  */
 export function VerifactuBanner() {
+  const t = useTranslations();
   const { data } = useQuery<VerifactuStatus>({
     queryKey: ["verifactu", "status"],
     queryFn: () => apiClient.getVerifactuStatus(),
@@ -31,20 +33,21 @@ export function VerifactuBanner() {
       <div>
         {waiting ? (
           <>
-            {data.pending} {data.pending === 1 ? "factura está pendiente" : "facturas están pendientes"} de enviar a la
-            AEAT
+            {t(data.pending === 1 ? "invoices.verifactu.bannerOne" : "invoices.verifactu.bannerMany", { count: data.pending })}
             {data.incidentSince
-              ? ` desde el ${new Date(data.incidentSince).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" })}`
+              ? ` ${t("invoices.verifactu.since", {
+                  date: new Date(data.incidentSince).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" }),
+                })}`
               : ""}
-            . Se reintenta automáticamente y puedes seguir facturando.
+            . {t("invoices.verifactu.retrying")}. {t("invoices.verifactu.keepInvoicing")}
           </>
         ) : (
-          <>
-            La AEAT ha rechazado {data.rejected} {data.rejected === 1 ? "factura" : "facturas"}.
-          </>
+          t(data.rejected === 1 ? "invoices.verifactu.bannerRejectedOne" : "invoices.verifactu.bannerRejectedMany", {
+            count: data.rejected,
+          })
         )}{" "}
         <a href="/dashboard/settings/fiscal" className="font-medium underline">
-          Ver detalles
+          {t("invoices.verifactu.details")}
         </a>
       </div>
     </div>

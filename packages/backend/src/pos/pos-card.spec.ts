@@ -1,5 +1,6 @@
 import { PosService } from "./pos.service";
 import { StripeService } from "../payments/services/stripe.service";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * A card sale at the till created a Stripe PaymentIntent for 100 times the
@@ -7,12 +8,30 @@ import { StripeService } from "../payments/services/stripe.service";
  * platform's account when the salon had none. Nobody confirmed it, so the
  * sale stayed "pending". Card at the till is the salon's own terminal.
  */
-function pos() {
+function pos({ serviceActive = true } = {}) {
   const prisma: any = {
     payment: { create: jest.fn(async ({ data }: any) => ({ id: "p1", ...data })) },
-    service: { findUnique: jest.fn(async () => ({ id: "s1", name: "Corte", price: 25, currency: "EUR" })) },
-    client: { findFirst: jest.fn(), create: jest.fn() },
+    service: {
+      findUnique: jest.fn(async () => ({ id: "s1", name: "Corte", price: 25, currency: "EUR" })),
+      // The quick sale reads it within the salon.
+      findFirst: jest.fn(async ({ where }: any) =>
+        where.tenantId === "t1" && where.id === "s1"
+          ? { id: "s1", name: "Corte", price: 25, currency: "EUR", isActive: serviceActive }
+          : null,
+      ),
+      // The checkout (and the quick sale, which is one) reads the salon's services by id.
+      findMany: jest.fn(async ({ where }: any) =>
+        where.tenantId === "t1" && where.id.in.includes("s1")
+          ? [{ id: "s1", name: "Corte", price: 25, isActive: serviceActive }]
+          : [],
+      ),
+    },
+    client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
+    tenant: { findUnique: jest.fn(async () => salonTenant()) },
+    professional: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    ...saleTables(),
   };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const wallet: any = { deductFunds: jest.fn() };
   return { service: new PosService(prisma, wallet), prisma };
 }
@@ -23,7 +42,7 @@ describe("POS card sales", () => {
     await service.processCheckout({
       tenantId: "t1",
       clientId: "c1",
-      items: [{ name: "Corte", price: 2500, quantity: 1 }] as any,
+      items: [{ serviceId: "s1", quantity: 1 }] as any,
       payments: [{ method: "card", amount: 2500 }] as any,
     } as any);
     expect(prisma.payment.create).toHaveBeenCalledWith({
@@ -40,24 +59,27 @@ describe("POS card sales", () => {
       data: expect.objectContaining({ amount: 2500, status: "paid" }),
     });
   });
+
+  it("refuses a quick sale of a deactivated service, or of another salon's", async () => {
+    const off = pos({ serviceActive: false });
+    await expect(off.service.quickSale("t1", "s1", "cash")).rejects.toThrow(/desactivado/);
+    expect(off.prisma.payment.create).not.toHaveBeenCalled();
+
+    const other = pos();
+    await expect(other.service.quickSale("t2", "s1", "cash")).rejects.toThrow(/no encontrado/);
+    expect(other.prisma.payment.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("StripeService for a salon", () => {
   it("never falls back to the platform's account", async () => {
     const prisma: any = { tenant: { findUnique: jest.fn(async () => ({ stripeMode: "live" })) } };
-    const config: any = { get: (k: string) => (k === "STRIPE_SECRET_KEY" ? "sk_test_platform" : undefined) };
-    const stripe = new StripeService(config, prisma);
-    await stripe.onModuleInit();
+    // KiraRoom's own account is set; a salon must still never use it.
+    const platformStripe: any = { client: () => ({}), current: () => ({ secretKey: "sk_test_platform", publishableKey: null }) };
+    const stripe = new StripeService({ get: () => undefined } as any, prisma, platformStripe);
     const { isEnabled } = await stripe.getStripeForTenant("t1");
     expect(isEnabled).toBe(false);
-    await expect(stripe.createPaymentIntent("t1", 2500)).rejects.toThrow(/not configured/);
   });
-
-  it("charges the amount it is given, in cents", async () => {
-    const create = jest.fn(async (args: any) => args);
-    const stripe = new StripeService({ get: (_k: string, d?: string) => d } as any, {} as any);
-    (stripe as any).getStripeForTenant = async () => ({ stripe: { paymentIntents: { create } }, isEnabled: true });
-    await stripe.createPaymentIntent("t1", 2500);
-    expect((create.mock.calls[0] as any[])[0].amount).toBe(2500);
-  });
+  // createPaymentIntent (and its 'charges in cents' test) is gone: nothing
+  // called it. Online client payments come with Stripe Connect.
 });

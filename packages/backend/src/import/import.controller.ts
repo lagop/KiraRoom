@@ -74,7 +74,7 @@ export class ImportController {
   @Post("clients/commit")
   @Roles(...SALON_MANAGERS)
   async commit(@Req() req: AuthedRequest, @Body() body: CsvBody) {
-    return this.importService.commitClients(req.user.tenantId, fileOf(body), nameOf(body));
+    return this.importService.commitClients(req.user.tenantId, fileOf(body), nameOf(body), req.user.id);
   }
 
   @Post("services/dry-run")

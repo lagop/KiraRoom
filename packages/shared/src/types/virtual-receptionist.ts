@@ -9,7 +9,6 @@ export enum LLMProvider {
   ANTHROPIC = 'anthropic',
   GOOGLE = 'google',
   LLAMA = 'llama',
-  MiniMax = 'MiniMax',
   CUSTOM = 'custom',
   SYSTEM = 'system'
 }
@@ -154,36 +153,6 @@ export enum EntityType {
 
 
 
-// FAQ Types
-export interface FAQItem {
-  id: string;
-  salonId: string;
-  question: string;
-  answer: string;
-  category: string;
-  keywords: string[];
-  priority: number;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface CreateFAQItemDto {
-  question: string;
-  answer: string;
-  category: string;
-  keywords?: string[];
-  priority?: number;
-}
-
-export interface UpdateFAQItemDto {
-  question?: string;
-  answer?: string;
-  category?: string;
-  keywords?: string[];
-  priority?: number;
-  isActive?: boolean;
-}
 
 
 

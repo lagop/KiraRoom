@@ -1,0 +1,392 @@
+/**
+ * The calendar's day, across clock changes, and the day grid's layout.
+ *
+ * Run: npx ts-node --project tsconfig.test.json --transpile-only components/Calendar/day-grid.spec.ts
+ *
+ * Found on 2026-10-30: "next day" stuck on 29 March 2026 and skipped
+ * 25 October 2026 with the browser in Madrid, and the calendar opened a day
+ * early in America. The day walks below run with the process in each zone
+ * (Node re-reads TZ when it is set).
+ */
+import {
+  gridHours,
+  holdsSlot,
+  initialScrollMinutes,
+  isBreakService,
+  layoutLanes,
+  localDay,
+  offShiftBands,
+  shiftsOn,
+  dateOfDay,
+  shiftDay,
+  salonClosureOn,
+  salonClosedWeekday,
+  timeOffBands,
+  agendaAbsences,
+  visibleProfessionals,
+} from "./day-grid";
+
+let pass = 0;
+let fail = 0;
+function check(name: string, ok: boolean, detail?: unknown) {
+  if (ok) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.log(`  ✗ ${name}`, detail ?? "");
+  }
+}
+
+/** The calendar day after/before `day`, by UTC arithmetic (no local clock). */
+function expected(day: string, delta: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+/** Every day of 2026 forwards and back, one click at a time. */
+function walkYear(): string | null {
+  let day = "2025-12-31";
+  for (let i = 0; i < 366; i++) {
+    const next = shiftDay(day, 1);
+    if (next !== expected(day, 1)) return `${day} -> ${next}`;
+    if (localDay(dateOfDay(next)) !== next) return `round trip of ${next}`;
+    day = next;
+  }
+  for (let i = 0; i < 366; i++) {
+    const prev = shiftDay(day, -1);
+    if (prev !== expected(day, -1)) return `${day} <- ${prev}`;
+    day = prev;
+  }
+  return day === "2025-12-31" ? null : `walked back to ${day}`;
+}
+
+// Madrid, New York, and Santiago de Chile (whose clocks change at midnight,
+// so 6 September 2026 has no 00:00).
+for (const zone of ["Europe/Madrid", "America/New_York", "America/Santiago"]) {
+  process.env.TZ = zone;
+  const broken = walkYear();
+  check(`${zone}: next and previous day walk all of 2026`, broken === null, broken);
+}
+
+process.env.TZ = "Europe/Madrid";
+check("Madrid: the day after 28 March is 29 March", shiftDay("2026-03-28", 1) === "2026-03-29");
+check("Madrid: and after 29 March, 30 March (clocks forward)", shiftDay("2026-03-29", 1) === "2026-03-30");
+check("Madrid: 25 October is not skipped (clocks back)", shiftDay("2026-10-24", 1) === "2026-10-25");
+check("Madrid: back from 26 October is 25 October", shiftDay("2026-10-26", -1) === "2026-10-25");
+check(
+  "Madrid: half past midnight is already the new day (toISOString said yesterday)",
+  localDay(new Date(2026, 9, 31, 0, 30)) === "2026-10-31" &&
+    new Date(2026, 9, 31, 0, 30).toISOString().slice(0, 10) === "2026-10-30",
+);
+
+process.env.TZ = "America/New_York";
+check("New York: a day opens on that day, not the one before", localDay(dateOfDay("2026-10-31")) === "2026-10-31");
+check(
+  "New York: late evening is still today (toISOString said tomorrow)",
+  localDay(new Date(2026, 9, 30, 21, 0)) === "2026-10-30",
+);
+check("New York: 1 November (clocks back) is reached", shiftDay("2026-10-31", 1) === "2026-11-01" && shiftDay("2026-11-01", 1) === "2026-11-02");
+
+process.env.TZ = "Europe/Madrid";
+
+// --- The grid's hours ---
+check("no hours known: 08:00 to 20:00", JSON.stringify(gridHours({ day: "2026-10-30" })) === '{"startHour":8,"endHour":20}');
+check(
+  "the salon's opening hours",
+  JSON.stringify(gridHours({ day: "2026-10-30", openingHours: { open: "09:30", close: "18:15" } })) ===
+    '{"startHour":9,"endHour":19}',
+);
+const workingHours = [
+  [{ day: "friday", openTime: "10:00", closeTime: "14:00" }, { day: "saturday", openTime: "07:00", closeTime: "13:00" }],
+  [{ day: "Friday", openTime: "16:00", closeTime: "21:00" }],
+];
+check(
+  "the professionals' hours for that weekday (30 Oct 2026 is a Friday)",
+  JSON.stringify(gridHours({ day: "2026-10-30", workingHours })) === '{"startHour":10,"endHour":21}',
+);
+check(
+  "widened to cover an appointment outside them",
+  JSON.stringify(
+    gridHours({ day: "2026-10-30", openingHours: { open: "09:00", close: "18:00" }, appointments: [{ start: 7 * 60 + 30, end: 8 * 60 }, { start: 20 * 60, end: 21 * 60 + 10 }] }),
+  ) === '{"startHour":7,"endHour":22}',
+);
+check(
+  "an appointment past midnight does not run the grid past 24:00",
+  gridHours({ day: "2026-10-30", appointments: [{ start: 23 * 60, end: 25 * 60 }] }).endHour === 24,
+);
+check("nonsense opening hours are ignored", gridHours({ day: "2026-10-30", openingHours: { open: "x", close: "18:00" } }).startHour === 8);
+
+// --- Status, breaks, columns ---
+check("cancelled and no-show appointments do not hold the slot", !holdsSlot("cancelled") && !holdsSlot("no_show"));
+check("every other status does", holdsSlot("confirmed") && holdsSlot("pending") && holdsSlot("completed") && holdsSlot(undefined));
+check("a break in Spanish is a break", isBreakService("Comida") && isBreakService("Descanso 30 min") && isBreakService("Pausa café"));
+check("and in English", isBreakService("Lunch break"));
+check("a service is not", !isBreakService("Corte y peinado") && !isBreakService("Manicura") && !isBreakService(undefined));
+
+const pros = [
+  { id: "a", isActive: true },
+  { id: "b", isActive: false },
+  { id: "c", isActive: false },
+  { id: "d" },
+];
+check(
+  "inactive professionals are not columns, unless they have appointments that day",
+  visibleProfessionals(pros, [{ professionalId: "c" }]).map((p) => p.id).join() === "a,c,d",
+);
+
+// --- Lanes ---
+const lanes = layoutLanes([
+  { id: "x", start: 600, end: 660 },
+  { id: "y", start: 630, end: 690 },
+  { id: "z", start: 660, end: 720 },
+  { id: "w", start: 800, end: 830 },
+]);
+check("two overlapping appointments sit side by side", lanes.get("x")!.lane === 0 && lanes.get("y")!.lane === 1, lanes);
+check("the next one reuses the lane freed before it", lanes.get("z")!.lane === 0, lanes);
+check("all three of the group split the column in two", [..."xyz"].every((id) => lanes.get(id)!.lanes === 2), lanes);
+check("one on its own takes the whole column", lanes.get("w")!.lane === 0 && lanes.get("w")!.lanes === 1, lanes);
+
+// --- Where the grid opens ---
+check("today: an hour before now", initialScrollMinutes({ isToday: true, nowMinutes: 16 * 60, startHour: 8 }) === 15 * 60);
+check(
+  "another day: just before the first appointment",
+  initialScrollMinutes({ isToday: false, nowMinutes: 16 * 60, firstAppointment: 17 * 60, startHour: 8 }) === 16 * 60 + 30,
+);
+check("an empty day: the top", initialScrollMinutes({ isToday: false, nowMinutes: 0, startHour: 9 }) === 9 * 60);
+
+// --- Time outside the shifts, shaded per column ---
+// 2026-11-02 is a Monday. A split day: 10:00-14:00 and 17:00-20:00, saved
+// afternoon first, with a Tuesday that must not leak into Monday.
+const SPLIT = [
+  { day: "monday", openTime: "17:00", closeTime: "20:00" },
+  { day: "Monday", openTime: "10:00", closeTime: "14:00" },
+  { day: "tuesday", openTime: "08:00", closeTime: "21:00" },
+];
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const range = { startHour: 8, endHour: 21 };
+check(
+  "a split day has both shifts, in order",
+  same(shiftsOn("2026-11-02", SPLIT), [{ start: 600, end: 840 }, { start: 1020, end: 1200 }]),
+  shiftsOn("2026-11-02", SPLIT),
+);
+check(
+  "shaded: before, the lunch gap, and after",
+  same(offShiftBands("2026-11-02", SPLIT, range), [
+    { start: 480, end: 600 },
+    { start: 840, end: 1020 },
+    { start: 1200, end: 1260 },
+  ]),
+  offShiftBands("2026-11-02", SPLIT, range),
+);
+check(
+  "a day off is shaded entirely",
+  same(offShiftBands("2026-11-04", SPLIT, range), [{ start: 480, end: 1260 }]),
+  offShiftBands("2026-11-04", SPLIT, range),
+);
+check(
+  "no schedule recorded: nothing shaded",
+  same(offShiftBands("2026-11-02", [], range), []) && same(offShiftBands("2026-11-02", undefined, range), []),
+);
+check(
+  "a shift past the drawn hours is clipped to them",
+  same(offShiftBands("2026-11-03", SPLIT, { startHour: 9, endHour: 20 }), []),
+  offShiftBands("2026-11-03", SPLIT, { startHour: 9, endHour: 20 }),
+);
+check(
+  "touching shifts leave no gap",
+  same(
+    offShiftBands(
+      "2026-11-02",
+      [
+        { day: "monday", openTime: "09:00", closeTime: "14:00" },
+        { day: "monday", openTime: "14:00", closeTime: "18:00" },
+      ],
+      { startHour: 9, endHour: 18 },
+    ),
+    [],
+  ),
+);
+check(
+  "a malformed shift is skipped, the good one kept",
+  same(
+    shiftsOn("2026-11-02", [
+      { day: "monday", openTime: "10:00", closeTime: "14:00" },
+      { day: "monday", openTime: "20:00", closeTime: "17:00" },
+    ]),
+    [{ start: 600, end: 840 }],
+  ),
+);
+
+// Time off and salon closures: shaded in the columns, clicks still pass.
+console.log("time off bands");
+{
+  const range = { startHour: 9, endHour: 20 };
+  const block = (b: Record<string, unknown>) => ({
+    professionalId: "ana",
+    kind: "vacation" as const,
+    startDate: "2026-12-14",
+    endDate: "2026-12-14",
+    startTime: null as string | null,
+    endTime: null as string | null,
+    note: null as string | null,
+    status: undefined as "approved" | "pending" | "rejected" | undefined,
+    ...b,
+  });
+  check(
+    "an all-day absence covers the whole drawn column, labelled by kind",
+    same(timeOffBands("2026-12-14", "ana", [block({})], range), [{ start: 540, end: 1200, label: "Vacaciones", salon: false }]),
+    timeOffBands("2026-12-14", "ana", [block({})], range),
+  );
+  check(
+    "a range covers its middle days and not the day after",
+    timeOffBands("2026-12-15", "ana", [block({ endDate: "2026-12-16", kind: "sick_leave" })], range)[0]?.label === "Baja" &&
+      timeOffBands("2026-12-17", "ana", [block({ endDate: "2026-12-16" })], range).length === 0,
+  );
+  check(
+    "a few hours shade only those hours",
+    same(timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "11:00", endTime: "12:30" })], range), [
+      { start: 660, end: 750, label: "Ausencia", salon: false },
+    ]),
+  );
+  check(
+    "hours outside the drawn grid are clipped to it",
+    same(timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "07:00", endTime: "10:00" })], range), [
+      { start: 540, end: 600, label: "Ausencia", salon: false },
+    ]) && timeOffBands("2026-12-14", "ana", [block({ kind: "other", startTime: "20:00", endTime: "22:00" })], range).length === 0,
+  );
+  check("a colleague's absence is not in Ana's column", timeOffBands("2026-12-14", "bea", [block({})], range).length === 0);
+  const closure = block({ professionalId: null, kind: "closure", note: "Navidad" });
+  check(
+    "a closure is in every column, with its note, before anyone's own block",
+    same(
+      timeOffBands("2026-12-14", "bea", [block({ professionalId: "bea" }), closure], range).map((b) => [b.label, b.salon]),
+      [
+        ["Salón cerrado — Navidad", true],
+        ["Vacaciones", false],
+      ],
+    ),
+  );
+  check(
+    "a closure without a note says only that",
+    timeOffBands("2026-12-14", "ana", [{ ...closure, note: null }], range)[0]?.label === "Salón cerrado",
+  );
+  check("the salon's all-day closure is found for the banner", salonClosureOn("2026-12-14", [block({}), closure]) === closure);
+  check(
+    "a pending request is drawn apart, as Pendiente, and a rejected one not at all",
+    same(timeOffBands("2026-12-14", "ana", [block({ status: "pending" }), block({ status: "rejected", kind: "day_off" })], range), [
+      { start: 540, end: 1200, label: "Pendiente · Vacaciones", salon: false, pending: true },
+    ]),
+    timeOffBands("2026-12-14", "ana", [block({ status: "pending" }), block({ status: "rejected" })], range),
+  );
+  check(
+    "an approved block is drawn as before, above a pending one",
+    same(
+      timeOffBands("2026-12-14", "ana", [block({ status: "pending", kind: "day_off" }), block({ status: "approved", kind: "other", startTime: "10:00", endTime: "11:00" })], range).map(
+        (b) => [b.label, !!b.pending],
+      ),
+      [
+        ["Ausencia", false],
+        ["Pendiente · Día libre", true],
+      ],
+    ),
+  );
+  check(
+    "a pending closure (never sent) would not close the day",
+    salonClosureOn("2026-12-14", [{ ...closure, status: "pending" }]) === null,
+  );
+  check(
+    "a partial closure is not a closed day",
+    salonClosureOn("2026-12-14", [{ ...closure, startTime: "14:00", endTime: "20:00" }]) === null,
+  );
+
+  // The mobile agenda has no columns to shade: it says who is away in words.
+  check(
+    "the agenda lists a professional's own absences, approved first, then pending",
+    same(
+      agendaAbsences("2026-12-14", "ana", [
+        block({ status: "pending", kind: "day_off" }),
+        block({ kind: "other", startTime: "10:00", endTime: "12:00" }),
+        block({ professionalId: "bea" }),
+        block({ status: "rejected" }),
+        block({ startDate: "2026-12-15", endDate: "2026-12-16" }),
+      ]),
+      [
+        { label: "Ausencia", startTime: "10:00", endTime: "12:00", pending: false },
+        { label: "Día libre", startTime: null, endTime: null, pending: true },
+      ],
+    ),
+    agendaAbsences("2026-12-14", "ana", [block({ status: "pending", kind: "day_off" })]),
+  );
+  check(
+    "the agenda leaves an all-day closure to the banner, but lists a partial one",
+    same(
+      agendaAbsences("2026-12-14", "ana", [closure, { ...closure, startTime: "16:00", endTime: "20:00" }]).map((a) => a.label),
+      ["Salón cerrado — Navidad"],
+    ),
+  );
+}
+
+// --- The salon's own hours (Tenant.openingHours, lib/salon-hours.ts) ---
+{
+  const SALON = [
+    { day: "monday", openTime: "10:00", closeTime: "14:00" },
+    { day: "monday", openTime: "17:00", closeTime: "20:00" },
+    { day: "saturday", openTime: "10:00", closeTime: "14:00" },
+  ];
+  const NINE_TO_SEVEN = ["monday", "tuesday", "sunday"].map((day) => ({ day, openTime: "09:00", closeTime: "19:00" }));
+  check(
+    "the grid covers the salon's hours that weekday and the shifts",
+    same(gridHours({ day: "2026-11-02", openingHours: SALON }), { startHour: 10, endHour: 20 }) &&
+      same(gridHours({ day: "2026-11-02", openingHours: SALON, workingHours: [NINE_TO_SEVEN] }), { startHour: 9, endHour: 20 }),
+    gridHours({ day: "2026-11-02", openingHours: SALON, workingHours: [NINE_TO_SEVEN] }),
+  );
+  check(
+    "a weekday the salon is closed: the default grid",
+    same(gridHours({ day: "2026-11-03", openingHours: SALON }), { startHour: 8, endHour: 20 }),
+  );
+  check(
+    "shaded outside the shift AND outside the salon's hours (its lunch too)",
+    same(offShiftBands("2026-11-02", NINE_TO_SEVEN, range, SALON), [
+      { start: 480, end: 600 },
+      { start: 840, end: 1020 },
+      { start: 1140, end: 1260 },
+    ]),
+    offShiftBands("2026-11-02", NINE_TO_SEVEN, range, SALON),
+  );
+  check(
+    "a professional with no schedule is shaded outside the salon's hours",
+    same(offShiftBands("2026-11-02", [], range, SALON), [
+      { start: 480, end: 600 },
+      { start: 840, end: 1020 },
+      { start: 1200, end: 1260 },
+    ]),
+  );
+  check(
+    "a weekday the salon is closed is shaded entirely, whoever has a shift",
+    same(offShiftBands("2026-11-08", NINE_TO_SEVEN, range, SALON), [{ start: 480, end: 1260 }]),
+  );
+  check(
+    "the legacy { open, close } is the salon's hours every day",
+    same(offShiftBands("2026-11-08", [], range, { open: "09:00", close: "20:00" }), [
+      { start: 480, end: 540 },
+      { start: 1200, end: 1260 },
+    ]) && same(gridHours({ day: "2026-11-08", openingHours: { open: "09:30", close: "18:15" } }), { startHour: 9, endHour: 19 }),
+  );
+  check(
+    "no salon hours (none, {}, [] or the old wizard's days): nothing changes",
+    [undefined, {}, [], { mon: { open: "10:00", close: "12:00" } }].every((openingHours) =>
+      same(offShiftBands("2026-11-02", [], range, openingHours), []),
+    ),
+  );
+  check(
+    "the closed-weekday banner",
+    salonClosedWeekday("2026-11-08", SALON) &&
+      !salonClosedWeekday("2026-11-02", SALON) &&
+      !salonClosedWeekday("2026-11-08", {}) &&
+      !salonClosedWeekday("2026-11-08", { open: "09:00", close: "20:00" }),
+  );
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

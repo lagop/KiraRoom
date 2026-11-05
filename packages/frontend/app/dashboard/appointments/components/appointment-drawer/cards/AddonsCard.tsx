@@ -1,5 +1,6 @@
 import React from "react";
-import { Clock, DollarSign, Scissors, X } from "lucide-react";
+import { Clock, Scissors, X } from "lucide-react";
+import { formatEuros } from "../../appointment-drawer.utils";
 import type { CatalogService } from "../hooks/useAppointmentCatalog";
 import type { Appointment } from "../types";
 
@@ -47,6 +48,7 @@ export interface AddonsCardProps {
     selectAddOn: string;
     add: string;
     quantity: string;
+    remove: string;
   };
 }
 
@@ -75,6 +77,7 @@ export function AddonsCard({
             </h3>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-2">
               <select
+                aria-label={labels.selectAddOn}
                 value={selectedAddon}
                 onChange={(e) => onSelectedAddonChange(e.target.value)}
                 className="border border-gray-300 rounded px-2 py-1 text-sm w-full sm:flex-1 min-w-0"
@@ -86,13 +89,14 @@ export function AddonsCard({
                   )
                   .map((service) => (
                     <option key={service.id} value={service.id}>
-                      {service.name} - ${service.price}
+                      {service.name} - {formatEuros(service.price)}
                     </option>
                   ))}
               </select>
               <input
                 type="number"
                 min="1"
+                aria-label={labels.quantity}
                 value={addonQuantity}
                 onChange={(e) =>
                   onAddonQuantityChange(Number(e.target.value))
@@ -114,13 +118,15 @@ export function AddonsCard({
                   className="flex items-center justify-between gap-2 bg-gray-50 p-2 rounded"
                 >
                   <span className="text-sm truncate">
-                    {addon.name} - ${(Number(addon.price) || 0).toFixed(2)} x
+                    {addon.name} - {formatEuros(addon.price)} ×{" "}
                     {addon.quantity}
                   </span>
                   <button
                     type="button"
                     onClick={() => onRemoveAddon(index)}
                     className="text-red-600 hover:text-red-800 flex-shrink-0"
+                    aria-label={labels.remove}
+                    title={labels.remove}
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -159,8 +165,7 @@ export function AddonsCard({
                   </div>
                   <div className="text-left sm:text-right">
                     <span className="text-sm font-medium text-gray-900">
-                      <DollarSign className="w-4 h-4 inline mr-1" />
-                      ${(Number(addon.price) || 0).toFixed(2)}
+                      {formatEuros(addon.price)}
                     </span>
                     <div className="text-xs text-gray-500 mt-1">
                       <Clock className="w-3 h-3 inline mr-1" />

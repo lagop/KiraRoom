@@ -2,35 +2,42 @@
 
 import { useState, useEffect } from "react";
 import {
-  LayoutDashboard,
   Settings,
   Store,
-  Globe,
-  Bell,
   Calendar,
-  CreditCard,
-  BarChart3,
-  Palette,
   Users,
-  Lock,
-  Clock,
-  ChevronRight,
   Check,
-  ShieldAlert,
+  MessageCircle,
 } from "lucide-react";
-import { StripeSettingsContent } from "./stripe-settings-content";
 import apiClient from "@/lib/api";
 import { getCurrentUser } from "@/lib/utils";
 import { useTranslations } from "@/lib/use-translation";
-import { SALON_TIMEZONES, DEFAULT_SALON_TIMEZONE } from "@kira/shared";
+import { SALON_TIMEZONES, type SalonAddress } from "@kira/shared";
+import { CanaryTimezoneHint } from "@/components/settings/CanaryTimezoneHint";
+import { SalonHoursField } from "@/components/settings/SalonHoursField";
+import { salonHoursProblem } from "@/lib/salon-hours";
+import {
+  BOOKING_SLOT_OPTIONS,
+  settingsFromTenant,
+  tenantUpdateFrom,
+} from "@/lib/general-settings";
+import Link from "next/link";
 
+/**
+ * The fields of each tab. Every one is saved on the tenant
+ * (lib/general-settings.ts), except the cross-booking switch, which has its
+ * own endpoint. The page used to list many more -- fees, payment methods,
+ * user roles, session and password policies, goals, themes, message texts --
+ * that nothing saved or read; they were shown disabled under "Próximamente"
+ * and are gone. Where the real setting lives on another page, the tab links
+ * to it (TAB_LINKS).
+ */
 const defaultSettingsData = {
   general: [
     {
       id: "businessName",
       label: "Nombre del salón/negocio",
       type: "text",
-      value: "Kira Room",
       description:
         "El nombre que se muestra en el dashboard y en la interfaz de usuario",
     },
@@ -38,73 +45,45 @@ const defaultSettingsData = {
       id: "address",
       label: "Dirección del salón",
       type: "text",
-      value: "Calle Principal 123, Local 4",
       description: "Ubicación visible en el perfil y en la página de contacto",
     },
     {
       id: "contactPhone",
       label: "Teléfono",
       type: "text",
-      value: "+34 123 456 789",
       description: "Número de contacto principal",
     },
     {
       id: "contactEmail",
       label: "Correo electrónico",
       type: "email",
-      value: "info@kiraroom.com",
       description: "Correo electrónico de contacto",
     },
     {
       id: "instagram",
       label: "Instagram",
       type: "text",
-      value: "@kiraroom_official",
-      description: "Perfil de Instagram",
+      placeholder: "@tusalon",
+      description:
+        "Tu usuario (@tusalon) o el enlace a tu perfil. Aparece en tu página de reservas.",
     },
     {
       id: "facebook",
       label: "Facebook",
       type: "text",
-      value: "KiraRoomOfficial",
-      description: "Página de Facebook",
+      placeholder: "tusalon",
+      description:
+        "El nombre de tu página o su enlace. Aparece en tu página de reservas.",
     },
     {
-      id: "openingTime",
-      label: "Horario de apertura",
-      type: "time",
-      value: "09:00",
-      description: "Hora de apertura del salón",
-    },
-    {
-      id: "closingTime",
-      label: "Horario de cierre",
-      type: "time",
-      value: "20:00",
-      description: "Hora de cierre del salón",
-    },
-    {
-      id: "workingDays",
-      label: "Días laborables",
-      type: "checkbox-group",
-      value: [
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-      ],
-      options: [
-        { id: "monday", label: "Lunes" },
-        { id: "tuesday", label: "Martes" },
-        { id: "wednesday", label: "Miércoles" },
-        { id: "thursday", label: "Jueves" },
-        { id: "friday", label: "Viernes" },
-        { id: "saturday", label: "Sábado" },
-        { id: "sunday", label: "Domingo" },
-      ],
-      description: "Días de la semana en que el salón está abierto",
+      // The salon's own week, with shifts (components/settings/SalonHoursField).
+      // It replaced a single opening/closing pair for every day and a
+      // "working days" list that was never saved.
+      id: "salonHours",
+      label: "Horario del salón",
+      type: "salon-hours",
+      description:
+        "Los días y horas en que abre el salón. Si cierra a mediodía, añade un segundo tramo.",
     },
   ],
   preferences: [
@@ -112,7 +91,6 @@ const defaultSettingsData = {
       id: "language",
       label: "Idioma",
       type: "select",
-      value: "es",
       options: [
         { id: "es", label: "Español" },
         { id: "en", label: "English" },
@@ -126,80 +104,33 @@ const defaultSettingsData = {
       id: "timezone",
       label: "Zona horaria",
       type: "select",
-      value: DEFAULT_SALON_TIMEZONE,
       options: SALON_TIMEZONES.map((tz) => ({ id: tz.value, label: tz.label })),
       description:
         "Decide la hora de las citas y de los recordatorios que se envían",
     },
-    {
-      id: "currency",
-      label: "Moneda",
-      type: "select",
-      value: "EUR",
-      options: [
-        { id: "EUR", label: "Euro (€)" },
-        { id: "USD", label: "Dólar (USD)" },
-        { id: "GBP", label: "Libra (GBP)" },
-        { id: "JPY", label: "Yen (JPY)" },
-      ],
-      description: "Moneda utilizada en las transacciones",
-    },
-    {
-      id: "dateFormat",
-      label: "Formato de fecha",
-      type: "select",
-      value: "dd/mm/yyyy",
-      options: [
-        { id: "dd/mm/yyyy", label: "DD/MM/YYYY" },
-        { id: "mm/dd/yyyy", label: "MM/DD/YYYY" },
-        { id: "yyyy/mm/dd", label: "YYYY/MM/DD" },
-      ],
-      description: "Formato de visualización de fechas",
-    },
-    {
-      id: "timeFormat",
-      label: "Formato de hora",
-      type: "select",
-      value: "24",
-      options: [
-        { id: "24", label: "24 horas" },
-        { id: "12", label: "12 horas" },
-      ],
-      description: "Formato de visualización de horas",
-    },
-    {
-      id: "notifications",
-      label: "Notificaciones",
-      type: "checkbox-group",
-      value: ["email", "sms", "push"],
-      options: [
-        { id: "email", label: "Email" },
-        { id: "sms", label: "SMS" },
-        { id: "push", label: "Push notifications" },
-      ],
-      description: "Preferencias de notificación",
-    },
+    // No Moneda, Formato de fecha or Formato de hora: euros, DD/MM/YYYY and
+    // 24 h everywhere, and changing them did nothing in the panel.
   ],
   services: [
     {
-      id: "minAppointmentDuration",
-      label: "Duración mínima de citas",
-      type: "number",
-      value: "30",
-      description: "Duración mínima de las citas en minutos",
-    },
-    {
-      id: "appointmentInterval",
-      label: "Intervalo entre citas",
-      type: "number",
-      value: "15",
-      description: "Tiempo de espera entre citas en minutos",
-    },
-    {
-      id: "cancellationPolicy",
-      label: "Tiempo máximo para cancelar",
+      // The step of the slot grid (backend getAvailableSlots), for every
+      // place that offers free times.
+      id: "bookingSlotMinutes",
+      label: "Intervalo de horas al reservar",
       type: "select",
-      value: "24",
+      options: BOOKING_SLOT_OPTIONS.map((m) => ({
+        id: String(m),
+        label: m === 60 ? "Cada hora" : `Cada ${m} minutos`,
+      })),
+      description:
+        "Cada cuánto se ofrece una hora libre en tu página de reservas, el widget, la recepcionista virtual y las sugerencias de la agenda",
+    },
+    {
+      // Informational: clients cancel by telling the salon and nothing
+      // charges a fee. It said "sin cargo", as if a fee applied after it.
+      id: "minCancelHours",
+      label: "Aviso para cancelar (informativo)",
+      type: "select",
       options: [
         { id: "0", label: "Sin política" },
         { id: "2", label: "2 horas" },
@@ -208,293 +139,96 @@ const defaultSettingsData = {
         { id: "24", label: "24 horas" },
         { id: "48", label: "48 horas" },
       ],
-      description: "Tiempo máximo para cancelar una cita sin cargo",
+      description:
+        "Con cuánta antelación pides que te avisen. La recepcionista virtual lo explica a tus clientes; KiraRoom no cobra nada ni impide cancelar.",
     },
     {
-      id: "cancellationFee",
-      label: "Cargo por cancelación",
-      type: "number",
-      value: "20",
-      description: "Porcentaje de cargo por cancelación tardía",
+      id: "cancellationPolicyText",
+      label: "Política de cancelación (informativa)",
+      type: "textarea",
+      maxLength: 1000,
+      placeholder: "Por ejemplo: si no puedes venir, avísanos por WhatsApp con un día de antelación.",
+      description:
+        "Se muestra en tu página de reservas y la recepcionista virtual la explica. No se cobra nada automáticamente.",
     },
     {
-      id: "autoConfirm",
-      label: "Confirmación automática",
+      id: "autoConfirmOnlineBookings",
+      label: "Confirmar automáticamente las reservas online",
       type: "switch",
-      value: "true",
-      description: "Las citas se confirman automáticamente",
+      description:
+        "Las citas que piden tus clientes por la web, el widget o la recepcionista virtual entran ya confirmadas. Desactivado, entran como pendientes hasta que las confirmes.",
+    },
+    {
+      id: "timeOffEmailNotices",
+      label: "Avisar por email de las solicitudes de ausencia",
+      type: "switch",
+      description:
+        "Cada solicitud nueva llega por email a la dueña y a los administradores, y cada respuesta al profesional que la pidió. Desactivado, solo se avisa en las notificaciones del panel.",
     },
   ],
-  payments: [
+  receptionist: [
     {
-      id: "paymentMethods",
-      label: "Métodos de pago aceptados",
-      type: "checkbox-group",
-      value: ["credit-card", "cash", "transfer"],
-      options: [
-        { id: "credit-card", label: "Tarjeta de crédito" },
-        { id: "debit-card", label: "Tarjeta de débito" },
-        { id: "cash", label: "Efectivo" },
-        { id: "transfer", label: "Transferencia bancaria" },
-        { id: "paypal", label: "PayPal" },
-      ],
-      description: "Métodos de pago que acepta el salón",
-    },
-    {
-      id: "urgencyFee",
-      label: "Tarifa de urgencia",
-      type: "number",
-      value: "25",
-      description: "Porcentaje adicional por servicios urgentes",
-    },
-    {
-      id: "specialServiceFee",
-      label: "Servicios especiales",
-      type: "number",
-      value: "15",
-      description: "Porcentaje adicional por servicios especiales",
-    },
-    {
-      id: "taxRate",
-      label: "Tasa de impuestos",
-      type: "number",
-      value: "21",
-      description: "Tasa de impuestos aplicada a los servicios",
+      // Off: the page shows no chat and the public endpoint refuses it.
+      // WhatsApp, Instagram and the rest have their own switches (Canales).
+      id: "webChatEnabled",
+      label: "Chat en mi web",
+      type: "switch",
+      description:
+        "El chat con la recepcionista virtual en tu página de reservas. Desactivado, no se muestra y nadie puede escribir por él. Las conversaciones se leen en Conversaciones.",
     },
   ],
   users: [
     {
-      id: "userRoles",
-      label: "Roles de usuario",
-      type: "checkbox-group",
-      value: ["admin", "professional", "receptionist"],
-      options: [
-        { id: "admin", label: "Administrador" },
-        { id: "professional", label: "Profesional" },
-        { id: "receptionist", label: "Recepcionista" },
-        { id: "client", label: "Cliente" },
-      ],
-      description: "Roles y permisos de los usuarios",
-    },
-    {
       id: "allowProfessionalCrossBooking",
       label: "Permitir que profesionales creen citas para otros",
       type: "switch",
-      value: "false",
       description:
         "Los profesionales pueden crear citas para cualquier profesional activo. Si está desactivado, solo pueden crear citas para sí mismos.",
       adminOnly: true, // Custom flag to show only to owner/admin
     },
+  ],
+};
+
+/** Settings that live on their own page, linked from the tab they used to sit on. */
+const TAB_LINKS: Record<string, Array<{ text: string; href: string; label: string }>> = {
+  general: [
     {
-      id: "sessionTimeout",
-      label: "Tiempo de expiración de sesión",
-      type: "select",
-      value: "30",
-      options: [
-        { id: "15", label: "15 minutos" },
-        { id: "30", label: "30 minutos" },
-        { id: "60", label: "60 minutos" },
-        { id: "120", label: "2 horas" },
-        { id: "0", label: "Nunca" },
-      ],
-      description: "Tiempo de inactividad antes de cerrar la sesión",
-    },
-    {
-      id: "passwordPolicy",
-      label: "Política de contraseñas",
-      type: "select",
-      value: "strong",
-      options: [
-        { id: "simple", label: "Simple" },
-        { id: "medium", label: "Medio" },
-        { id: "strong", label: "Fuerte" },
-      ],
-      description: "Nivel de seguridad de las contraseñas",
-    },
-    {
-      id: "activityHistory",
-      label: "Historial de actividades",
-      type: "switch",
-      value: "true",
-      description: "Registro de actividades de los usuarios",
+      text: "El logo, la descripción y la dirección completa del salón se editan en",
+      href: "/dashboard/settings/salon",
+      label: "Datos del salón",
     },
   ],
-  analytics: [
+  services: [
     {
-      id: "reportFrequency",
-      label: "Frecuencia de reportes",
-      type: "select",
-      value: "weekly",
-      options: [
-        { id: "daily", label: "Diario" },
-        { id: "weekly", label: "Semanal" },
-        { id: "monthly", label: "Mensual" },
-        { id: "quarterly", label: "Trimestral" },
-        { id: "yearly", label: "Anual" },
-      ],
-      description: "Frecuencia de generación de reportes",
-    },
-    {
-      id: "revenueGoal",
-      label: "Meta de ingresos",
-      type: "number",
-      value: "5000",
-      description: "Meta mensual de ingresos en €",
-    },
-    {
-      id: "appointmentGoal",
-      label: "Meta de citas",
-      type: "number",
-      value: "200",
-      description: "Meta mensual de citas",
-    },
-    {
-      id: "newClientsGoal",
-      label: "Meta de clientes nuevos",
-      type: "number",
-      value: "50",
-      description: "Meta mensual de clientes nuevos",
-    },
-    {
-      id: "dashboardWidgets",
-      label: "Widgets del dashboard",
-      type: "checkbox-group",
-      value: ["stats", "appointments", "revenue", "clients"],
-      options: [
-        { id: "stats", label: "Estadísticas generales" },
-        { id: "appointments", label: "Citas recientes" },
-        { id: "revenue", label: "Ingresos" },
-        { id: "clients", label: "Clientes nuevos" },
-        { id: "popular-services", label: "Servicios populares" },
-      ],
-      description: "Widgets visibles en el dashboard",
+      text: "Los mensajes de confirmación y recordatorio de cita los envía KiraRoom; los de WhatsApp, con sus plantillas aprobadas por Meta, se gestionan en",
+      href: "/dashboard/settings/whatsapp",
+      label: "WhatsApp Business",
     },
   ],
-  interface: [
+  receptionist: [
     {
-      id: "colorTheme",
-      label: "Tema de color",
-      type: "select",
-      value: "purple",
-      options: [
-        { id: "purple", label: "Morado" },
-        { id: "blue", label: "Azul" },
-        { id: "green", label: "Verde" },
-        { id: "pink", label: "Rosa" },
-      ],
-      description: "Tema de color de la interfaz",
+      text: "WhatsApp, Instagram, Facebook y Telegram se conectan en",
+      href: "/dashboard/settings/channels",
+      label: "Canales",
     },
     {
-      id: "logo",
-      label: "Logo del salón",
-      type: "file",
-      value: "",
-      description: "Logo que se muestra en la interfaz",
+      text: "Lo que han hablado tus clientas con la recepcionista está en",
+      href: "/dashboard/conversaciones",
+      label: "Conversaciones",
     },
+  ],
+  users: [
     {
-      id: "welcomeMessage",
-      label: "Mensaje de bienvenida",
-      type: "textarea",
-      value: "¡Bienvenido a Kira Room! Estamos emocionados de tenerte aquí.",
-      description: "Mensaje mostrado al iniciar sesión",
-    },
-    {
-      id: "appointmentConfirmMessage",
-      label: "Mensaje de confirmación",
-      type: "textarea",
-      value: "Tu cita ha sido confirmada. Gracias por elegir Kira Room!",
-      description: "Mensaje de confirmación de cita",
-    },
-    {
-      id: "appointmentReminderMessage",
-      label: "Recordatorio de cita",
-      type: "textarea",
-      value:
-        "Recordatorio: Tu cita es mañana a las [hora]. ¡No olvides presentarte 10 minutos antes!",
-      description: "Mensaje de recordatorio de cita",
+      text: "La verificación en dos pasos de tu cuenta está en",
+      href: "/dashboard/settings/seguridad",
+      label: "Seguridad",
     },
   ],
 };
 
-/**
- * The fields this page can actually save, and where each lives on the tenant.
- *
- * This page used to prefill every field with invented values ("Kira Room",
- * "Calle Principal 123", "+34 123 456 789", 09:00-20:00, a 21% tax rate...),
- * save only language, currency and timezone, and then say "settings updated"
- * for all of it. Fields not listed here have no backend yet: they render
- * disabled and empty, marked as coming soon, and are never reported as saved.
- */
-const PERSISTED_FIELDS = new Set([
-  "businessName",
-  "address",
-  "contactPhone",
-  "contactEmail",
-  "openingTime",
-  "closingTime",
-  "language",
-  "timezone",
-  "currency",
-  "dateFormat",
-  "timeFormat",
-  "cancellationPolicy",
-  "allowProfessionalCrossBooking",
-]);
-
-type Tenant = Awaited<ReturnType<typeof apiClient.getTenant>>;
-type TenantUpdate = Parameters<typeof apiClient.updateTenant>[0];
-
-/** Tenant row -> the page's field values. */
-function settingsFromTenant(tenant: Tenant): Record<string, any> {
-  const hours = (tenant.openingHours ?? {}) as { open?: unknown; close?: unknown };
-  return {
-    businessName: tenant.name ?? "",
-    address: tenant.street ?? "",
-    contactPhone: tenant.phone ?? "",
-    contactEmail: tenant.email ?? "",
-    openingTime: typeof hours.open === "string" ? hours.open : "",
-    closingTime: typeof hours.close === "string" ? hours.close : "",
-    language: tenant.language,
-    timezone: tenant.timezone,
-    currency: tenant.currency,
-    // Stored as "DD/MM/YYYY" and "24h"; the page's options are "dd/mm/yyyy"
-    // and "24".
-    dateFormat: (tenant.dateFormat ?? "DD/MM/YYYY").toLowerCase(),
-    timeFormat: tenant.timeFormat === "12h" ? "12" : "24",
-    cancellationPolicy: String(tenant.minCancelHours ?? 24),
-  };
-}
-
-/** Field values -> the PATCH /auth/tenant body, only for what changed. */
-function tenantUpdateFrom(
-  settings: Record<string, any>,
-  saved: Record<string, any>,
-): TenantUpdate {
-  const changed = (id: string) => settings[id] !== saved[id];
-  const update: TenantUpdate = {};
-  if (changed("businessName")) update.name = settings.businessName;
-  if (changed("address")) update.street = settings.address;
-  if (changed("contactPhone")) update.phone = settings.contactPhone;
-  if (changed("contactEmail")) update.email = settings.contactEmail;
-  if (changed("language")) update.language = settings.language;
-  if (changed("timezone")) update.timezone = settings.timezone;
-  if (changed("currency")) update.currency = settings.currency;
-  if (changed("dateFormat")) update.dateFormat = String(settings.dateFormat).toUpperCase();
-  if (changed("timeFormat")) update.timeFormat = settings.timeFormat === "12" ? "12h" : "24h";
-  if (changed("cancellationPolicy")) update.minCancelHours = Number(settings.cancellationPolicy);
-  if (
-    (changed("openingTime") || changed("closingTime")) &&
-    settings.openingTime &&
-    settings.closingTime
-  ) {
-    update.openingHours = { open: settings.openingTime, close: settings.closingTime };
-  }
-  return update;
-}
-
-/** An empty value of the right shape, for fields with nothing to show. */
+/** An empty value of the right shape, for fields with nothing to show yet. */
 function emptyValueFor(field: { type: string }) {
-  if (field.type === "checkbox-group") return [];
+  if (field.type === "salon-hours") return null;
   if (field.type === "switch") return "false";
   return "";
 }
@@ -514,6 +248,8 @@ export default function SettingsPage() {
   });
   // What the tenant holds, as field values: the baseline for "changed".
   const [savedSettings, setSavedSettings] = useState<Record<string, any>>({});
+  // Where the salon is, to catch a Canarian salon left on Madrid time.
+  const [address, setAddress] = useState<SalonAddress>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   // PATCH /auth/tenant is owner/admin only. Read after mount: reading
@@ -525,6 +261,7 @@ export default function SettingsPage() {
   }, []);
   const [professionalCrossBooking, setProfessionalCrossBooking] =
     useState<boolean>(false);
+  const [savedCrossBooking, setSavedCrossBooking] = useState<boolean>(false);
   const t = useTranslations();
 
   useEffect(() => {
@@ -533,6 +270,13 @@ export default function SettingsPage() {
         const tenant = await apiClient.getTenant();
         const fromTenant = settingsFromTenant(tenant);
         setSavedSettings(fromTenant);
+        setAddress({
+          street: tenant.street,
+          city: tenant.city,
+          postalCode: tenant.postalCode,
+          state: tenant.state,
+          country: tenant.country,
+        });
         setSettings((prev) => ({ ...prev, ...fromTenant }));
 
         // Load professional cross-booking setting
@@ -542,6 +286,7 @@ export default function SettingsPage() {
           setProfessionalCrossBooking(
             crossBookingSetting.allowProfessionalCrossBooking,
           );
+          setSavedCrossBooking(crossBookingSetting.allowProfessionalCrossBooking);
         } catch (error) {
           console.error(
             "Error loading professional cross-booking setting:",
@@ -569,19 +314,22 @@ export default function SettingsPage() {
     setSuccess(false);
   };
 
+  // "Cancelar" puts back what is saved; it used to only clear the tick.
+  const handleCancel = () => {
+    setSettings((prev) => ({ ...prev, ...savedSettings }));
+    setProfessionalCrossBooking(savedCrossBooking);
+    setSaveError(null);
+    setSuccess(false);
+  };
+
   const handleSubmit = async () => {
     setSaveError(null);
 
-    // Both or neither: saving one alone was dropped while "updated" showed.
-    // And open before close: a reversed window leaves no bookable slot.
-    const open = settings.openingTime;
-    const close = settings.closingTime;
-    if ((open && !close) || (!open && close)) {
-      setSaveError(t("settings.hours_need_both"));
-      return;
-    }
-    if (open && close && open >= close) {
-      setSaveError(t("settings.hours_open_before_close"));
+    // The salon's week, checked here so the reason shows next to the day
+    // (the editor) and here, rather than as a 400 after saving.
+    const hoursProblem = settings.salonHours ? salonHoursProblem(settings.salonHours) : null;
+    if (hoursProblem) {
+      setSaveError(hoursProblem);
       return;
     }
 
@@ -590,17 +338,16 @@ export default function SettingsPage() {
       const tenantUpdate = tenantUpdateFrom(settings, savedSettings);
       if (Object.keys(tenantUpdate).length > 0) {
         await apiClient.updateTenant(tenantUpdate);
-        setSavedSettings((prev) => ({
-          ...prev,
-          ...Object.fromEntries(
-            Array.from(PERSISTED_FIELDS).map((id) => [id, settings[id]]),
-          ),
-        }));
+        // Read back: the server stores a handle as the profile URL.
+        const fromTenant = settingsFromTenant(await apiClient.getTenant());
+        setSavedSettings(fromTenant);
+        setSettings((prev) => ({ ...prev, ...fromTenant }));
       }
 
       await apiClient.updateProfessionalCrossBookingSetting(
         professionalCrossBooking,
       );
+      setSavedCrossBooking(professionalCrossBooking);
 
       setSuccess(true);
     } catch (error) {
@@ -613,21 +360,14 @@ export default function SettingsPage() {
   };
 
   const renderInput = (field: any) => {
-    const isAdvanced = ["payments", "analytics", "interface"].includes(
-      activeTab,
-    );
-
-    const isAdminOnly = field.adminOnly;
-    // No backend for it yet, or not the caller's to change.
-    const unavailable = !PERSISTED_FIELDS.has(field.id);
-    const locked = isAdvanced || unavailable || !canAccessAdminSettings;
-
-    const baseClassName = `w-full ${locked ? "opacity-50 cursor-not-allowed" : ""}`;
-
     // Skip rendering admin-only fields if user doesn't have permission
-    if (isAdminOnly && !canAccessAdminSettings) {
+    if (field.adminOnly && !canAccessAdminSettings) {
       return null;
     }
+
+    // Only the owner or an admin may change the salon's settings.
+    const locked = !canAccessAdminSettings;
+    const className = `w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${locked ? "opacity-50 cursor-not-allowed" : ""}`;
 
     switch (field.type) {
       case "text":
@@ -636,31 +376,23 @@ export default function SettingsPage() {
           <input
             type={field.type}
             value={settings[field.id]}
+            placeholder={field.placeholder}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             disabled={locked}
-            className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
+            className={className}
           />
         );
 
-      case "number":
+      case "textarea":
         return (
-          <input
-            type="number"
+          <textarea
             value={settings[field.id]}
+            placeholder={field.placeholder}
+            maxLength={field.maxLength}
+            rows={3}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             disabled={locked}
-            className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
-          />
-        );
-
-      case "time":
-        return (
-          <input
-            type="time"
-            value={settings[field.id]}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            disabled={locked}
-            className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
+            className={className}
           />
         );
 
@@ -670,7 +402,7 @@ export default function SettingsPage() {
             value={settings[field.id]}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
             disabled={locked}
-            className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors ${baseClassName}`}
+            className={className}
           >
             {settings[field.id] === "" && <option value="" />}
             {settings[field.id] !== "" &&
@@ -685,19 +417,8 @@ export default function SettingsPage() {
           </select>
         );
 
-      case "textarea":
-        return (
-          <textarea
-            value={settings[field.id] ?? ""}
-            disabled={locked}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
-            rows={3}
-            className={`px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-colors resize-none ${baseClassName}`}
-          />
-        );
-
-      case "switch":
-        // Special handling for professional cross-booking setting
+      case "switch": {
+        // The cross-booking setting has its own endpoint and state.
         const isProfessionalCrossBooking =
           field.id === "allowProfessionalCrossBooking";
         const checked = isProfessionalCrossBooking
@@ -713,7 +434,7 @@ export default function SettingsPage() {
 
         return (
           <label
-            className={`relative inline-flex items-center cursor-pointer ${isAdvanced ? "cursor-not-allowed" : ""}`}
+            className={`relative inline-flex items-center ${locked ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
           >
             <input
               type="checkbox"
@@ -725,82 +446,32 @@ export default function SettingsPage() {
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
           </label>
         );
+      }
 
-      case "checkbox-group":
-        const currentValue = settings[field.id] ?? [];
-        return (
-          <div className="flex flex-wrap gap-2">
-            {field.options.map((option: any) => (
-              <label
-                key={option.id}
-                className={`flex items-center space-x-2 p-2 border rounded-lg cursor-pointer transition-colors ${
-                  isAdvanced
-                    ? "opacity-50 cursor-not-allowed bg-gray-50"
-                    : "hover:bg-gray-50"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={currentValue.includes(option.id)}
-                  disabled={locked}
-                  onChange={(e) => {
-                    const newValue = e.target.checked
-                      ? [...currentValue, option.id]
-                      : currentValue.filter((id: string) => id !== option.id);
-                    handleFieldChange(field.id, newValue);
-                  }}
-                  className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 focus:ring-2"
-                />
-                <span className="text-sm">{option.label}</span>
-              </label>
-            ))}
-          </div>
-        );
-
-      case "file":
-        return (
-          <div
-            className={`p-4 border-2 border-dashed border-gray-300 rounded-lg text-center ${
-              isAdvanced
-                ? "opacity-50 cursor-not-allowed"
-                : "hover:border-purple-500 hover:bg-purple-50"
-            }`}
-          >
-            <input
-              type="file"
-              disabled={locked}
-              onChange={(e) =>
-                handleFieldChange(field.id, e.target.files?.[0] || null)
-              }
-              className="hidden"
-              accept="image/*"
-            />
-            <label
-              className={`cursor-pointer ${isAdvanced ? "cursor-not-allowed" : ""}`}
-            >
-              <Palette className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-              <div className="text-sm font-medium text-gray-600">
-                {settings[field.id] ? "Cambiar logo" : "Subir logo"}
-              </div>
-            </label>
-          </div>
-        );
+      case "salon-hours":
+        // Nothing to show until the tenant is read: never a made-up week.
+        return settings.salonHours ? (
+          <SalonHoursField
+            value={settings.salonHours}
+            onChange={(next) => handleFieldChange("salonHours", next)}
+            disabled={locked}
+          />
+        ) : null;
 
       default:
         return null;
     }
   };
 
-  const isAdvancedTab = ["analytics", "interface"].includes(activeTab);
-
   const tabConfig = [
     { id: "general", label: t("settings.general"), icon: Store },
     { id: "preferences", label: t("settings.preferences"), icon: Settings },
     { id: "services", label: t("settings.services"), icon: Calendar },
-    { id: "payments", label: t("settings.payments"), icon: CreditCard },
+    // No "Pagos" tab: it asked salons for their own Stripe keys, which no
+    // flow uses (there are no online payments from clients yet). The keys
+    // already saved stay stored, encrypted. The tax rate is in Ajustes fiscales.
+    { id: "receptionist", label: t("settings.receptionist"), icon: MessageCircle },
     { id: "users", label: t("settings.users"), icon: Users },
-    { id: "analytics", label: t("settings.analytics"), icon: BarChart3 },
-    { id: "interface", label: t("settings.interface"), icon: Palette },
   ];
 
   return (
@@ -848,43 +519,45 @@ export default function SettingsPage() {
               {t("settings.save_failed")}: {saveError}
             </div>
           )}
-          {isAdvancedTab && (
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start space-x-3">
-              <ShieldAlert className="w-5 h-5 text-yellow-600 mt-0.5" />
-              <div className="flex-1">
-                <h3 className="font-medium text-yellow-800">
-                  Funcionalidad Premium
-                </h3>
-                <p className="text-sm text-yellow-700 mt-1">
-                  Esta sección estará disponible en el plan avanzado de
-                  KiraRoom. Contacta a soporte para más información.
-                </p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-yellow-500" />
-            </div>
-          )}
 
-          {activeTab === "payments" ? (
-            <StripeSettingsContent />
-          ) : (defaultSettingsData as any)[activeTab] ? (
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              {(defaultSettingsData as any)[activeTab].map((field: any) => (
-                <div key={field.id} className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700">
-                    {field.label}
-                    {!PERSISTED_FIELDS.has(field.id) && (
-                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-500">
-                        {t("settings.coming_soon")}
-                      </span>
+          {(defaultSettingsData as any)[activeTab] ? (
+            <>
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                {(defaultSettingsData as any)[activeTab].map((field: any) => (
+                  <div
+                    key={field.id}
+                    className={`space-y-2 ${field.type === "salon-hours" || field.type === "textarea" ? "sm:col-span-2" : ""}`}
+                  >
+                    <label className="block text-sm font-medium text-gray-700">
+                      {field.label}
+                    </label>
+                    {field.description && (
+                      <p className="text-xs text-gray-500">{field.description}</p>
                     )}
-                  </label>
-                  {field.description && (
-                    <p className="text-xs text-gray-500">{field.description}</p>
-                  )}
-                  {renderInput(field)}
-                </div>
+                    {renderInput(field)}
+                    {field.id === "timezone" && canAccessAdminSettings && (
+                      <CanaryTimezoneHint
+                        timezone={settings.timezone}
+                        address={address}
+                        onApply={(tz) => handleFieldChange("timezone", tz)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+              {(TAB_LINKS[activeTab] ?? []).map((link) => (
+                <p
+                  key={link.href}
+                  className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600"
+                >
+                  {link.text}{" "}
+                  <Link href={link.href} className="font-medium text-purple-600 hover:text-purple-700">
+                    {link.label}
+                  </Link>
+                  .
+                </p>
               ))}
-            </div>
+            </>
           ) : (
             <div className="text-center py-8">
               <p className="text-gray-500">
@@ -893,38 +566,35 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {!isAdvancedTab && (
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end sm:space-x-3 mt-8 pt-6 border-t border-gray-200">
-              <button
-                onClick={() => setSuccess(false)}
-                className="px-6 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={loading || !!loadError || !canAccessAdminSettings}
-                className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                {loading ? (
-                  <>
-                    <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                    <span>{t("common.saving")}</span>
-                  </>
-                ) : success ? (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>{t("settings.settings_updated")}</span>
-                  </>
-                ) : (
-                  <span>{t("settings.save_changes")}</span>
-                )}
-              </button>
-            </div>
-          )}
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end sm:space-x-3 mt-8 pt-6 border-t border-gray-200">
+            <button
+              onClick={handleCancel}
+              className="px-6 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={loading || !!loadError || !canAccessAdminSettings}
+              className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  <span>{t("common.saving")}</span>
+                </>
+              ) : success ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>{t("settings.settings_updated")}</span>
+                </>
+              ) : (
+                <span>{t("settings.save_changes")}</span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-

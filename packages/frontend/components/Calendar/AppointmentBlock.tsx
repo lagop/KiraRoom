@@ -4,30 +4,40 @@ import { useDraggable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { Appointment } from "./types";
 import { Card } from "@/components/ui/Card";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
+import { salonClock, salonTime } from "./salon-time";
+import { useSalonTimeZone } from "./SalonTimeZone";
+import { SLOT_HEIGHT, minutesToTop, type Lane } from "./day-grid";
 
 interface AppointmentBlockProps {
   appointment: Appointment;
+  /** First hour of the grid it is drawn on. */
+  startHour?: number;
+  /** Its lane among the overlapping appointments of its column. */
+  lane?: Lane;
+  /**
+   * A cancelled or no-show appointment: drawn faded behind the bookings, and
+   * let clicks through to the slot under it, which is free again.
+   */
+  ghost?: boolean;
   isDragging?: boolean;
   isDragOverlay?: boolean;
   onClick?: (appointmentId: string) => void;
   onEditClick?: (appointmentId: string) => void;
+  t: (key: string, params?: Record<string, any>) => string;
 }
-
-const SLOT_HEIGHT = 24; // 15min = 24px
-const START_HOUR = 8;
-const CARD_WIDTH = 256; // Standard width for appointment cards
 
 export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   appointment,
+  startHour = 8,
+  lane = { lane: 0, lanes: 1 },
+  ghost = false,
   isDragging,
   isDragOverlay = false,
   onClick,
   onEditClick,
+  t,
 }) => {
-  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
-  const isRightMouseDown = useRef(false);
+  const timeZone = useSalonTimeZone();
   const lastClickTime = useRef<number>(0);
   
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
@@ -36,45 +46,16 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
       type: "appointment",
       appointment,
     },
+    disabled: ghost,
   });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Only allow drag with right mouse button (button === 2)
-    if (e.button === 2) {
-      isRightMouseDown.current = true;
-      dragStartPos.current = { x: e.clientX, y: e.clientY };
-      if (listeners?.onMouseDown) {
-        listeners.onMouseDown(e);
-      }
-    }
-  };
-
-  const handleMouseUp = (e: React.MouseEvent) => {
-    // Only handle right mouse button for drag
-    if (e.button === 2 && dragStartPos.current) {
-      isRightMouseDown.current = false;
-      dragStartPos.current = null;
-      if (listeners?.onMouseUp) {
-        listeners.onMouseUp(e);
-      }
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    // Only allow drag move if right mouse button is down
-    if (isRightMouseDown.current && listeners?.onMouseMove) {
-      listeners.onMouseMove(e);
-    }
-  };
 
   const handleClick = (e: React.MouseEvent) => {
     // Only handle left mouse button (button === 0) for click
     if (e.button === 0) {
-      // Extract original appointment ID from calendar appointment ID
-      // Calendar appointment IDs are in format: `${appointmentId}-${index}` for multi-service
-      const originalAppointmentId = appointment.id.includes('-')
-        ? appointment.id.substring(0, appointment.id.lastIndexOf('-'))
-        : appointment.id;
+      // The appointment, not the block: block ids of a multi-service visit
+      // are "<appointmentId>-<index>", and cutting a plain UUID at its last
+      // dash broke the id of every single-service appointment.
+      const originalAppointmentId = appointment.appointmentId ?? appointment.id;
       
        // Double-click detection for edit mode
        const now = Date.now();
@@ -96,22 +77,27 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   };
 
   const style = useMemo(() => {
+    // On the salon's clock: the grid's rows are the salon's hours.
     const start = new Date(appointment.start);
     const end = new Date(appointment.end);
-    const startMinutes =
-      (start.getHours() - START_HOUR) * 60 + start.getMinutes();
     const duration = (end.getTime() - start.getTime()) / 1000 / 60;
+    // Its share of the column: the cards were a fixed 256px, wider than a
+    // narrow column and on top of each other when two overlapped.
+    const share = 100 / lane.lanes;
 
     return {
-      top: (startMinutes / 15) * SLOT_HEIGHT,
+      top: minutesToTop(salonClock(start, timeZone).minutes, startHour),
       height: (duration / 15) * SLOT_HEIGHT,
-      width: CARD_WIDTH,
+      left: `calc(${lane.lane * share}% + 2px)`,
+      width: `calc(${share}% - 4px)`,
       transform: transform
         ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
         : undefined,
-      zIndex: isDragging ? 1000 : 1,
+      zIndex: isDragging ? 1000 : ghost ? 0 : 1,
     };
-  }, [appointment, transform, isDragging]);
+  }, [appointment, transform, isDragging, timeZone, startHour, lane.lane, lane.lanes, ghost]);
+
+  const statusLabel = appointment.status ? t(`appointments.status_${appointment.status}`) : undefined;
 
   const getStatusStyles = (status?: string) => {
     switch (status) {
@@ -147,8 +133,9 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
   // If this is the DragOverlay version, use Card component with proper styling
   if (isDragOverlay) {
     // For DragOverlay, use the same Card component but with transform positioning
+    // The overlay takes the size of the dragged block (dnd-kit measures it).
     const overlayStyle = {
-      width: style.width,
+      width: "100%",
       height: style.height,
       transform: transform
         ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
@@ -171,14 +158,37 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         onContextMenu={handleContextMenu}
       >
         <div className="text-xs font-medium truncate">
-          {appointment.clientName || "Bloqueado"}
+          {appointment.isTest && (
+            <span className="mr-1 rounded bg-amber-200 px-1 text-[10px] font-semibold uppercase text-amber-900">
+              {t("appointments.calendarView.test")}
+            </span>
+          )}
+          {appointment.clientName || t("appointments.calendarView.blocked")}
         </div>
         <div className="text-xs opacity-80 truncate">
           {appointment.serviceName}
         </div>
         <div className="text-xs opacity-60 mt-1">
-          {format(new Date(appointment.start), "HH:mm", { locale: es })} -{" "}
-          {format(new Date(appointment.end), "HH:mm", { locale: es })}</div>
+          {salonTime(appointment.start, timeZone)} -{" "}
+          {salonTime(appointment.end, timeZone)}</div>
+      </Card>
+    );
+  }
+
+  if (ghost) {
+    return (
+      <Card
+        style={style}
+        aria-hidden
+        className={cn(
+          "absolute p-2 pointer-events-none overflow-hidden border-dashed shadow-none opacity-60",
+          typeStyles[appointment.type],
+        )}
+      >
+        <div className="text-xs font-medium truncate line-through">
+          {appointment.clientName || t("appointments.calendarView.blocked")}
+        </div>
+        <div className="text-xs truncate">{statusLabel}</div>
       </Card>
     );
   }
@@ -189,13 +199,11 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "absolute left-1 right-1 p-2 cursor-move transition-shadow hover:shadow-lg",
+        "absolute p-2 cursor-move overflow-hidden transition-shadow hover:shadow-lg",
         "mt-[1px] mb-[1px]",
         typeStyles[appointment.type]
       )}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseMove={handleMouseMove}
+      title={statusLabel}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       {...attributes}
@@ -209,14 +217,19 @@ export const AppointmentBlock: React.FC<AppointmentBlockProps> = ({
         </div>
       )}
       <div className="text-xs font-medium truncate">
-        {appointment.clientName || "Bloqueado"}
+        {appointment.isTest && (
+          <span className="mr-1 rounded bg-amber-200 px-1 text-[10px] font-semibold uppercase text-amber-900">
+            {t("appointments.calendarView.test")}
+          </span>
+        )}
+        {appointment.clientName || t("appointments.calendarView.blocked")}
       </div>
       <div className="text-xs opacity-80 truncate">
         {appointment.serviceName}
       </div>
       <div className="text-xs opacity-60 mt-1">
-        {format(new Date(appointment.start), "HH:mm", { locale: es })} -{" "}
-        {format(new Date(appointment.end), "HH:mm", { locale: es })}</div>
+        {salonTime(appointment.start, timeZone)} -{" "}
+        {salonTime(appointment.end, timeZone)}</div>
     </Card>
   );
 };

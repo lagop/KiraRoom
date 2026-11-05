@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { TIME_OFF_REQUESTS_CHANGED, changesPendingRequests } from '@/lib/time-off';
 
 interface SocketAuth {
   userId?: string;
-  clientId?: string;
   tenantId: string;
   token?: string;
 }
@@ -22,7 +22,6 @@ interface NotificationData {
 
 interface UseSocketOptions {
   userId?: string;
-  clientId?: string;
   tenantId: string;
   token?: string;
   onNotification?: (notification: NotificationData) => void;
@@ -53,7 +52,6 @@ const NOTIFICATION_NAMESPACE = '/notifications';
 export function useSocket(options: UseSocketOptions): UseSocketReturn {
   const {
     userId,
-    clientId,
     tenantId,
     token,
     onNotification,
@@ -74,7 +72,6 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     const auth: SocketAuth = {
       tenantId,
       ...(userId && { userId }),
-      ...(clientId && { clientId }),
       ...(token && { token }),
     };
 
@@ -110,6 +107,8 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
     socket.on('notification', (notification: NotificationData) => {
       console.log('[Socket] Received notification:', notification);
       onNotification?.(notification);
+      // A new time off request: the menu badge recounts (sidebar listens).
+      if (changesPendingRequests(notification)) window.dispatchEvent(new Event(TIME_OFF_REQUESTS_CHANGED));
     });
 
     // Cleanup on unmount
@@ -118,7 +117,7 @@ export function useSocket(options: UseSocketOptions): UseSocketReturn {
       socketRef.current = null;
       setIsConnected(false);
     };
-  }, [enabled, tenantId, userId, clientId, token, onNotification, onConnect, onDisconnect]);
+  }, [enabled, tenantId, userId, token, onNotification, onConnect, onDisconnect]);
 
   const subscribe = useCallback((types: string[]) => {
     if (socketRef.current?.connected) {

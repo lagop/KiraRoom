@@ -240,19 +240,128 @@ describe("NotificationsScheduler WhatsApp reminder", () => {
     const s = Object.create(NotificationsScheduler.prototype) as any;
     s.logger = { log: jest.fn(), error: jest.fn() };
     s.whatsappTemplates = { sendAppointmentReminder: jest.fn(async () => result) };
-    s.whatsappService = { sendAppointmentReminder: jest.fn(async () => ({})) };
     return s;
   }
 
-  it("uses the salon's template and skips Twilio when it went out", async () => {
-    const s = scheduler({ sent: true });
-    await s.sendWhatsAppReminder(appointment, 24);
-    expect(s.whatsappService.sendAppointmentReminder).not.toHaveBeenCalled();
+  it("uses the salon's template", async () => {
+    expect(await scheduler({ sent: true }).sendWhatsAppReminder(appointment)).toBe("sent");
   });
 
-  it("falls back to the Twilio sender otherwise", async () => {
-    const s = scheduler({ sent: false, reason: "not_connected" });
-    await s.sendWhatsAppReminder(appointment, 1);
-    expect(s.whatsappService.sendAppointmentReminder).toHaveBeenCalledWith(expect.objectContaining({ clientPhone: "600111222" }), 1);
+  // Channels audit M7: the platform's Twilio WhatsApp sender is gone; the
+  // salon's number with its approved template is the only WhatsApp.
+  it("is no channel at all when the salon has no WhatsApp or the template is not approved", async () => {
+    expect(await scheduler({ sent: false, reason: "not_connected" }).sendWhatsAppReminder(appointment)).toBe("skipped");
+    expect(await scheduler({ sent: false, reason: "template_pending" }).sendWhatsAppReminder(appointment)).toBe("skipped");
+  });
+
+  it("is a failed send when Meta refused it", async () => {
+    expect(await scheduler({ sent: false, reason: "meta_131026" }).sendWhatsAppReminder(appointment)).toBe("failed");
+  });
+});
+
+describe("WhatsAppTemplateService.deleteTemplate (B4)", () => {
+  it("deletes a campaign's template through the Meta client, with the salon's token and account", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => ({ success: true }));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: true });
+    expect(meta.deleteTemplate).toHaveBeenCalledWith("token", "waba1", "kr_promo_x_1");
+  });
+
+  it("says why when Meta refuses, without throwing", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => ({ error: { code: 100, message: "Template not found" } }));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "Template not found" });
+  });
+
+  it("a network error is reported, not thrown", async () => {
+    const { service, meta } = setup();
+    meta.deleteTemplate = jest.fn(async () => Promise.reject(new Error("ECONNRESET")));
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "ECONNRESET" });
+  });
+
+  it("without a connected account there is nothing to call", async () => {
+    const { service, meta } = setup({ connection: null });
+    meta.deleteTemplate = jest.fn();
+    expect(await service.deleteTemplate("t1", "kr_promo_x_1")).toEqual({ deleted: false, error: "not_connected" });
+    expect(meta.deleteTemplate).not.toHaveBeenCalled();
+  });
+});
+
+describe("WhatsAppTemplateService.submitTemplate (the review template, from the Reseñas settings)", () => {
+  it("submits only that template as a UTILITY one, through the mocked Meta client", async () => {
+    const { service, meta } = setup();
+    expect(await service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ status: "PENDING" });
+    expect(meta.createTemplate).toHaveBeenCalledTimes(1);
+    expect(meta.createTemplate).toHaveBeenCalledWith("token", "waba1", templateCreationPayload(REVIEW_REQUEST));
+    expect(templateCreationPayload(REVIEW_REQUEST).category).toBe("UTILITY");
+  });
+
+  it("a template submitted before keeps its status; a refusal says why; no connection, no call", async () => {
+    const exists = setup({ create: { error: { code: 2388024, message: "already exists" } } });
+    expect(await exists.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ status: "EXISTS" });
+    const refused = setup({ create: { error: { code: 100, message: "Invalid parameter" } } });
+    expect(await refused.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ error: "Invalid parameter" });
+    const off = setup({ connection: null });
+    expect(await off.service.submitTemplate("t1", REVIEW_REQUEST)).toEqual({ error: "not_connected" });
+    expect(off.meta.createTemplate).not.toHaveBeenCalled();
+  });
+});
+
+/** Channels audit M5 + the template status read (B20): errors say so and are not cached. */
+describe("WhatsAppTemplateService: a refused token", () => {
+  function withHealth(over: { connection?: any; listTemplates?: any } = {}) {
+    const prisma: any = {
+      whatsAppConnection: {
+        findUnique: jest.fn(async () => ({
+          wabaId: "waba1",
+          phoneNumberId: "pn1",
+          accessTokenEnc: "enc",
+          isActive: true,
+          authErrorAt: null,
+          authError: null,
+          ...(over.connection ?? {}),
+        })),
+      },
+    };
+    const meta: any = {
+      decryptToken: jest.fn(() => "token"),
+      listTemplates: over.listTemplates ?? jest.fn(async () => ({ data: [] })),
+      sendTemplate: jest.fn(async () => ({ messages: [{ id: "wamid.out" }] })),
+      createTemplate: jest.fn(async () => ({ id: "t1", status: "PENDING" })),
+    };
+    const health: any = { whatsAppError: jest.fn(async () => true) };
+    const service = new WhatsAppTemplateService(prisma, meta, health);
+    (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    return { service, meta, health };
+  }
+
+  it("shows UNKNOWN, not 'Sin enviar', when Meta could not be asked, marks the token and asks again next time", async () => {
+    const listTemplates = jest.fn(async () => ({ error: { code: 190, message: "expired" } }));
+    const { service, health } = withHealth({ listTemplates });
+    const out = await service.standardStatus("t1");
+    expect(out.every((t) => t.status === "UNKNOWN")).toBe(true);
+    expect(health.whatsAppError).toHaveBeenCalledWith("t1", 190);
+    await service.standardStatus("t1");
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send, submit or call Meta while the token is marked as refused", async () => {
+    const { service, meta } = withHealth({ connection: { authErrorAt: new Date(), authError: "meta_190" } });
+    expect(await service.sendAppointmentReminder("t1", reminder)).toEqual({ sent: false, reason: "meta_190" });
+    expect(await service.canSend("t1", APPOINTMENT_REMINDER)).toEqual({ ok: false, reason: "meta_190" });
+    const submitted = await service.submitStandardTemplates("t1");
+    expect(Object.values(submitted).every((v) => v.startsWith("ERROR: "))).toBe(true);
+    expect(meta.listTemplates).not.toHaveBeenCalled();
+    expect(meta.sendTemplate).not.toHaveBeenCalled();
+    expect(meta.createTemplate).not.toHaveBeenCalled();
+  });
+
+  it("a send refused for the token marks the connection", async () => {
+    const { service, meta, health } = withHealth({
+      listTemplates: jest.fn(async () => ({ data: [{ name: APPOINTMENT_REMINDER.name, language: "es", status: "APPROVED" }] })),
+    });
+    meta.sendTemplate.mockResolvedValueOnce({ error: { code: 190, message: "expired" } });
+    expect(await service.sendAppointmentReminder("t1", reminder)).toEqual({ sent: false, reason: "meta_190" });
+    expect(health.whatsAppError).toHaveBeenCalledWith("t1", 190);
   });
 });

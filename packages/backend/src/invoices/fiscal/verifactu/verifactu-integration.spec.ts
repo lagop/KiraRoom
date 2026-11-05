@@ -2,6 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { InvoiceCalculator } from "../../invoice-calculator.service";
 import { InvoiceService } from "../../invoices.service";
+import { GdprService } from "../../../saas/gdpr/gdpr.service";
+import { installationNumberFor } from "./verifactu-records.service";
 import { altaHash, anulacionHash } from "./hash";
 import { VerifactuDispatcher } from "./verifactu-dispatcher.service";
 import { VerifactuRecordsService } from "./verifactu-records.service";
@@ -32,8 +34,6 @@ describeDb("VERI*FACTU with a database", () => {
   const savedEnv = { ...process.env };
 
   beforeAll(async () => {
-    process.env.VERIFACTU_PRODUCER_NAME = "Kira Studio Platform SL";
-    process.env.VERIFACTU_PRODUCER_NIF = "B12345678";
     process.env.VERIFACTU_ENV = "test";
     prisma = new PrismaClient({ datasources: { db: { url: DB_URL } } });
     records = new VerifactuRecordsService(prisma as any);
@@ -65,7 +65,14 @@ describeDb("VERI*FACTU with a database", () => {
         ...overrides,
       },
     });
+    // What activation does (InvoicesController.checkFiscalModeChange).
+    if ((overrides.fiscalMode ?? "verifactu") === "verifactu") await activate(id);
     return id;
+  }
+
+  async function activate(tenantId: string) {
+    await prisma.tenant.update({ where: { id: tenantId }, data: { fiscalMode: "verifactu" } });
+    await prisma.verifactuChain.create({ data: { tenantId, installationNumber: installationNumberFor(tenantId) } });
   }
 
   const issue = (tenantId: string, extra: Record<string, unknown> = {}, price = 2500) =>
@@ -344,5 +351,229 @@ describeDb("VERI*FACTU with a database", () => {
     expect(await d.sendNext(tenantId)).toEqual({ kind: "no-credentials" });
     expect(transport.post).not.toHaveBeenCalled();
     expect((await prisma.verifactuChain.findUniqueOrThrow({ where: { tenantId } })).lastError).toMatch(/certificado/);
+  });
+
+  // ---- Salons that never activated it --------------------------------------
+
+  it("a salon that did not activate it invoices as ever: nothing is written, whatever happens to the invoice", async () => {
+    const tenantId = await salon({ fiscalMode: "none" });
+    const first = await issue(tenantId, { recipientTaxId: "not a nif" });
+    const second = await issue(tenantId);
+    const rectificativa = await invoices.emitRectification(tenantId, first.id, undefined, "Error de precio");
+    await invoices.cancel(tenantId, rectificativa.id, "Rectificativa equivocada");
+    await invoices.cancel(tenantId, first.id, "Error");
+    await invoices.anulate(tenantId, second.id, "Error");
+
+    expect(await prisma.verifactuRecord.count({ where: { tenantId } })).toBe(0);
+    expect(await prisma.verifactuChain.count({ where: { tenantId } })).toBe(0);
+    const stored = await prisma.invoice.findMany({ where: { tenantId } });
+    expect(stored).toHaveLength(3);
+    for (const invoice of stored) {
+      expect(invoice).toMatchObject({ status: "cancelled", fiscalMode: "none", fiscalStatus: "not_required", fiscalHash: null, fiscalQrUrl: null });
+    }
+  });
+
+  it("fiscalMode verifactu without going through activation writes nothing either, and does not fail", async () => {
+    const tenantId = await salon({ fiscalMode: "verifactu", taxId: null });
+    await prisma.verifactuChain.delete({ where: { tenantId } });
+    const { id } = await issue(tenantId);
+    expect(await prisma.verifactuRecord.count({ where: { tenantId } })).toBe(0);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id } })).toMatchObject({ fiscalHash: null, fiscalQrUrl: null });
+  });
+
+  // ---- Invoices issued before activation -----------------------------------
+
+  it("the chain starts at the first invoice after activation; older invoices are never chained", async () => {
+    const tenantId = await salon({ fiscalMode: "none" });
+    await issue(tenantId);
+    await activate(tenantId);
+    await issue(tenantId);
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => r.numSerie)).toEqual(["A000002"]);
+    expect(rows[0].xml).toContain("<sum1:PrimerRegistro>S</sum1:PrimerRegistro>");
+  });
+
+  it("rectifies an invoice issued before activation: R5 / R1, naming it, its own date as the salon saw it", async () => {
+    const tenantId = await salon({ fiscalMode: "none" });
+    const plain = await issue(tenantId);
+    const withNif = await issue(tenantId, { recipientName: "Empresa SL", recipientTaxId: "B87654321" });
+    // Older invoices stored an instant, not the salon's day at 00:00 UTC.
+    await prisma.invoice.update({ where: { id: plain.id }, data: { issueDate: new Date("2026-03-31T23:30:00.000Z") } });
+    await activate(tenantId);
+
+    await invoices.emitRectification(tenantId, plain.id, undefined, "Precio equivocado");
+    await invoices.emitRectification(tenantId, withNif.id, undefined, "Precio equivocado");
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => r.tipoFactura)).toEqual(["R5", "R1"]);
+    expect(rows[0].xml).toContain(
+      `<sum1:IDFacturaRectificada><sum1:IDEmisorFactura>${NIF}</sum1:IDEmisorFactura><sum1:NumSerieFactura>A000001</sum1:NumSerieFactura><sum1:FechaExpedicionFactura>01-04-2026</sum1:FechaExpedicionFactura></sum1:IDFacturaRectificada>`,
+    );
+    expect(rows[1].xml).toContain("<sum1:NumSerieFactura>A000002</sum1:NumSerieFactura>");
+    expect(rows[1].xml).toContain("<sum1:NIF>B87654321</sum1:NIF>");
+  });
+
+  it("cancels or annuls an invoice issued before activation without a record: the AEAT never had it", async () => {
+    const tenantId = await salon({ fiscalMode: "none" });
+    const one = await issue(tenantId);
+    const two = await issue(tenantId);
+    await activate(tenantId);
+    await invoices.cancel(tenantId, one.id, "Error");
+    expect(await invoices.anulate(tenantId, two.id, "Error")).toMatchObject({ status: "cancelled" });
+    expect(await prisma.verifactuRecord.count({ where: { tenantId } })).toBe(0);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: one.id } })).toMatchObject({ fiscalStatus: "not_required" });
+  });
+
+  // ---- Every way an invoice is issued or voided ----------------------------
+
+  it("cancelling a recorded invoice annuls it in the chain, in the same transaction", async () => {
+    const tenantId = await salon();
+    const { id } = await issue(tenantId);
+    await prisma.verifactuRecord.updateMany({ where: { tenantId }, data: { status: "accepted" } });
+    await prisma.invoice.update({ where: { id }, data: { fiscalStatus: "accepted" } });
+
+    await invoices.cancel(tenantId, id, "Error");
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => r.kind)).toEqual(["alta", "anulacion"]);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "cancelled", fiscalStatus: "pending" });
+    await expect(invoices.cancel(tenantId, id, "Otra vez")).rejects.toThrow(/ya está anulada/);
+  });
+
+  it("a recorded invoice with a live rectificativa is not annulled, and nothing is chained", async () => {
+    const tenantId = await salon();
+    const { id } = await issue(tenantId);
+    await invoices.emitRectification(tenantId, id, undefined, "Precio");
+    await expect(invoices.cancel(tenantId, id, "Error")).rejects.toThrow(/rectificativas/);
+    await expect(invoices.anulate(tenantId, id, "Error")).rejects.toThrow(/rectificativas/);
+    expect((await chainOf(tenantId)).map((r) => r.kind)).toEqual(["alta", "alta"]);
+  });
+
+  it("the till's ticket is recorded inside the sale's transaction; it rolls back with the sale", async () => {
+    const tenantId = await salon();
+    const sale = (saleId: string, extra: Record<string, unknown> = {}) => ({
+      tenantId,
+      saleId,
+      lines: [{ description: "Champú", quantity: 1, unitPriceCents: 1210, taxRate: 21 }],
+      ...extra,
+    });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await invoices.issueSimplifiedInvoiceForSale(tx, sale(randomUUID()));
+        throw new Error("the sale failed");
+      }),
+    ).rejects.toThrow("the sale failed");
+    expect(await chainOf(tenantId)).toHaveLength(0);
+
+    const issued = await prisma.$transaction((tx) => invoices.issueSimplifiedInvoiceForSale(tx, sale(randomUUID())));
+    expect(issued).toMatchObject({ created: true, series: "T" });
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => [r.tipoFactura, r.numSerie])).toEqual([["F2", "T000001"]]);
+  });
+
+  it("a ticket naming a client: F1 flagged art. 7.2 with a valid NIF, a plain F2 with one that does not parse", async () => {
+    const tenantId = await salon();
+    const client = (taxId: string) =>
+      prisma.client.create({ data: { tenantId, firstName: "Ana", lastName: "Peña", taxId } as any, select: { id: true } });
+    const good = await client("87654321X");
+    const bad = await client("12-34");
+    const ticket = (clientId: string) =>
+      prisma.$transaction((tx) =>
+        invoices.issueSimplifiedInvoiceForSale(tx, {
+          tenantId,
+          saleId: randomUUID(),
+          clientId,
+          lines: [{ description: "Corte", quantity: 1, unitPriceCents: 1210, taxRate: 21 }],
+        }),
+      );
+    await ticket(good.id);
+    await ticket(bad.id);
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => r.tipoFactura)).toEqual(["F1", "F2"]);
+    expect(rows[0].xml).toContain("<sum1:FacturaSimplificadaArt7273>S</sum1:FacturaSimplificadaArt7273>");
+    expect(rows[1].xml).not.toContain("Destinatarios");
+  });
+
+  it("the rectificativa of a discount at the till is recorded in the caller's transaction, linked to its original", async () => {
+    const tenantId = await salon();
+    const { id } = await issue(tenantId, {}, 10_000);
+    const issued = await prisma.$transaction((tx) => invoices.rectifyByAmountIn(tx, tenantId, id, 1000, "Descuento en caja"));
+    const rows = await expectValidChain(tenantId);
+    expect(rows.map((r) => [r.invoiceId, r.tipoFactura])).toEqual([
+      [id, "F2"],
+      [issued.id, "R5"],
+    ]);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: issued.id } })).toMatchObject({ rectifiesInvoiceId: id });
+  });
+
+  // ---- Anonymisation -------------------------------------------------------
+
+  async function anonymize(tenantId: string) {
+    const gdpr = new GdprService(prisma as any);
+    const request = await gdpr.recordRequest(tenantId, "anonymize", randomUUID(), undefined);
+    return gdpr.anonymize(tenantId, request.id, { keepFiscalData: true });
+  }
+
+  it("anonymising a salon works with records present and leaves them as they were; the queue is still sent", async () => {
+    const tenantId = await salon({ legalName: null, name: "Peluquería Ana Peña" });
+    await issue(tenantId);
+    await issue(tenantId);
+    const [first] = await chainOf(tenantId);
+    await prisma.verifactuRecord.update({ where: { id: first.id }, data: { status: "accepted" } });
+    const before = await chainOf(tenantId);
+
+    await expect(anonymize(tenantId)).resolves.toMatchObject({ status: "completed" });
+
+    expect(await chainOf(tenantId)).toEqual(before);
+    expect(await prisma.verifactuChain.count({ where: { tenantId } })).toBe(1);
+    const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    expect(tenant.anonymizedAt).not.toBeNull();
+    expect(tenant.name).toContain("[anonymized");
+
+    // The pending one goes out, under the name it was issued with.
+    const { d, sent } = dispatcherWith(async () => ({
+      status: 200,
+      body: aeatAnswer([{ num: before[1].numSerie, fecha: before[1].fecha, estado: "Correcto" }]),
+    }));
+    await due(tenantId);
+    expect(await d.sendNext(tenantId)).toMatchObject({ kind: "sent", accepted: 1 });
+    expect(sent[0]).toContain("<sum1:ObligadoEmision><sum1:NombreRazon>Peluquería Ana Peña</sum1:NombreRazon>");
+    expect(sent[0]).not.toContain("anonymized");
+  });
+
+  it("an anonymised salon with no certificate: records stay pending, looked at weekly, the platform owner hears", async () => {
+    const tenantId = await salon();
+    await issue(tenantId);
+    await anonymize(tenantId);
+    const opsAlerts: any = { notify: jest.fn(async () => true) };
+    const transport: any = { post: jest.fn() };
+    const d = new VerifactuDispatcher(prisma as any, {} as any, transport, opsAlerts);
+    delete process.env.VERIFACTU_PLATFORM_P12;
+    await due(tenantId);
+    expect(await d.sendNext(tenantId)).toEqual({ kind: "no-credentials" });
+    expect(transport.post).not.toHaveBeenCalled();
+    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("anonimizado"), expect.stringContaining(tenantId));
+    const chain = await prisma.verifactuChain.findUniqueOrThrow({ where: { tenantId } });
+    expect(chain.nextSendAt.getTime() - Date.now()).toBeGreaterThan(6 * 24 * 3600 * 1000);
+    expect((await chainOf(tenantId))[0].status).toBe("pending");
+  });
+
+  it("a salon with records cannot be hard-deleted: the database refuses", async () => {
+    const tenantId = await salon();
+    await issue(tenantId);
+    await expect(prisma.tenant.delete({ where: { id: tenantId } })).rejects.toThrow();
+    expect(await prisma.verifactuRecord.count({ where: { tenantId } })).toBe(1);
+  });
+
+  it("a rejection reaches the platform owner", async () => {
+    const tenantId = await salon();
+    await issue(tenantId);
+    const [row] = await chainOf(tenantId);
+    const opsAlerts: any = { notify: jest.fn(async () => true) };
+    const transport: any = {
+      post: jest.fn(async () => ({ status: 200, body: aeatAnswer([{ num: row.numSerie, fecha: row.fecha, estado: "Incorrecto", code: 1100 }]) })),
+    };
+    const d = new VerifactuDispatcher(prisma as any, {} as any, transport, opsAlerts);
+    d.credentials = async () => ({ key: "k", cert: "c", type: "personal" });
+    expect(await d.sendNext(tenantId)).toMatchObject({ kind: "sent", rejected: 1 });
+    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("rechazados"), expect.any(String));
   });
 });

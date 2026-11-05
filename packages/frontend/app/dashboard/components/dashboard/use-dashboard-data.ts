@@ -1,47 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import apiClient from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import apiClient, {
+  type AnalyticsOccupancy,
+  type AnalyticsStats,
+  type AnalyticsTillSales,
+  type HomeAppointmentRow,
+  type HomeSummary,
+} from "@/lib/api";
+import { isManager } from "@/lib/dashboard-nav";
+import { todayPaymentsFigures, type TodayPaymentRow } from "@/lib/home-dashboard";
+import { getCurrentUser } from "@/lib/utils";
 
-export interface DashboardStats {
-  totalRevenue: number;
-  totalAppointments: number;
-  newClients: number;
-  avgOrderValue: number;
-  revenueChange: number;
-  appointmentsChange: number;
-  clientsChange: number;
-  orderValueChange: number;
-}
+export type { HomeAppointmentRow };
 
-export interface RevenueDataPoint {
-  month: string;
-  revenue: number;
-}
-
-export interface ServicePopularity {
-  name: string;
-  count: number;
-  percentage: number;
-}
-
-export interface AppointmentStatusData {
-  name: string;
-  count: number;
-  color: string;
-}
-
-export interface TopService {
-  name: string;
-  count: number;
-  revenue: number;
-}
-
-export interface TopProfessional {
-  name: string;
-  appointments: number;
-  revenue: number;
-}
+/** Analítica's stats (cents; changes in percent, null with nothing to compare). */
+export type DashboardStats = AnalyticsStats;
 
 export interface DailyMetric {
   date: string;
@@ -49,136 +23,87 @@ export interface DailyMetric {
   revenue: number;
 }
 
-export interface UpcomingAppointment {
-  id: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: string;
-  paymentStatus?: string;
-  totalAmount?: number | null;
-  client?:
-    | string
-    | {
-        id: string;
-        firstName: string;
-        lastName: string;
-      };
-  professional?:
-    | string
-    | {
-        id: string;
-        firstName: string;
-        lastName: string;
-      };
-  service?:
-    | string
-    | {
-        id: string;
-        name: string;
-      };
-}
-
-export interface PendingPaymentAppointment {
-  id: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  status: string;
-  paymentStatus?: string;
-  totalAmount?: number | null;
-  amountPaid?: number;
-  amountDue?: number;
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
-  professional?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
-  service?: {
-    id: string;
-    name: string;
-  };
-}
-
-export interface TodayPayment {
-  id: string;
-  amount: number;
-  status: string;
-  createdAt: string;
-  client?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
+/** One slice of the status donut: `status` decides its colour and its name. */
+export interface AppointmentStatusData {
+  status?: string;
+  name: string;
+  count: number;
 }
 
 export interface DashboardData {
-  // From /analytics/overview
+  // From /analytics/overview (owner and admins)
   stats: DashboardStats;
-  revenueData: RevenueDataPoint[];
-  servicePopularity: ServicePopularity[];
-  appointmentStatus: AppointmentStatusData[];
-  topServices: TopService[];
-  topProfessionals: TopProfessional[];
+  /** The till's sales without an appointment this month (Ingresos + caja's "caja"). */
+  tillSales: AnalyticsTillSales;
   dailyMetrics: DailyMetric[];
-  // From /analytics/appointment-status-by-days
+  // From /analytics/appointment-status-by-days (owner and admins)
   statusByDays: AppointmentStatusData[];
-  // From /payments/today + /clients + /professionals
-  todayPayments: TodayPayment[];
+  /** Paid today less refunds, in cents, and how many payments (the whole salon). */
   todayPaymentsTotal: number;
-  activeProfessionals: number;
+  todayPaymentsCount: number;
+  /** Active clients; a professional's own (the whole salon). */
   totalClients: number;
-  // Lists
-  upcomingAppointments: UpcomingAppointment[];
-  pendingConfirmations: UpcomingAppointment[];
-  pendingPayments: PendingPaymentAppointment[];
-  // Notifications
+  /** GET /appointments/home: the salon's day and clock, and the lists. */
+  today: string;
+  now: string;
+  location: HomeSummary["location"];
+  todayAppointments: HomeAppointmentRow[];
+  /** Active professionals (of the location); a professional: themselves. */
+  professionals: HomeSummary["professionals"];
+  /** Today's occupancy (owner and admins). */
+  occupancy: AnalyticsOccupancy | null;
+  pendingConfirmations: HomeSummary["pendingConfirmations"];
+  pendingPayments: HomeSummary["pendingPayments"];
   unreadNotificationsCount: number;
 }
 
 const EMPTY: DashboardData = {
   stats: {
     totalRevenue: 0,
+    totalRevenueWithTill: 0,
     totalAppointments: 0,
+    paidAppointments: 0,
     newClients: 0,
     avgOrderValue: 0,
-    revenueChange: 0,
-    appointmentsChange: 0,
-    clientsChange: 0,
-    orderValueChange: 0,
+    revenueChange: null,
+    appointmentsChange: null,
+    clientsChange: null,
+    orderValueChange: null,
   },
-  revenueData: [],
-  servicePopularity: [],
-  appointmentStatus: [],
-  topServices: [],
-  topProfessionals: [],
+  tillSales: { totalCents: 0, servicesCents: 0, productsCents: 0, sales: 0, refundedCents: 0 },
   dailyMetrics: [],
   statusByDays: [],
-  todayPayments: [],
   todayPaymentsTotal: 0,
-  activeProfessionals: 0,
+  todayPaymentsCount: 0,
   totalClients: 0,
-  upcomingAppointments: [],
-  pendingConfirmations: [],
-  pendingPayments: [],
+  today: "",
+  now: "",
+  location: null,
+  todayAppointments: [],
+  professionals: [],
+  occupancy: null,
+  pendingConfirmations: { total: 0, items: [] },
+  pendingPayments: { total: 0, totalDue: 0, items: [] },
   unreadNotificationsCount: 0,
 };
 
 /**
- * Fetches every piece of data the dashboard overview needs.
+ * Everything Inicio shows, each piece asked of the server already counted:
+ * Analítica's overview and status breakdown (owner and admins), today's
+ * payments, the number of active clients (a page of one row: its `total`),
+ * the home lists (GET /appointments/home: today and its team, today's
+ * occupancy, to confirm and to charge, five rows each with the true totals)
+ * and the unread notifications.
  *
- * Uses the dedicated analytics endpoints (`getAnalyticsOverview`,
- * `getAppointmentStatusByDays`) instead of pulling the entire
- * `clients` and `appointments` collections and aggregating in the
- * browser, which is what the previous implementation did.
+ * `locationId` (Empresa, owner and admins): goes to every call that takes
+ * one -- the overview, the status breakdown and the home lists. Today's
+ * payments and the clients count have no location: they stay the salon's.
  *
- * Also fetches supporting widgets: today's payments, pending
- * payments, upcoming appointments, unread notifications.
+ * It used to download every client, every "pending" appointment of a year
+ * back and ahead and every unpaid visit of the salon's history -- thousands
+ * of rows -- to show five of each and two counters.
  */
-export function useDashboardData() {
+export function useDashboardData(locationId: string | null = null) {
   const [data, setData] = useState<DashboardData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -186,11 +111,25 @@ export function useDashboardData() {
   // value so one failure does not blank the whole dashboard -- but it used to
   // do so silently, showing €0 and 0 clients as if they were real figures.
   const [partialFailures, setPartialFailures] = useState<string[]>([]);
+  // The salon's figures (Analítica's overview and status counts, the team,
+  // the occupancy) are the owner's and admins': the API answers staff with a
+  // 403, so they are not asked for, and the page leaves those cards out.
+  const [salonFigures, setSalonFigures] = useState(false);
+  // Shown while a location's figures replace the previous ones, instead of
+  // blanking the page.
+  const [refreshing, setRefreshing] = useState(false);
+  // Only the latest request writes: a slow answer for the location chosen
+  // before must not replace the one chosen after.
+  const latest = useRef(0);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    const request = ++latest.current;
+    setRefreshing(true);
     setError(null);
     const failed: string[] = [];
+    const manager = isManager(getCurrentUser()?.role);
+    setSalonFigures(manager);
+    const location = manager ? locationId : null;
     const soft = <T,>(name: string, request: Promise<T>, fallback: T) =>
       request.catch((err) => {
         console.error(`Dashboard: ${name} failed to load:`, err);
@@ -198,94 +137,54 @@ export function useDashboardData() {
         return fallback;
       });
     try {
-      const [
-        overview,
-        statusByDays,
-        todayPayments,
-        clients,
-        professionals,
-        upcoming,
-        pendingPayments,
-        unread,
-      ] = await Promise.all([
-        soft("overview", apiClient.getAnalyticsOverview(1), null),
-        soft("statusByDays", apiClient.getAppointmentStatusByDays(14), [] as any[]),
+      const [overview, statusByDays, todayPayments, clients, home, unread] = await Promise.all([
+        manager ? soft("overview", apiClient.getAnalyticsOverview({ months: 1, locationId: location }), null) : null,
+        manager
+          ? soft("statusByDays", apiClient.getAppointmentStatusByDays(14, location), [] as any[])
+          : ([] as any[]),
         soft("todayPayments", apiClient.getTodayPayments(), [] as any[]),
-        soft("clients", apiClient.getClients(), [] as any[]),
-        soft("professionals", apiClient.getProfessionals(), [] as any[]),
-        soft(
-          "upcoming",
-          apiClient.getAppointments({ status: "pending" }),
-          [] as any[],
-        ),
-        soft("pendingPayments", apiClient.getPendingPaymentAppointments(), [] as any[]),
+        soft("clients", apiClient.getClientsPage({ page: 1, pageSize: 1, status: "active" }), null),
+        soft("home", apiClient.getHomeSummary(location), null as HomeSummary | null),
         soft("unread", apiClient.getUnreadNotificationCount(), { count: 0 }),
       ]);
 
-      const todayPaymentsTotal = (todayPayments as TodayPayment[]).reduce(
-        (sum, p) => sum + Number((p as any).amount ?? 0),
-        0,
-      );
-
-      const pendingConfirmations = (
-        upcoming as UpcomingAppointment[]
-      ).filter((a) => a.status === "pending").slice(0, 5);
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const todaysUpcoming = (
-        upcoming as UpcomingAppointment[]
-      ).filter((a) => {
-        const aptDate = new Date(a.scheduledDate);
-        return (
-          aptDate >= today && (a.status === "pending" || a.status === "confirmed")
-        );
-      })
-        .sort(
-          (a, b) =>
-            new Date(a.scheduledDate).getTime() -
-            new Date(b.scheduledDate).getTime(),
-        )
-        .slice(0, 5);
+      if (request !== latest.current) return;
+      const payments = todayPaymentsFigures((todayPayments ?? []) as TodayPaymentRow[]);
 
       setData({
         stats: overview?.stats ?? EMPTY.stats,
-        revenueData: overview?.revenueData ?? [],
-        servicePopularity: overview?.servicePopularity ?? [],
-        appointmentStatus: overview?.appointmentStatus ?? [],
-        topServices: overview?.topServices ?? [],
-        topProfessionals: overview?.topProfessionals ?? [],
+        tillSales: overview?.tillSales ?? EMPTY.tillSales,
         dailyMetrics: overview?.dailyMetrics ?? [],
         statusByDays: (statusByDays as AppointmentStatusData[]) ?? [],
-        todayPayments: (todayPayments as TodayPayment[]) ?? [],
-        todayPaymentsTotal,
-        activeProfessionals: (professionals as any[]).filter(
-          (p) => p.isActive !== false,
-        ).length,
-        totalClients: (clients as any[]).length,
-        upcomingAppointments: todaysUpcoming,
-        pendingConfirmations,
-        pendingPayments: (pendingPayments as PendingPaymentAppointment[]).slice(
-          0,
-          5,
-        ),
+        todayPaymentsTotal: payments.totalCents,
+        todayPaymentsCount: payments.count,
+        totalClients: clients?.total ?? 0,
+        today: home?.today ?? "",
+        now: home?.now ?? "",
+        location: home?.location ?? null,
+        todayAppointments: home?.todayAppointments ?? [],
+        professionals: home?.professionals ?? [],
+        occupancy: home?.occupancy ?? null,
+        pendingConfirmations: home?.pendingConfirmations ?? EMPTY.pendingConfirmations,
+        pendingPayments: home?.pendingPayments ?? EMPTY.pendingPayments,
         unreadNotificationsCount: (unread as any)?.count ?? 0,
       });
       setPartialFailures(failed);
     } catch (err) {
+      if (request !== latest.current) return;
       console.error("Failed to load dashboard data:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to load dashboard data",
-      );
+      setError(err instanceof Error ? err.message : "");
     } finally {
-      setLoading(false);
+      if (request === latest.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [locationId]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  return { data, loading, error, partialFailures, refresh: fetchData };
+  return { data, loading, refreshing, error, partialFailures, salonFigures, refresh: fetchData };
 }

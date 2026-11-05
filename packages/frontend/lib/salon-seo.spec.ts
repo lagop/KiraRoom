@@ -15,17 +15,31 @@
  */
 
 import {
+  cancelDeadlineHours,
   canonicalUrl,
   formatAddress,
   metaDescription,
   metaTitle,
   openingHoursRows,
+  priceOnRequest,
+  publicImageSrc,
   salonJsonLd,
+  salonPageIndexable,
+  salonRobotsTxt,
+  salonSitemapXml,
   serializeJsonLd,
   shareImage,
+  socialLinks,
   type PublicSalonPage,
 } from "./salon-seo";
-import { bareHost, isPlatformHost, platformHostsFrom, rewritePathFor } from "./custom-domain-host";
+import {
+  bareHost,
+  isPlatformHost,
+  platformHostsFrom,
+  rewritePathFor,
+  salonSlugForSubdomain,
+  subdomainRedirectFor,
+} from "./custom-domain-host";
 
 let pass = 0;
 let fail = 0;
@@ -49,8 +63,8 @@ const PAGE: PublicSalonPage = {
   name: "Salón Luna",
   slug: "salon-luna",
   description: null,
-  logo: "data:image/png;base64,AAAA",
-  coverImage: null,
+  logoUrl: null,
+  coverImageUrl: null,
   website: "https://salonluna.example",
   email: "hola@salonluna.example",
   phone: "+34 600 000 000",
@@ -97,14 +111,43 @@ check(
 check("address keeps the parts that exist", formatAddress(PAGE.address), "Calle Mayor 1, 28013 Madrid");
 
 console.log("\n=== images ===");
-check("data: logos are not offered to crawlers", shareImage(PAGE), null);
-check("a web cover image wins", shareImage({ ...PAGE, coverImage: "https://cdn.example/c.jpg" }), "https://cdn.example/c.jpg");
+const API = "https://api.kiraroom.net/api/v1";
+check("no images, no share image", shareImage(PAGE, API), null);
+check(
+  "a web cover image wins",
+  shareImage({ ...PAGE, coverImageUrl: "https://cdn.example/c.jpg", logoUrl: "/public-site/image/t1/logo?v=x" }, API),
+  "https://cdn.example/c.jpg",
+);
+check(
+  "an uploaded logo is shared from the API",
+  shareImage({ ...PAGE, logoUrl: "/public-site/image/t1/logo?v=abc" }, API),
+  "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+);
+check("a data: URL from an older server is not used", publicImageSrc("data:image/png;base64,AAAA", API), null);
+check(
+  "a professional's photo is served by the API too",
+  publicImageSrc("/public-site/professional-image/p1/photo?v=abc", API),
+  "https://api.kiraroom.net/api/v1/public-site/professional-image/p1/photo?v=abc",
+);
+check(
+  "an API base that is not absolute gives crawlers nothing",
+  shareImage({ ...PAGE, logoUrl: "/public-site/image/t1/logo" }, "/api/v1"),
+  null,
+);
+check(
+  "schema.org image and logo from the API",
+  ((ld: any) => [ld.image, ld.logo])(salonJsonLd({ ...PAGE, logoUrl: "/public-site/image/t1/logo?v=abc" }, "https://x", API)),
+  [
+    "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+    "https://api.kiraroom.net/api/v1/public-site/image/t1/logo?v=abc",
+  ],
+);
 
 console.log("\n=== opening hours ===");
 const rows = openingHoursRows(PAGE.openingHours);
 check("seven rows, Monday first", rows.map((r) => r.day)[0], "Lunes");
 check("Monday's hours", rows[0].hours, "09:00 – 18:00");
-check("a day nobody works is closed", rows[6], { day: "Domingo", hours: null });
+check("a day nobody works is closed", rows[6], { key: "sunday", day: "Domingo", hours: null });
 check("no schedule at all says nothing", openingHoursRows({}), []);
 
 console.log("\n=== schema.org ===");
@@ -119,8 +162,47 @@ check("offers with prices", ld.hasOfferCatalog.itemListElement.map((o: any) => [
   ["Corte", "18.50"],
   ["Tinte", "45.00"],
 ]);
+check("an older server's prices say nothing about tax", "priceSpecification" in ld.hasOfferCatalog.itemListElement[0], false);
+const ldTax = salonJsonLd({ ...PAGE, taxLabel: "IVA" }, "https://app.kiraroom.net/sites/salon-luna") as any;
+check("final prices are marked tax included", ldTax.hasOfferCatalog.itemListElement[0].priceSpecification, {
+  "@type": "PriceSpecification",
+  price: "18.50",
+  priceCurrency: "EUR",
+  valueAddedTaxIncluded: true,
+});
 check("team", ld.employee, [{ "@type": "Person", name: "Ana García", jobTitle: "Estilista" }]);
+const ldHidden = salonJsonLd(
+  { ...PAGE, professionals: PAGE.professionals.map((p) => ({ ...p, listed: false })) },
+  "https://app.kiraroom.net/sites/salon-luna",
+) as any;
+check("a professional not shown on the web is not in the team", "employee" in ldHidden, false);
 check("no data: image", "image" in ld, false);
+
+console.log("\n=== a salon that closes for lunch ===");
+// The server sends openingShifts next to openingHours: every open stretch of
+// the day. With only openingHours the page and Google read Monday as open
+// from 10:00 to 20:00 straight through.
+const SPLIT_PAGE: PublicSalonPage = {
+  ...PAGE,
+  openingHours: { monday: { openTime: "10:00", closeTime: "20:00" } },
+  openingShifts: {
+    monday: [
+      { openTime: "10:00", closeTime: "14:00" },
+      { openTime: "17:00", closeTime: "20:00" },
+    ],
+  },
+};
+const splitRows = openingHoursRows(SPLIT_PAGE.openingHours, SPLIT_PAGE.openingShifts);
+check("Monday names both stretches", splitRows[0].hours, "10:00 – 14:00 y 17:00 – 20:00");
+check("Tuesday is closed", splitRows[1].hours, null);
+check("rows without openingShifts fall back to the single window", openingHoursRows(SPLIT_PAGE.openingHours)[0].hours, "10:00 – 20:00");
+const splitLd = salonJsonLd(SPLIT_PAGE, "https://app.kiraroom.net/sites/salon-luna") as any;
+check("one OpeningHoursSpecification per stretch, same day", splitLd.openingHoursSpecification, [
+  { "@type": "OpeningHoursSpecification", dayOfWeek: "https://schema.org/Monday", opens: "10:00", closes: "14:00" },
+  { "@type": "OpeningHoursSpecification", dayOfWeek: "https://schema.org/Monday", opens: "17:00", closes: "20:00" },
+]);
+const oldServer = salonJsonLd({ ...SPLIT_PAGE, openingShifts: undefined }, "https://x.test/") as any;
+check("an older server's page still gets its one window", oldServer.openingHoursSpecification.length, 1);
 
 const evil = serializeJsonLd({ description: "</script><script>alert(1)</script> & co" });
 check("salon text cannot close the script tag", /<\/script/i.test(evil), false);
@@ -136,13 +218,105 @@ check("an IP is never a salon domain", isPlatformHost("203.0.113.7", platform), 
 check("a listed extra host is the platform", isPlatformHost("staging.example.org", platform), true);
 check("a salon's domain is not", isPlatformHost("reservas.salonluna.es", platform), false);
 check("/ serves the salon page", rewritePathFor("/", "salon-luna"), "/sites/salon-luna");
-check("/account is the salon's client area", rewritePathFor("/account", "salon-luna"), "/sites/salon-luna/account");
+check("a sub-path goes under the salon", rewritePathFor("/account", "salon-luna"), "/sites/salon-luna/account");
 check("the page's own links pass through", rewritePathFor("/sites/salon-luna/account", "salon-luna"), null);
 check(
   "another salon's page is not served on this domain",
   rewritePathFor("/sites/otro-salon", "salon-luna"),
   "/sites/salon-luna/sites/otro-salon",
 );
+
+console.log("\n=== salon subdomains ===");
+check(
+  "canonical: own domain, then subdomain, then slug URL",
+  [
+    canonicalUrl({ ...PAGE, customDomain: "reservas.salonluna.es", subdomainHost: "salon-luna.kiraroom.net" }, "https://app.kiraroom.net"),
+    canonicalUrl({ ...PAGE, subdomainHost: "salon-luna.kiraroom.net" }, "https://app.kiraroom.net"),
+    canonicalUrl({ ...PAGE, subdomainHost: null }, "https://app.kiraroom.net"),
+  ].join(" | "),
+  "https://reservas.salonluna.es/ | https://salon-luna.kiraroom.net/ | https://app.kiraroom.net/sites/salon-luna",
+);
+check("salon-luna.kiraroom.net names the salon", salonSlugForSubdomain("salon-luna.kiraroom.net", "kiraroom.net"), "salon-luna");
+check("app.kiraroom.net is not a salon", salonSlugForSubdomain("app.kiraroom.net", "kiraroom.net"), null);
+check("no base, no subdomains", salonSlugForSubdomain("salon-luna.kiraroom.net", undefined), null);
+check(
+  "once ready, the public page moves to the subdomain",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna", platform, "kiraroom.net", true),
+  "https://salon-luna.kiraroom.net/",
+);
+check("not before the certificate is in place", subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna", platform, "kiraroom.net", false), null);
+check(
+  "the client area keeps its URL (its session lives on this host)",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/salon-luna/account", platform, "kiraroom.net", true),
+  null,
+);
+check(
+  "an id URL stays",
+  subdomainRedirectFor("app.kiraroom.net", "/sites/3f2a9c1e-77b1-4c2d-9e10-aa55cc66dd77", platform, "kiraroom.net", true),
+  null,
+);
+check("a reserved slug stays", subdomainRedirectFor("app.kiraroom.net", "/sites/admin", platform, "kiraroom.net", true), null);
+check("only from the app host", subdomainRedirectFor("reservas.salonluna.es", "/sites/salon-luna", platform, "kiraroom.net", true), null);
+
+console.log("\n=== social profiles (general settings) ===");
+const SOCIAL = {
+  ...PAGE,
+  instagram: "https://www.instagram.com/salonluna/",
+  facebook: "https://www.facebook.com/profile.php?id=100012345678",
+};
+check("none set, none shown", socialLinks(PAGE), []);
+check("Instagram shows the handle, Facebook its name", socialLinks(SOCIAL).map((l) => [l.network, l.label]), [
+  ["instagram", "@salonluna"],
+  ["facebook", "Facebook"],
+]);
+check("links go to the profile", socialLinks(SOCIAL).map((l) => l.url), [
+  "https://www.instagram.com/salonluna/",
+  "https://www.facebook.com/profile.php?id=100012345678",
+]);
+check(
+  "never a link off the network's own https host",
+  socialLinks({ instagram: "javascript:alert(1)", facebook: "https://evil.example/salonluna" }),
+  [],
+);
+check("schema.org sameAs: the website, then the profiles", (salonJsonLd(SOCIAL, "https://x") as any).sameAs, [
+  "https://salonluna.example",
+  "https://www.instagram.com/salonluna/",
+  "https://www.facebook.com/profile.php?id=100012345678",
+]);
+check("no website and no profiles: no sameAs", "sameAs" in (salonJsonLd({ ...PAGE, website: null }, "https://x") as any), false);
+
+console.log("\n=== prices on request ===");
+check("0 is 'Consultar'", [priceOnRequest(0), priceOnRequest("0.00"), priceOnRequest(18.5)], [true, true, false]);
+const ldFree = salonJsonLd(
+  { ...PAGE, taxLabel: "IVA", services: [{ ...PAGE.services[0], price: 0 }] },
+  "https://x",
+) as any;
+check(
+  "an offer at 0 goes without a price",
+  ["price" in ldFree.hasOfferCatalog.itemListElement[0], "priceSpecification" in ldFree.hasOfferCatalog.itemListElement[0]],
+  [false, false],
+);
+
+console.log("\n=== robots.txt and sitemap.xml on the salon's host ===");
+check(
+  "robots points at the salon's own sitemap",
+  salonRobotsTxt("https://reservas.salonluna.es/").split("\n").filter((l) => l.startsWith("Sitemap")),
+  ["Sitemap: https://reservas.salonluna.es/sitemap.xml"],
+);
+const sm = salonSitemapXml(PAGE, "https://reservas.salonluna.es/");
+check("the sitemap lists only the salon's page", (sm.match(/<loc>/g) ?? []).length, 1);
+check("at its canonical URL", sm.includes("<loc>https://reservas.salonluna.es/</loc>"), true);
+check("a read-only salon lists nothing", salonSitemapXml({ ...PAGE, acceptsBookings: false }, "https://x/").includes("<url>"), false);
+
+// Audit 7 N12 / N15.
+check("a salon with services that takes bookings is indexable", salonPageIndexable(PAGE), PAGE.services.length > 0);
+check("one with no active service is not", salonPageIndexable({ ...PAGE, services: [] }), false);
+check("nor one that takes no bookings", salonPageIndexable({ ...PAGE, acceptsBookings: false }), false);
+check("nor one whose owner has not confirmed their email (D1)", salonPageIndexable({ ...PAGE, indexable: false }), false);
+check("an unconfirmed salon lists nothing in its sitemap", salonSitemapXml({ ...PAGE, indexable: false }, "https://x/").includes("<url>"), false);
+check("no policy text: the online cancellation deadline", cancelDeadlineHours({ cancellationPolicy: null, minCancelHours: 24 }), 24);
+check("with a policy of its own: none", cancelDeadlineHours({ cancellationPolicy: "Avísanos", minCancelHours: 24 }), null);
+check("an older server that does not send it: none", cancelDeadlineHours({ cancellationPolicy: null }), null);
 
 console.log("\n=== Summary ===");
 console.log(`Pass: ${pass}, Fail: ${fail}`);

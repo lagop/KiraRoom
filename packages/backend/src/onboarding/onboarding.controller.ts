@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/comm
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { OnboardingService } from "./onboarding.service";
+import { BookingLinkSharedDto, SubmitOnboardingWizardDto } from "./dto/onboarding-wizard.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
@@ -41,6 +42,14 @@ export class OnboardingController {
     return this.onboarding.restoreChecklist(tenantId);
   }
 
+  /** Compartir: the QR downloaded, the booking link copied or shared (O10). */
+  @Post("events/booking-link-shared")
+  @Roles(...SALON_TEAM)
+  async bookingLinkShared(@Req() req: AuthedRequest, @Body() body: BookingLinkSharedDto) {
+    const tenantId = this.requireTenantId(req);
+    return this.onboarding.recordBookingLinkShared(tenantId, body?.how ?? "link");
+  }
+
   // ==================== Sprint 2 / 2.1 — owner wizard ====================
 
   @Get("wizard")
@@ -54,24 +63,29 @@ export class OnboardingController {
   @Roles(...SALON_MANAGERS)
   async submitWizard(
     @Req() req: AuthedRequest,
-    @Body() body: {
-      services?: Array<{
-        name: string;
-        durationMinutes: number;
-        price: number;
-        description?: string;
-      }>;
-      firstAppointment?: {
-        clientName: string;
-        serviceName: string;
-        date: string;
-        time: string;
-      };
-      workingHours?: Record<string, { open: string; close: string } | null>;
-    },
+    @Body() body: SubmitOnboardingWizardDto,
   ) {
     const tenantId = this.requireTenantId(req);
-    return this.onboarding.submitWizard(tenantId, body);
+    // Only the days sent: the week is stored whole as openingHours.
+    const workingHours = body.workingHours
+      ? Object.fromEntries(Object.entries(body.workingHours).filter(([, v]) => v !== undefined))
+      : undefined;
+    return this.onboarding.submitWizard(tenantId, {
+      services: body.services?.map((s) => ({
+        name: s.name,
+        durationMinutes: s.durationMinutes,
+        price: s.price,
+        description: s.description,
+      })),
+      firstAppointment: body.firstAppointment && {
+        clientName: body.firstAppointment.clientName,
+        serviceName: body.firstAppointment.serviceName,
+        date: body.firstAppointment.date,
+        time: body.firstAppointment.time,
+      },
+      workingHours,
+      openingHours: body.openingHours,
+    });
   }
 
   private requireTenantId(req: AuthedRequest): string {

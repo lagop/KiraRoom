@@ -4,7 +4,7 @@ import type { CopilotScenario } from '../../virtual-receptionist/__e2e__/harness
  * P2A-staff-copilot — real-world L-1 scenarios.
  *
  * Each scenario drives the live AssistantService against the live DB +
- * the live MiniMax/Claude provider (gated by `RUN_LLM_E2E_TESTS=1`
+ * the live Claude provider (gated by `RUN_LLM_E2E_TESTS=1`
  * + a configured platform LLM key). The harness creates four test
  * users per run (owner / admin / staff / saas_owner) under the
  * `e2e-tenant`; scenarios set the `role` they want to drive as.

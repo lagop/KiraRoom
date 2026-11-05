@@ -48,6 +48,7 @@ const NOT_BACKEND_CONFIG: Record<string, string> = {
   // Baked into the frontend bundle as build args (packages/frontend/Dockerfile).
   NEXT_PUBLIC_API_URL: 'frontend build arg, not backend runtime config',
   NEXT_PUBLIC_WS_URL: 'frontend build arg, not backend runtime config',
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: 'frontend build arg (build-images.sh), not backend runtime config',
 
   // Consumed by the deploy tooling, not by the app.
   REGISTRY: 'read by ops/deploy scripts',

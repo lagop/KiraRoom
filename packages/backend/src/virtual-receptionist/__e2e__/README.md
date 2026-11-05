@@ -1,6 +1,6 @@
 # L-1 end-to-end scenarios for the Virtual Receptionist
 
-Real-world scenarios that drive the **live MiniMax-M3** model against
+Real-world scenarios that drive the **live Anthropic (Claude)** model against
 the real database. Each scenario has hard assertions on:
 
 - which tools the model called,
@@ -8,14 +8,14 @@ the real database. Each scenario has hard assertions on:
 - that the assistant stays concise and in-scope.
 
 The suite is **gated** so it never runs in regular CI: you must opt in
-with `RUN_LLM_E2E_TESTS=1` and provide a fresh `MINIMAX_API_KEY`.
+with `RUN_LLM_E2E_TESTS=1` and provide a fresh `ANTHROPIC_API_KEY`.
 
 ## Run via Jest
 
 ```bash
 cd packages/backend
 $env:RUN_LLM_E2E_TESTS="1"
-$env:MINIMAX_API_KEY="sk-cp-..."   # a fresh key, NOT the one shared in chat
+$env:ANTHROPIC_API_KEY="..."   # a fresh key, NOT the one shared in chat
 $env:DATABASE_URL="postgresql://..."
 npm run test:e2e:llm
 ```
@@ -24,7 +24,7 @@ Equivalent on bash:
 
 ```bash
 RUN_LLM_E2E_TESTS=1 \
-MINIMAX_API_KEY=sk-cp-... \
+ANTHROPIC_API_KEY=... \
 DATABASE_URL=postgresql://... \
 npm run test:e2e:llm
 ```
@@ -128,5 +128,5 @@ Assertion kinds:
   "Ana", scenario `professionals` will fail. Either seed a test tenant
   with the expected fixtures or update the assertions.
 - The harness relies on `MessageResponseDto.toolsExecuted` being
-  populated by `MiniMaxProvider.generateCompletion`. If you change the
+  populated by `AnthropicProvider.generateCompletion`. If you change the
   field name, update the harness's `runScenario` accordingly.

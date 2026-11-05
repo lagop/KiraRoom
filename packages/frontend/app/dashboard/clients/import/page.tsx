@@ -3,7 +3,8 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download, Upload, Check, AlertTriangle, FileText } from "lucide-react";
-import apiClient, { ImportPreviewRow, ImportPreviewResult, ImportCommitResult, ImportUpload } from "@/lib/api";
+import apiClient, { ImportPreviewRow, ImportPreviewResult, ImportCommitResult, ImportRowError, ImportUpload } from "@/lib/api";
+import { errorReasons, errorRowsCsv } from "@/lib/import-errors";
 import { useToast } from "@/components/ui/use-toast";
 
 type Step = "download" | "upload" | "preview" | "done";
@@ -59,7 +60,7 @@ const COPY: Record<Kind, { title: string; intro: string; columns: string }> = {
     title: "Importar clientes",
     intro:
       "Sube la exportación de tu programa anterior (Booksy, Treatwell, Fresha…) o un Excel (.xlsx). Reconocemos columnas como Nombre, Apellidos, Teléfono o Móvil, Email y Fecha de nacimiento. No se duplican las clientas que ya tienes: comparamos el email y el teléfono.",
-    columns: "Nombre (o Cliente / Nombre completo), Apellidos, Teléfono o Móvil, Email, Fecha de nacimiento, Notas. Hace falta un teléfono o un email.",
+    columns: "Nombre (o Cliente / Nombre completo), Apellidos, Teléfono o Móvil, Email, Fecha de nacimiento, Notas, Acepta publicidad (o LOPD): un «no» queda guardado y esa clienta no recibe campañas. Hace falta un teléfono o un email.",
   },
   services: {
     title: "Importar servicios",
@@ -90,6 +91,8 @@ function isXlsx(file: File): boolean {
 
 /** Base64 grows the file by a third and the API takes 5 MB bodies. */
 const MAX_XLSX_BYTES = 3_500_000;
+/** A CSV goes as text: past ~4.5 MB the 5 MB body limit refuses it. */
+const MAX_CSV_BYTES = 4_500_000;
 
 async function readBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -148,6 +151,14 @@ function ImportPageContent() {
       toast({
         title: "El archivo es demasiado grande",
         description: "Divídelo en varios Excel o guárdalo como CSV.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!isXlsx(f) && f.size > MAX_CSV_BYTES) {
+      toast({
+        title: "El archivo es demasiado grande",
+        description: "Divídelo en varios CSV de menos de 4,5 MB y súbelos uno a uno.",
         variant: "destructive",
       });
       return;
@@ -337,6 +348,12 @@ function ImportPageContent() {
                 : "No se enviarán recordatorios de estas citas."}
             </p>
           )}
+          {(preview.warnings ?? []).map((w) => (
+            <div key={w} className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{w}</span>
+            </div>
+          ))}
           {preview.stats.totalRows > preview.preview.length && (
             <p className="text-xs text-gray-500">Se muestran las primeras {preview.preview.length} filas.</p>
           )}
@@ -413,6 +430,7 @@ function ImportPageContent() {
               </tbody>
             </table>
           </div>
+          <ErrorList errors={preview.errors ?? []} filename={file?.name} />
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
             <button onClick={() => setStep("upload")} className="text-gray-500">
               ← Atrás
@@ -451,10 +469,22 @@ function ImportPageContent() {
               </a>
             </p>
           )}
+          {kind === "clients" && !!commit.marketingRefusals && (
+            <p className="text-sm text-gray-600">
+              {commit.marketingRefusals === 1
+                ? "1 clienta no acepta publicidad: queda guardado en su ficha y no recibirá campañas."
+                : `${commit.marketingRefusals} clientas no aceptan publicidad: queda guardado en su ficha y no recibirán campañas.`}
+            </p>
+          )}
           {commit.errorRows > 0 && (
             <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 flex items-start gap-2 justify-center">
               <AlertTriangle className="w-4 h-4" />
-              {commit.errorRows} filas con errores no se importaron.
+              {commit.errorRows === 1 ? "1 fila con errores no se importó." : `${commit.errorRows} filas con errores no se importaron.`}
+            </div>
+          )}
+          {commit.errors && commit.errors.length > 0 && (
+            <div className="text-left">
+              <ErrorList errors={commit.errors} filename={file?.name} />
             </div>
           )}
           <button onClick={() => reset(kind)} className="text-purple-600 hover:underline text-sm">
@@ -462,6 +492,57 @@ function ImportPageContent() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Every row left out, with the column and the reason (the preview table only
+ * shows the first 50 rows), and the CSV to fix them and upload again.
+ */
+function ErrorList({ errors, filename }: { errors: ImportRowError[]; filename?: string }) {
+  if (errors.length === 0) return null;
+  function download() {
+    const base = (filename ?? "importacion").replace(/\.[^.]+$/, "");
+    const url = URL.createObjectURL(new Blob([errorRowsCsv(errors)], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}-filas-con-errores.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  return (
+    <div className="border border-red-200 rounded-lg">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-red-50 px-3 py-2">
+        <span className="text-sm font-medium text-red-800">
+          {errors.length === 1 ? "1 fila no se importará" : `${errors.length} filas no se importarán`}
+        </span>
+        <button
+          type="button"
+          onClick={download}
+          className="inline-flex items-center gap-1 text-sm text-purple-700 hover:underline"
+        >
+          <Download className="w-4 h-4" /> Descargar filas con errores (CSV)
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr>
+              <th className="px-2 py-1 text-left whitespace-nowrap">Fila</th>
+              <th className="px-2 py-1 text-left">Motivo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {errors.map((e) => (
+              <tr key={e.row} className="border-t border-gray-100">
+                <td className="px-2 py-1 align-top">{e.row}</td>
+                <td className="px-2 py-1 text-red-700">{errorReasons(e)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

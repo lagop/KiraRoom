@@ -1,19 +1,21 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Redirect, Req, UseGuards } from "@nestjs/common";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { Public } from "../auth/decorators/public.decorator";
-import { ClientCadenceService } from "./client-cadence.service";
+import { ClientCadenceService, rebookingChannelOf } from "./client-cadence.service";
 import { RebookingDispatcherService } from "./rebooking-dispatcher.service";
 import { UpdateRebookingConfigDto } from "./dto/rebooking.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { createHmac, timingSafeEqual } from "crypto";
 import { Throttle } from "@nestjs/throttler";
+import { EmailUnsubscribeService } from "../email-campaigns/email-unsubscribe.service";
+import { ConsentService } from "../consent/consent.service";
 
 interface AuthedRequest extends Request {
-  user: { tenantId?: string };
+  user: { tenantId?: string; id?: string; role?: string };
 }
 
 @Controller("rebooking")
@@ -23,6 +25,8 @@ export class RebookingController {
     private readonly cadence: ClientCadenceService,
     private readonly dispatcher: RebookingDispatcherService,
     private readonly prisma: PrismaService,
+    private readonly unsubscribes: EmailUnsubscribeService,
+    private readonly consent: ConsentService,
   ) {}
 
   @Get("config")
@@ -39,16 +43,88 @@ export class RebookingController {
   ) {
     const tenantId = this.requireTenantId(req);
     const current = await this.cadence.getTenantConfig(tenantId);
-    const merged = { ...current, ...dto };
+    const sent = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
+    // Email is the only channel (rebookingChannelOf): an older panel that
+    // still sends "whatsapp" or "both" saves email.
+    const merged = { ...current, ...sent, channelFallback: rebookingChannelOf(sent.channelFallback) };
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: { rebookingSettings: merged as any } });
-    return merged;
+    // The next reminder date of each client was only worked out at her next
+    // visit, so a new "días de antelación" or "mínimo de visitas" did nothing
+    // for weeks. They are recomputed now, in the background: the save
+    // answers at once.
+    const recompute =
+      merged.leadDays !== current.leadDays ||
+      merged.minVisits !== current.minVisits ||
+      (merged.enabled && !current.enabled);
+    if (recompute) {
+      void this.cadence.recomputeTenantInBackground(tenantId);
+    }
+    return { ...merged, recomputing: recompute };
   }
+
+  /**
+   * The salon's latest rebooking reminders, for Ajustes > Recordatorios:
+   * client and service by name (not ids), the channel and the status. Dates
+   * are ISO; the salon's timezone goes with them so the page shows them in
+   * the salon's day.
+   */
+  @Get("log")
+  @Roles(UserRole.owner, UserRole.admin)
+  async getTenantLog(@Req() req: AuthedRequest, @Query("limit") limit?: string) {
+    const tenantId = this.requireTenantId(req);
+    const take = Math.min(Math.max(Number.parseInt(limit ?? "", 10) || 20, 1), 100);
+    const [tenant, rows] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      this.prisma.rebookingReminder.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: "desc" },
+        take,
+        select: {
+          id: true,
+          serviceId: true,
+          scheduledAt: true,
+          sentAt: true,
+          channel: true,
+          status: true,
+          createdAt: true,
+          client: { select: { firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+    const serviceIds = [...new Set(rows.map((r) => r.serviceId).filter((id): id is string => !!id))];
+    const services = serviceIds.length
+      ? await this.prisma.service.findMany({ where: { tenantId, id: { in: serviceIds } }, select: { id: true, name: true } })
+      : [];
+    const serviceName = new Map(services.map((s) => [s.id, s.name]));
+    return {
+      timezone: tenant?.timezone || "Europe/Madrid",
+      items: rows.map((r) => ({
+        id: r.id,
+        clientName: [r.client?.firstName, r.client?.lastName].filter(Boolean).join(" ").trim() || null,
+        serviceName: (r.serviceId && serviceName.get(r.serviceId)) || null,
+        channel: r.channel,
+        status: r.status,
+        scheduledAt: r.scheduledAt,
+        sentAt: r.sentAt,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
+  /*
+   * One client's cadence, reminder log and opt-out. The client must be in
+   * the caller's reach, as her file (ConsentService.assertClientInReach):
+   * a client of the caller's salon and, for staff, one with an appointment
+   * with them. Anyone else answers 404. These routes used to take any id:
+   * a professional could read or stop the reminders of any client.
+   */
 
   @Get("clients/:id/prediction")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getPrediction(@Param("id") clientId: string) {
+  async getPrediction(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.computeForClient(clientId);
     return this.prisma.clientCadence.findUnique({
       where: { clientId } });
@@ -56,7 +132,8 @@ export class RebookingController {
 
   @Get("clients/:id/log")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async getLog(@Param("id") clientId: string) {
+  async getLog(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     return this.prisma.rebookingReminder.findMany({
       where: { clientId },
       orderBy: { createdAt: "desc" },
@@ -65,22 +142,52 @@ export class RebookingController {
 
   @Post("clients/:id/opt-out")
   @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  async optOut(@Param("id") clientId: string) {
+  async optOut(@Req() req: AuthedRequest, @Param("id", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.optOutClient(clientId);
     return { ok: true };
   }
 
   @Post("recompute/:clientId")
   @Roles(UserRole.owner, UserRole.admin)
-  async recompute(@Param("clientId") clientId: string) {
+  async recompute(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.assertClientInReach(req, clientId);
     await this.cadence.computeForClient(clientId);
     return { ok: true };
   }
 
+  private assertClientInReach(req: AuthedRequest, clientId: string): Promise<void> {
+    return this.consent.assertClientInReach(this.requireTenantId(req), clientId, {
+      id: req.user?.id ?? "",
+      role: req.user?.role ?? "",
+    });
+  }
+
   /**
-   * Public opt-out endpoint reachable from the footer link in the reminder
-   * email. Auth-less by design (clients don't have accounts necessarily).
-   * Validates an HMAC token bound to the clientId.
+   * Links in reminders sent before the shared unsubscribe link.
+   *
+   * Those emails pointed at the web app's /api/public/rebooking/opt-out,
+   * which never existed (a click answered 404); the web app now forwards
+   * that path here. Opening a link only describes, as with the campaigns'
+   * link (a mail scanner must not unsubscribe anyone): a valid old link
+   * redirects to the unsubscribe page of that client, whose button does it;
+   * anything else lands on the same page saying the link is not valid.
+   */
+  @Public()
+  @Get("public/opt-out")
+  @Redirect()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  legacyOptOutPage(@Query("token") token: string, @Query("client") clientId: string) {
+    const url = this.legacyTokenValid(token, clientId)
+      ? this.unsubscribes.link({ kind: "c", id: clientId }).pageUrl
+      : this.unsubscribes.pageUrl("invalido");
+    return { url, statusCode: 302 };
+  }
+
+  /**
+   * The old opt-out action (HMAC over the client id), kept for anything that
+   * still posts to it. It now does what the shared unsubscribe link does:
+   * suppression list, marketing refusal and rebooking opt-out.
    */
   @Public()
   @Post("public/opt-out")
@@ -89,30 +196,30 @@ export class RebookingController {
     if (!token || !clientId) {
       throw new BadRequestException("token and client query params required");
     }
-    const secret = this.resolveOptOutSecret();
-    const expected = createHmac("sha256", secret)
-      .update(clientId)
-      .digest("hex")
-      .slice(0, 32);
-    if (
-      expected.length !== token.length ||
-      !timingSafeEqual(Buffer.from(expected), Buffer.from(token))
-    ) {
+    if (!this.legacyTokenValid(token, clientId)) {
       throw new BadRequestException("invalid token");
     }
-    await this.cadence.optOutClient(clientId);
+    try {
+      await this.unsubscribes.unsubscribe(this.unsubscribes.tokenFor({ kind: "c", id: clientId }));
+    } catch {
+      // A client without an email address: nothing to suppress, only the
+      // rebooking reminders to stop.
+      await this.cadence.optOutClient(clientId);
+    }
     return { ok: true };
   }
 
-  private resolveOptOutSecret(): string {
+  /** Whether `token` is the old opt-out signature of `clientId`. */
+  private legacyTokenValid(token: unknown, clientId: unknown): boolean {
+    if (typeof token !== "string" || typeof clientId !== "string" || !token || !clientId) return false;
     const secret = process.env.REBOOKING_OPT_OUT_SECRET;
-    if (secret && secret.length >= 16) return secret;
-    if (process.env.NODE_ENV === "production") {
-      throw new BadRequestException(
-        "rebooking is not configured for production",
-      );
-    }
-    return "dev-secret-do-not-use-in-production";
+    let key: string;
+    if (secret && secret.length >= 16) key = secret;
+    else if (process.env.NODE_ENV === "production") return false;
+    else key = "dev-secret-do-not-use-in-production";
+    const expected = Buffer.from(createHmac("sha256", key).update(clientId).digest("hex").slice(0, 32));
+    const given = Buffer.from(token);
+    return expected.length === given.length && timingSafeEqual(expected, given);
   }
 
   private requireTenantId(req: AuthedRequest): string {

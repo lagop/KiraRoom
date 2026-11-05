@@ -8,6 +8,7 @@ import {
   corsRejectionHandler,
   CorsOriginNotAllowedError,
   DEFAULT_DEV_ORIGIN,
+  salonOriginAllowed,
 } from './cors';
 
 const ALLOWED = 'https://app.kiraroom.net';
@@ -32,10 +33,13 @@ class TestModule {}
  * rejection would reach a Nest exception filter (it does not) or what
  * Express would answer. These cases pin the behaviour end to end.
  */
-async function bootApp(origins: string[]): Promise<INestApplication> {
+async function bootApp(
+  origins: string[],
+  extraAllowed?: (origin: string) => Promise<boolean>,
+): Promise<INestApplication> {
   const app = await NestFactory.create(TestModule, { logger: false });
   const silent = { warn: () => undefined } as unknown as Logger;
-  app.enableCors(buildCorsOptions(origins, silent));
+  app.enableCors(buildCorsOptions(origins, silent, extraAllowed));
   app.use(corsRejectionHandler);
   await app.init();
   return app;
@@ -139,6 +143,53 @@ describe('CORS allow-list', () => {
         .set('Origin', DISALLOWED);
 
       expect(res.status).toBe(200);
+      await app.close();
+    });
+  });
+
+  describe('salon origins', () => {
+    const verified = async (host: string) => host === 'reservas.salonluna.es';
+    const allowed = (origin: string) => salonOriginAllowed(origin, 'kiraroom.net', verified);
+
+    it('accepts a salon subdomain and a verified domain, over https', async () => {
+      await expect(allowed('https://salon-lucia.kiraroom.net')).resolves.toBe(true);
+      await expect(allowed('https://reservas.salonluna.es')).resolves.toBe(true);
+    });
+
+    it('rejects reserved names, nested labels, http, ports and unknown domains', async () => {
+      await expect(allowed('https://admin.kiraroom.net')).resolves.toBe(false);
+      await expect(allowed('https://a.b.kiraroom.net')).resolves.toBe(false);
+      await expect(allowed('https://kiraroom.net.evil.com')).resolves.toBe(false);
+      await expect(allowed('http://salon-lucia.kiraroom.net')).resolves.toBe(false);
+      await expect(allowed('https://salon-lucia.kiraroom.net:8443')).resolves.toBe(false);
+      await expect(allowed('https://reservas.otro.es')).resolves.toBe(false);
+      await expect(allowed('null')).resolves.toBe(false);
+    });
+
+    it('accepts no subdomain when no base is configured', async () => {
+      await expect(salonOriginAllowed('https://salon-lucia.kiraroom.net', '', verified)).resolves.toBe(false);
+    });
+
+    it('answers the preflight from a salon subdomain and still 403s others', async () => {
+      const app = await bootApp([ALLOWED], allowed);
+      const ok = await request(app.getHttpServer())
+        .options('/ping')
+        .set('Origin', 'https://salon-lucia.kiraroom.net')
+        .set('Access-Control-Request-Method', 'POST');
+      expect(ok.status).toBe(204);
+      expect(ok.headers['access-control-allow-origin']).toBe('https://salon-lucia.kiraroom.net');
+
+      const denied = await request(app.getHttpServer()).get('/ping').set('Origin', DISALLOWED);
+      expect(denied.status).toBe(403);
+      await app.close();
+    });
+
+    it('403s when the domain lookup fails', async () => {
+      const app = await bootApp([ALLOWED], async () => {
+        throw new Error('db down');
+      });
+      const res = await request(app.getHttpServer()).get('/ping').set('Origin', 'https://reservas.salonluna.es');
+      expect(res.status).toBe(403);
       await app.close();
     });
   });

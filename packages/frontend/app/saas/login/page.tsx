@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import apiClient, { setToken } from "@/lib/api";
+import apiClient, { setToken, isTwoFactorRequired } from "@/lib/api";
+import { TwoFactorStep } from "@/src/components/auth/two-factor-step";
 import { LanguageSwitcher } from "../components/language-switcher";
 import { Building2, BarChart2, Users, Shield } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
+import { authStorage } from "@/lib/auth-storage";
 
 export default function SaasLoginPage() {
   const t = useTranslations();
@@ -14,6 +16,23 @@ export default function SaasLoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Set when the account has two-step verification: the code step replaces the form.
+  const [challenge, setChallenge] = useState<string | null>(null);
+
+  const signedIn = (response: { accessToken: string; user: { role: string } }) => {
+    if (response.user.role !== "saas_owner") {
+      setChallenge(null);
+      setError(t("saas.access_denied"));
+      return;
+    }
+    setToken(response.accessToken);
+    if (typeof window !== "undefined") {
+      authStorage().setItem("user", JSON.stringify(response.user));
+      // Set cookie for middleware to detect SaaS user
+      document.cookie = "saas_user=true; path=/; max-age=" + (7 * 24 * 60 * 60);
+    }
+    router.push("/saas");
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,20 +41,11 @@ export default function SaasLoginPage() {
 
     try {
       const response = await apiClient.login(email, password);
-
-      if (response.user.role !== "saas_owner") {
-        setError(t("saas.access_denied"));
-        setLoading(false);
+      if (isTwoFactorRequired(response)) {
+        setChallenge(response.challenge);
         return;
       }
-
-      setToken(response.accessToken);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("user", JSON.stringify(response.user));
-        // Set cookie for middleware to detect SaaS user
-        document.cookie = "saas_user=true; path=/; max-age=" + (7 * 24 * 60 * 60);
-      }
-      router.push("/saas");
+      signedIn(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("saas.login_failed"));
     } finally {
@@ -128,6 +138,17 @@ export default function SaasLoginPage() {
             </div>
           )}
 
+          {challenge ? (
+            <TwoFactorStep
+              challenge={challenge}
+              accent="slate"
+              onSignedIn={signedIn}
+              onCancel={() => {
+                setChallenge(null);
+                setPassword("");
+              }}
+            />
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -153,6 +174,11 @@ export default function SaasLoginPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-slate-500"
                 required
               />
+              <p className="text-sm mt-2 text-right">
+                <a href="/forgot-password?from=console" className="text-slate-700 hover:underline">
+                  {t("saas.forgot_password")}
+                </a>
+              </p>
             </div>
 
             <button
@@ -163,6 +189,7 @@ export default function SaasLoginPage() {
               {loading ? t("saas.signing_in") : t("saas.sign_in")}
             </button>
           </form>
+          )}
 
           <p className="text-sm text-gray-500 mt-6 text-center">
             {t("saas.restricted_area")}

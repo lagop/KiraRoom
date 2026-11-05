@@ -59,6 +59,8 @@ export interface AltaRecord {
   tipoRectificativa?: "I";
   rectified?: InvoiceId[];
   descripcion: string;
+  /** FacturaSimplificadaArt7273: a simplified invoice that names its recipient (RD 1619/2012 art. 7.2), sent as F1. */
+  simplifiedWithRecipient?: boolean;
   /** Mandatory for F1 and R1-R4, forbidden for F2 and R5. */
   recipient?: Party;
   desglose: TaxLine[];
@@ -144,6 +146,7 @@ export function registroAlta(r: AltaRecord): string {
           )
         : "") +
       el("DescripcionOperacion", r.descripcion) +
+      (r.simplifiedWithRecipient ? el("FacturaSimplificadaArt7273", "S") : "") +
       (r.recipient
         ? wrap("Destinatarios", wrap("IDDestinatario", el("NombreRazon", r.recipient.name) + el("NIF", r.recipient.nif)))
         : "") +

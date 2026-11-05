@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Req, Res, Headers, UseGuards, BadRequestException } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Req, Res, UseGuards, BadRequestException } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -8,27 +8,23 @@ import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { Public } from "../auth/decorators/public.decorator";
-import { WidgetService } from "./widget.service";
+import { HEX_COLOR, WidgetService } from "./widget.service";
+import { CreateWidgetDto, MAX_WIDGET_THEME_BYTES, UpdateWidgetDto } from "./widget.dto";
 import { Roles, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 
 interface AuthedRequest extends Request {
   user: { id: string; tenantId: string; role: string };
 }
 
-class CreateWidgetDto {
-  name: string;
-  allowedOrigins?: string[];
-  services?: string[];
-  professionals?: string[];
-  theme?: Record<string, unknown>;
-}
-
-class UpdateWidgetDto {
-  name?: string;
-  allowedOrigins?: string[];
-  services?: string[];
-  professionals?: string[];
-  theme?: Record<string, unknown>;
+function assertThemeSize(theme: unknown): void {
+  if (theme && JSON.stringify(theme).length > MAX_WIDGET_THEME_BYTES) {
+    throw new BadRequestException("theme too large");
+  }
+  // The widget's main colour: a hex code or nothing (widgetTheme).
+  const color = theme && typeof theme === "object" ? (theme as Record<string, unknown>).primaryColor : undefined;
+  if (color !== undefined && color !== null && color !== "" && !(typeof color === "string" && HEX_COLOR.test(color.trim()))) {
+    throw new BadRequestException("El color tiene que ser un código como #1a2b3c");
+  }
 }
 
 @ApiTags("widget")
@@ -52,6 +48,7 @@ export class WidgetController {
   @Roles(...SALON_MANAGERS)
   async create(@Req() req: AuthedRequest, @Body() body: CreateWidgetDto) {
     if (!body?.name) throw new BadRequestException("name is required");
+    assertThemeSize(body.theme);
     const created = await this.widgetService.create(req.user.tenantId, body);
     return {
       id: created.id,
@@ -75,6 +72,7 @@ export class WidgetController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() body: UpdateWidgetDto,
   ) {
+    assertThemeSize(body.theme);
     return this.widgetService.update(req.user.tenantId, id, body);
   }
 
@@ -100,15 +98,22 @@ export class EmbedController {
   async getConfig(@Param("token") token: string, @Res() res: Response) {
     const widget = await this.widgetService.findByToken(token);
     const data = await this.widgetService.getPublicConfig(widget.id);
-    const allowedOrigins = (widget.allowedOrigins ?? []) as string[];
-    const ancestors =
-      allowedOrigins.length > 0 ? allowedOrigins.join(" ") : "*";
-    res.setHeader(
-      "Content-Security-Policy",
-      `frame-ancestors ${ancestors}`,
-    );
-    res.setHeader("X-Frame-Options", "ALLOWALL");
+    // Which sites may frame the widget is said by the embed PAGE
+    // (frontend middleware, from frameAncestors below): a frame-ancestors
+    // header on this JSON restricted nothing.
     res.setHeader("Cache-Control", "public, max-age=30");
     return res.json(data);
+  }
+
+  /**
+   * The allowed origins, for the frontend's embed page header. Asked by
+   * the Next server (cached there for a minute), so the limit is high.
+   */
+  @Get(":token/frame-ancestors")
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 600 } })
+  @ApiOperation({ summary: "Sites allowed to frame the widget (public)" })
+  async frameAncestors(@Param("token") token: string) {
+    return this.widgetService.frameAncestors(token);
   }
 }

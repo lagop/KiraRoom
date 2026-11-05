@@ -15,7 +15,8 @@ interface LinkInfo {
 }
 
 /**
- * The page the unsubscribe link of a salon's marketing emails opens.
+ * The page the unsubscribe link of a salon's marketing emails (campaigns and
+ * "vuelve a reservar" reminders) opens.
  *
  * Opening it does not unsubscribe: mail scanners follow links, so only the
  * button does (POST). The same POST is what a mail client's own
@@ -92,8 +93,10 @@ export default function UnsubscribePage() {
         <Check className="w-12 h-12 text-green-600 mx-auto" />
         <h1 className="text-xl font-semibold">Te has dado de baja</h1>
         <p className="text-sm text-gray-600">
-          {info.salonName} no te enviará más emails de promociones a {info.email}. Seguirás
-          recibiendo los avisos de tus citas, como las confirmaciones y los recordatorios.
+          {info.salonName} no te enviará más emails de promociones ni recordatorios para volver a
+          reservar a {info.email}. Seguirás
+          recibiendo los avisos de las citas que reserves, como las confirmaciones y los
+          recordatorios del día antes.
         </p>
       </>,
     );
@@ -104,7 +107,8 @@ export default function UnsubscribePage() {
       <MailX className="w-10 h-10 text-gray-500 mx-auto" />
       <h1 className="text-xl font-semibold">¿Dejar de recibir promociones?</h1>
       <p className="text-sm text-gray-600">
-        Dejarás de recibir los emails de promociones y novedades de{" "}
+        Dejarás de recibir los emails de promociones, novedades y recordatorios para volver a
+        reservar de{" "}
         <strong>{info.salonName}</strong> en {info.email}. Los avisos de tus citas seguirán
         llegando.
       </p>

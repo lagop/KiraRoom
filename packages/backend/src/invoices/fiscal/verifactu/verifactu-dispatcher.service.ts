@@ -1,7 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { Interval } from "@nestjs/schedule";
 import { InvoiceFiscalStatus, VerifactuRecord, VerifactuRecordKind, VerifactuRecordStatus } from "@prisma/client";
 import { EncryptionService } from "../../../common/encryption/encryption.service";
+import { OpsAlertService } from "../../../common/ops-alerts/ops-alert.service";
 import { PrismaService } from "../../../common/prisma/prisma.service";
 import { openPkcs12 } from "./certificate";
 import { INITIAL_WAIT_SECONDS, MAX_RECORDS_PER_SUBMISSION, endpoint, verifactuAvailable } from "./config";
@@ -14,6 +15,9 @@ import { envelope } from "./xml";
 export function retryDelaySeconds(failedAttempts: number): number {
   return Math.min(60 * 2 ** Math.max(0, failedAttempts - 1), 3600);
 }
+
+/** An anonymised salon with no certificate left: how often its queue is looked at. */
+const ANONYMIZED_RETRY_SECONDS = 7 * 24 * 3600;
 
 export type SendOutcome =
   | { kind: "nothing" }
@@ -41,6 +45,7 @@ export class VerifactuDispatcher {
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
     private readonly transport: VerifactuTransport,
+    @Optional() private readonly opsAlerts?: OpsAlertService,
   ) {}
 
   @Interval(15_000)
@@ -100,16 +105,29 @@ export class VerifactuDispatcher {
       take: MAX_RECORDS_PER_SUBMISSION,
     });
 
+    // An anonymised salon's records stay queued like any other: the certificate
+    // is kept for them (TENANT_MODEL_ON_ERASURE) and they are still its invoices.
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { name: true, legalName: true, anonymizedAt: true },
+    });
     const credentials = await this.credentials(tenantId);
     if (!credentials) {
-      await this.failed(tenantId, chain.failedAttempts, "Falta el certificado electrónico para enviar a la AEAT", false);
+      const message = "Falta el certificado electrónico para enviar a la AEAT";
+      if (tenant.anonymizedAt) {
+        // Nobody is left to upload one: the platform owner hears, and it is
+        // tried again weekly, not hourly forever. The records stay pending.
+        await this.failed(tenantId, chain.failedAttempts, message, false, ANONYMIZED_RETRY_SECONDS);
+        await this.alert(tenantId, "salón anonimizado con registros sin enviar", message);
+      } else {
+        await this.failed(tenantId, chain.failedAttempts, message, false);
+      }
       return { kind: "no-credentials" };
     }
 
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { name: true, legalName: true } });
     const incidencia = chain.incidentSince != null;
     const body = envelope(
-      { name: format.text(tenant.legalName || tenant.name, 120), nif: first.nif },
+      { name: await this.obligadoName(first, tenant), nif: first.nif },
       records.map((r) => r.xml),
       incidencia,
     );
@@ -161,6 +179,9 @@ export class VerifactuDispatcher {
       response: reply.body,
     });
     const tally = await this.applyResults(records, parsed, submission.id);
+    if (tally.rejected > 0) {
+      await this.alert(tenantId, "registros rechazados por la AEAT", `${tally.rejected} de ${records.length} en el envío ${submission.id}`);
+    }
     await this.prisma.verifactuChain.update({
       where: { tenantId },
       data: {
@@ -230,9 +251,30 @@ export class VerifactuDispatcher {
     });
   }
 
-  private async failed(tenantId: string, previousFailures: number, message: string, incident: boolean) {
+  /**
+   * The taxpayer's name: the one recorded on its invoice when it was issued.
+   * Anonymising renames the salon, and the AEAT must still get the razón social.
+   */
+  private async obligadoName(
+    record: VerifactuRecord,
+    tenant: { name: string; legalName: string | null },
+  ): Promise<string> {
+    const invoice = record.invoiceId
+      ? await this.prisma.invoice.findUnique({ where: { id: record.invoiceId }, select: { issuerNameAtIssue: true } })
+      : null;
+    return format.text(invoice?.issuerNameAtIssue || tenant.legalName || tenant.name, 120);
+  }
+
+  /** The platform owner by email, at most one an hour (audit 8 D15). Never throws. */
+  private async alert(tenantId: string, what: string, detail: string): Promise<void> {
+    await this.opsAlerts
+      ?.notify("fiscal_rejected", `VERI*FACTU: ${what}`, `Salón (tenantId): ${tenantId}\n${detail}`)
+      .catch(() => undefined);
+  }
+
+  private async failed(tenantId: string, previousFailures: number, message: string, incident: boolean, retrySeconds?: number) {
     const attempts = previousFailures + 1;
-    const delay = incident ? retryDelaySeconds(attempts) : 3600;
+    const delay = retrySeconds ?? (incident ? retryDelaySeconds(attempts) : 3600);
     const chain = await this.prisma.verifactuChain.findUniqueOrThrow({ where: { tenantId }, select: { incidentSince: true } });
     await this.prisma.verifactuChain.update({
       where: { tenantId },

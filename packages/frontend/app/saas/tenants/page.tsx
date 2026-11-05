@@ -16,9 +16,18 @@ import {
   XCircle,
   ExternalLink,
   Loader2,
+  Mail,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SharedIdentityBadge } from "../components/shared-identity-notice";
+import type { SharedIdentityWarning } from "@/lib/shared-identity";
+import { useToast } from "@/components/ui/use-toast";
+import { formatDateEs, tenantStatusClass, tenantStatusKey } from "@/lib/saas-tenant";
+import { SUPPORT_REASON_MAX, supportEntryUrl, supportReasonProblem } from "@/lib/support-session";
+import type { TenantAction } from "@/lib/saas-tenant";
+import { TenantStatusButtons, TenantStatusDialog, TenantStatusExtraBadges } from "../components/tenant-status-actions";
 
 interface TenantProgress {
   tenantId: string;
@@ -53,6 +62,17 @@ interface Tenant {
   // the row entirely, but the field is typed so future "show deleted"
   // UIs can render a badge without a refactor.
   deletedAt?: string | null;
+  anonymizedAt?: string | null;
+  /** The owner asked "Borrar mi salón" (audit 8 T4). */
+  deletionRequestedAt?: string | null;
+  /** Blocked from the console (D4) and the courtesy period (D6). */
+  blockedAt?: string | null;
+  courtesyUntil?: string | null;
+  hasStripeSubscription?: boolean;
+  /** The owner's account: salons from the normal signup have no salon email (T17). */
+  owner?: { email: string; firstName: string; lastName: string } | null;
+  /** Other salons with the same phone or NIF (D9). */
+  sharedIdentity?: SharedIdentityWarning[];
   userCount: number;
   clientCount: number;
   appointmentCount: number;
@@ -125,6 +145,58 @@ function ProgressCell({
 
 export default function TenantsPage() {
   const t = useTranslations();
+  const { toast } = useToast();
+  // The tenant about to be deleted, confirmed in the panel's dialog.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  // "Abrir panel" asks why first (C17); the salon opens in a new tab (C10).
+  const [pendingSupport, setPendingSupport] = useState<{ id: string; name: string } | null>(null);
+  const [supportReason, setSupportReason] = useState("");
+  const [supportError, setSupportError] = useState("");
+  const [launching, setLaunching] = useState(false);
+
+  const openSupportSession = async () => {
+    if (!pendingSupport) return;
+    const reason = supportReason.trim();
+    const problem = supportReasonProblem(reason);
+    if (problem) {
+      setSupportError(problem);
+      return;
+    }
+    // Opened now, inside the click, or the browser blocks it as a popup; it
+    // is pointed at the salon once the token is here.
+    const tab = window.open("about:blank", "_blank");
+    setLaunching(true);
+    try {
+      const res = await apiClient.launchSalonDashboard(pendingSupport.id, reason);
+      const url = supportEntryUrl({
+        token: res.token,
+        tenantId: res.tenantId,
+        tenantName: res.tenantName,
+        ownerName: res.ownerName,
+      });
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        // Popups blocked: this tab goes in; the console session is kept anyway.
+        window.location.href = url;
+      }
+      setPendingSupport(null);
+      setSupportReason("");
+      setSupportError("");
+    } catch (err) {
+      tab?.close();
+      setSupportError(err instanceof Error && err.message ? err.message : t("saas.failedToLoadTenant"));
+    } finally {
+      setLaunching(false);
+    }
+  };
+  const [deleting, setDeleting] = useState(false);
+  // Why the last delete failed (Stripe could not stop billing): shown in
+  // the dialog, whose button then retries (audit 8 T14).
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Suspender, Cortesía, Bloquear and Desbloquear are confirmed (T19, D4, D6).
+  const [pendingStatus, setPendingStatus] = useState<{ tenant: Tenant; action: TenantAction } | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -205,75 +277,34 @@ export default function TenantsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenants]);
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(t("saas.deleteConfirm", { name }))) {
-      return;
-    }
+  const performDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await apiClient.deleteSaasTenant(id);
+      await apiClient.deleteSaasTenant(pendingDelete.id);
+      setPendingDelete(null);
+      toast({ title: t("saas.console.deleted_ok") });
       fetchTenants();
     } catch (err) {
       console.error("Error deleting tenant:", err);
-      alert(t("saas.failedToDelete"));
-    }
-  };
-
-  const handleSuspend = async (id: string) => {
-    try {
-      await apiClient.suspendSaasTenant(id);
-      fetchTenants();
-    } catch (err) {
-      console.error("Error suspending tenant:", err);
-      alert(t("saas.failedToSuspend"));
-    }
-  };
-
-  const handleReactivate = async (id: string) => {
-    try {
-      await apiClient.reactivateSaasTenant(id);
-      fetchTenants();
-    } catch (err) {
-      console.error("Error reactivating tenant:", err);
-      alert(t("saas.failedToReactivate"));
+      // Nothing was deleted: the dialog stays, with why, and retries.
+      setDeleteError((err as Error)?.message || t("saas.failedToDelete"));
+    } finally {
+      setDeleting(false);
     }
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-            <CheckCircle className="w-3 h-3 mr-1" />
-            {t("common.active")}
-          </span>
-        );
-      case "trialing":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-            {t("saas.trial")}
-          </span>
-        );
-      case "cancelled":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-            <XCircle className="w-3 h-3 mr-1" />
-            {t("appointments.status_cancelled")}
-          </span>
-        );
-      case "past_due":
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-            <AlertTriangle className="w-3 h-3 mr-1" />
-            {t("payments.status_pending")}
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-            {status}
-          </span>
-        );
-    }
+    const key = tenantStatusKey(status);
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${tenantStatusClass(status)}`}>
+        {status === "active" && <CheckCircle className="w-3 h-3 mr-1" />}
+        {status === "cancelled" && <XCircle className="w-3 h-3 mr-1" />}
+        {(status === "past_due" || status === "suspended") && <AlertTriangle className="w-3 h-3 mr-1" />}
+        {key ? t(key) : status}
+      </span>
+    );
   };
 
   const getPlanBadge = (plan: string) => {
@@ -299,13 +330,28 @@ export default function TenantsPage() {
           <h1 className="text-2xl font-bold text-gray-900 truncate">{t("saas.tenants")}</h1>
           <p className="text-gray-500 mt-1">{t("saas.tenants_count", { count: total })}</p>
         </div>
-        <Link
-          href="/saas/tenants/new"
-          className="inline-flex items-center px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          {t("saas.create_tenant")}
-        </Link>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <Link
+            href="/saas/tenants/invites"
+            className="inline-flex items-center px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            {t("saas.console.invites")}
+          </Link>
+          <Link
+            href="/saas/tenants/invite"
+            className="inline-flex items-center px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Mail className="w-4 h-4 mr-2" />
+            {t("saas.console.invite_salon")}
+          </Link>
+          <Link
+            href="/saas/tenants/new"
+            className="inline-flex items-center px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            {t("saas.create_tenant")}
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}
@@ -395,10 +441,16 @@ export default function TenantsPage() {
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
                               {tenant.name}
+                              <SharedIdentityBadge warnings={tenant.sharedIdentity} />
                             </div>
                             <div className="text-sm text-gray-500">
-                              {tenant.email || t("saas.no_email")}
+                              {tenant.email || tenant.owner?.email || t("saas.no_email")}
                             </div>
+                            {tenant.email && tenant.owner?.email && tenant.owner.email !== tenant.email && (
+                              <div className="text-xs text-gray-400">
+                                {t("saas.console.owner")}: {tenant.owner.email}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -412,7 +464,7 @@ export default function TenantsPage() {
                             <span
                               className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"
                               title={t("saas.deleted_badge_title", {
-                                at: new Date(tenant.deletedAt).toLocaleString(),
+                                at: formatDateEs(tenant.deletedAt, true),
                               })}
                             >
                               {t("saas.deleted_badge")}
@@ -421,7 +473,10 @@ export default function TenantsPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {getStatusBadge(tenant.subscriptionStatus)}
+                        <div className="flex flex-wrap items-center gap-1">
+                          {getStatusBadge(tenant.subscriptionStatus)}
+                          <TenantStatusExtraBadges tenant={tenant} />
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <ProgressCell
@@ -436,13 +491,10 @@ export default function TenantsPage() {
                         <div className="flex items-center justify-end space-x-2">
                           {!tenant.deletedAt && (
                             <button
-                              onClick={async () => {
-                                try {
-                                  const res = await apiClient.launchSalonDashboard(tenant.id);
-                                  window.location.href = `/login?as_owner=${tenant.id}&token=${encodeURIComponent(res.token)}&owner=${encodeURIComponent(res.ownerName)}`;
-                                } catch (err) {
-                                  alert(t("saas.failed_to_load") || t("saas.failedToLoadTenant"));
-                                }
+                              onClick={() => {
+                                setSupportReason("");
+                                setSupportError("");
+                                setPendingSupport({ id: tenant.id, name: tenant.name });
                               }}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                               title={t("saas.launch")}
@@ -466,27 +518,13 @@ export default function TenantsPage() {
                               <Edit className="w-4 h-4" />
                             </Link>
                           )}
-                          {!tenant.deletedAt &&
-                            (tenant.subscriptionStatus === "active" || tenant.subscriptionStatus === "trialing" ? (
-                              <button
-                                onClick={() => handleSuspend(tenant.id)}
-                                className="p-2 text-gray-400 hover:text-yellow-600 rounded-lg hover:bg-yellow-50"
-                                title={t("saas.suspend_action")}
-                              >
-                                <AlertTriangle className="w-4 h-4" />
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleReactivate(tenant.id)}
-                                className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
-                                title={t("saas.reactivate_action")}
-                              >
-                                <CheckCircle className="w-4 h-4" />
-                              </button>
-                            ))}
+                          <TenantStatusButtons compact tenant={tenant} onAsk={(action) => setPendingStatus({ tenant, action })} />
                           {!tenant.deletedAt && (
                             <button
-                              onClick={() => handleDelete(tenant.id, tenant.name)}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setPendingDelete({ id: tenant.id, name: tenant.name });
+                              }}
                               className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                               title={t("saas.delete_action")}
                             >
@@ -532,6 +570,68 @@ export default function TenantsPage() {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={!!pendingSupport}
+        title={pendingSupport ? t("saas.support.title", { name: pendingSupport.name }) : ""}
+        description={
+          <div className="space-y-2">
+            <p>{t("saas.support.explain")} {t("saas.support.owner_notified")}</p>
+            <label htmlFor="support-reason" className="block font-medium text-gray-800">
+              {t("saas.support.reason_label")}
+            </label>
+            <textarea
+              id="support-reason"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              rows={3}
+              maxLength={SUPPORT_REASON_MAX}
+              placeholder={t("saas.support.reason_placeholder")}
+              value={supportReason}
+              onChange={(e) => setSupportReason(e.target.value)}
+            />
+            <p className="text-xs text-gray-500">
+              {supportReason.trim().length}/{SUPPORT_REASON_MAX}
+            </p>
+            {supportError && (
+              <p role="alert" className="text-sm text-red-600">
+                {supportError}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={t("saas.support.open")}
+        cancelLabel={t("common.cancel")}
+        loading={launching}
+        onCancel={() => setPendingSupport(null)}
+        onConfirm={openSupportSession}
+      />
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={pendingDelete ? t("saas.deleteConfirm", { name: pendingDelete.name }) : ""}
+        description={
+          deleteError ? (
+            <p role="alert" className="text-red-700">
+              <strong>{t("saas.console.delete_failed")}:</strong> {deleteError}
+            </p>
+          ) : undefined
+        }
+        confirmLabel={deleteError ? t("saas.console.retry") : t("saas.delete_tenant")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        loading={deleting}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteError(null);
+        }}
+        onConfirm={performDelete}
+      />
+
+      <TenantStatusDialog
+        tenant={pendingStatus?.tenant ?? null}
+        action={pendingStatus?.action ?? null}
+        onClose={() => setPendingStatus(null)}
+        onDone={fetchTenants}
+      />
     </div>
   );
 }

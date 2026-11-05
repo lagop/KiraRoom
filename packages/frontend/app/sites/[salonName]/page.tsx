@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { fetchPublicSalonPage } from "@/lib/public-site-server";
+import { fetchPublicReviews, fetchPublicSalonPage } from "@/lib/public-site-server";
 import {
+  salonPageIndexable,
   canonicalUrl,
   metaDescription,
   metaTitle,
+  publicImageSrc,
   salonJsonLd,
   serializeJsonLd,
   shareImage,
@@ -20,8 +22,8 @@ import SalonBookingPage from "./salon-booking-page";
  * (GET /public-site/page/:slug), writes the title, description, canonical
  * URL, Open Graph tags and schema.org data, and hands the same data to the
  * booking UI, which stays a client component and is still rendered into the
- * HTML: the name, services with prices, team and hours are in the page
- * source.
+ * HTML: the name, services with prices, team, hours and reviews are in the
+ * page source.
  */
 // A literal: Next reads segment config statically. Same value as
 // SALON_PAGE_REVALIDATE_SECONDS, which the fetch itself uses.
@@ -37,11 +39,18 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const title = metaTitle(page);
   const description = metaDescription(page);
   const image = shareImage(page);
+  const logo = publicImageSrc(page.logoUrl);
 
   return {
     title,
     description,
     alternates: { canonical: url },
+    // A salon that takes no bookings (trial ended, cancelled, suspended, no
+    // professional yet) keeps its page, with its phone, but out of search
+    // results; so does one with no active service yet (audit 7 N12).
+    ...(salonPageIndexable(page) ? {} : { robots: { index: false, follow: true } }),
+    // The salon's logo in the tab and bookmarks; else the app's icon.
+    ...(logo ? { icons: { icon: logo } } : {}),
     openGraph: {
       type: "website",
       url,
@@ -65,6 +74,7 @@ export default async function SalonPage({ params }: Props) {
   if (!page) notFound();
 
   const jsonLd = serializeJsonLd(salonJsonLd(page, canonicalUrl(page)));
+  const reviews = await fetchPublicReviews(page.id);
 
   return (
     <>
@@ -73,7 +83,7 @@ export default async function SalonPage({ params }: Props) {
         // Escaped by serializeJsonLd: salon text cannot close the tag.
         dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
-      <SalonBookingPage salonName={params.salonName} initialData={page} />
+      <SalonBookingPage salonName={params.salonName} initialData={page} initialReviews={reviews} />
     </>
   );
 }

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { Type } from 'class-transformer';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 /**
  * Public-facing shape of an add-on in catalog responses. Mirrors the
@@ -47,4 +49,15 @@ export const GrantAddOnSchema = z.object({
   durationDays: z.number().int().positive().max(365).optional(),
 });
 
-export type GrantAddOnDto = z.infer<typeof GrantAddOnSchema>;
+/**
+ * The same rules as a class, for the ValidationPipe: the zod-inferred type
+ * reached it as `Object`, and the handler's `GrantAddOnSchema.parse`
+ * answered a bad body with a 500 (an uncaught ZodError) instead of a 400.
+ */
+export class GrantAddOnDto {
+  @IsString() @IsNotEmpty() @MaxLength(100)
+  addOnKey!: string;
+
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365)
+  durationDays?: number;
+}

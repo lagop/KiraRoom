@@ -17,7 +17,14 @@
  * changed.
  */
 
-import { EmailService } from "./email.service";
+import {
+  EmailService,
+  EMAIL_SEND_TIMEOUT_MS,
+  isRetryableSendError,
+  bugReportExcerpt,
+  BUG_REPORT_ACK_EXCERPT_CHARS,
+} from "./email.service";
+import { isPlaceholderEmail, placeholderEmail, realEmail } from "../../common/placeholder-email";
 
 // ────────────────────── mock helpers
 
@@ -97,6 +104,8 @@ function makeService(opts?: {
     };
   }
   (service as any).resend = resend;
+  // The client is rebuilt when the key in force changes; this one is it.
+  (service as any).resendKey = env.RESEND_API_KEY;
   return { service, calls, prismaMock, config, resend };
 }
 
@@ -186,10 +195,8 @@ describe("EmailService.sendTenantInvite (Sprint 2.1)", () => {
     expect(payload.subject).toMatch(/KiraRoom/);
     expect(payload.html).toContain("Glamour Studio");
     expect(payload.html).toContain("https://app.kiraroom.com/accept-invite/abc");
-    // RFC 8058: List-Unsubscribe auto-attached for transactional templates.
-    expect(payload.headers).toBeDefined();
-    expect(payload.headers["List-Unsubscribe"]).toContain("mailto:unsubscribe@kiraroom.com");
-    expect(payload.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    // A service email: no unsubscribe (audit 7 N4).
+    expect(payload.headers?.["List-Unsubscribe"]).toBeUndefined();
     // Plain-text fallback exists.
     expect(payload.text).toContain("Glamour Studio");
     expect(payload.text).toContain("https://app.kiraroom.com/accept-invite/abc");
@@ -260,7 +267,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
     expect(calls[0].html).toMatch(/modo lectura/);
   });
 
-  it("attaches List-Unsubscribe header", async () => {
+  it("offers no unsubscribe: it is a service email (audit 7 N4)", async () => {
     const { service, calls } = makeService();
     await service.sendTrialExpiry({
       to: "owner@salon.com",
@@ -269,10 +276,7 @@ describe("EmailService.sendTrialExpiry (Sprint 2.3 — T-3 / T-1)", () => {
       trialEnd: new Date(),
       upgradeUrl: "https://app.kiraroom.com/dashboard/billing",
     });
-    expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
-    expect(calls[0].headers["List-Unsubscribe-Post"]).toBe(
-      "List-Unsubscribe=One-Click",
-    );
+    expect(calls[0].headers?.["List-Unsubscribe"]).toBeUndefined();
   });
 
   it("skips when the recipient has bounced", async () => {
@@ -356,6 +360,7 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date("2026-07-17T00:00:00Z"),
+      readOnlyUntil: new Date("2026-08-16T00:00:00Z"),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
     expect(calls[0].subject).toMatch(/suspendido/);
@@ -363,15 +368,31 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
     expect(calls[0].html).toMatch(/modo lectura/);
   });
 
-  it("attaches List-Unsubscribe header", async () => {
+  it("says the same period as the terms: export until the end of read-only, anonymised 30 days after (audit 7 D7)", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountSuspended({
+      to: "owner@salon.com",
+      tenantName: "Salón",
+      gracePeriodEndsAt: new Date("2026-07-17T00:00:00Z"),
+      readOnlyUntil: new Date("2026-08-16T00:00:00Z"),
+      updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
+    });
+    for (const body of [calls[0].html, calls[0].text]) {
+      expect(body).toMatch(/Puedes exportar tus datos hasta el 16 de agosto de 2026; después se anonimizan, el 15 de septiembre de 2026/);
+      expect(body).not.toMatch(/se conservan hasta/);
+    }
+  });
+
+  it("offers no unsubscribe: it is a service email (audit 7 N4)", async () => {
     const { service, calls } = makeService();
     await service.sendAccountSuspended({
       to: "owner@salon.com",
       tenantName: "Salón",
       gracePeriodEndsAt: new Date(),
+      readOnlyUntil: new Date(),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
-    expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
+    expect(calls[0].headers?.["List-Unsubscribe"]).toBeUndefined();
   });
 
   it("skips when the recipient has bounced", async () => {
@@ -383,8 +404,55 @@ describe("EmailService.sendAccountSuspended (Sprint 2.2)", () => {
       to: "b@x.com",
       tenantName: "X",
       gracePeriodEndsAt: new Date(),
+      readOnlyUntil: new Date(),
       updatePaymentUrl: "https://app.kiraroom.com/dashboard/billing",
     });
+    expect(sent.skipped).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("EmailService.sendAccountReadOnly", () => {
+  const base = {
+    to: "owner@salon.com",
+    tenantName: "Salón <Lucía>",
+    // 23:30 UTC on the 21st is already the 22nd in Madrid.
+    readOnlyUntil: new Date("2026-11-21T23:30:00Z"),
+    billingUrl: "https://app.kiraroom.com/dashboard/billing",
+  };
+
+  it("trial ended: says it is read-only, what still works, until when, and links to Billing", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountReadOnly({ ...base, reason: "trial_ended" });
+    const { subject, html, text } = calls[0];
+    expect(subject).toMatch(/prueba .* ha terminado/);
+    expect(subject).toMatch(/modo lectura/);
+    for (const body of [html, text]) {
+      expect(body).toMatch(/consultar y exportar/);
+      expect(body).toMatch(/no acepta reservas/);
+      expect(body).toMatch(/Puedes exportar tus datos hasta el 22 de noviembre de 2026; después se anonimizan/);
+      expect(body).toMatch(/Elegir un plan/);
+      expect(body).toContain(base.billingUrl);
+    }
+    expect(html).toContain("Salón &lt;Lucía&gt;");
+    expect(html).not.toContain("<Lucía>");
+  });
+
+  it("cancelled: confirms the cancellation and offers to reactivate", async () => {
+    const { service, calls } = makeService();
+    await service.sendAccountReadOnly({ ...base, reason: "cancelled" });
+    expect(calls[0].subject).toBe("Hemos cancelado tu suscripción de KiraRoom");
+    expect(calls[0].text).toMatch(/No se te volverá a cobrar/);
+    expect(calls[0].text).toMatch(/Reactivar mi suscripción/);
+    expect(calls[0].text).not.toMatch(/prueba/);
+  });
+
+  it("skips a bounced recipient", async () => {
+    const m = makePrismaMock();
+    m.users.set("owner@salon.com", { email: "owner@salon.com", emailBouncedAt: new Date() });
+    const { service, calls } = makeService();
+    (service as any).prisma = m.prisma;
+    const sent = await service.sendAccountReadOnly({ ...base, reason: "cancelled" });
     expect(sent.skipped).toBe(true);
     expect(calls).toHaveLength(0);
   });
@@ -406,14 +474,14 @@ describe("EmailService.sendBugReportAck (Sprint 2.3)", () => {
     expect(calls[0].html).toContain("Save button does nothing");
   });
 
-  it("attaches List-Unsubscribe header", async () => {
+  it("offers no unsubscribe: it is a service email (audit 7 N4)", async () => {
     const { service, calls } = makeService();
     await service.sendBugReportAck({
       to: "user@example.com",
       reportId: "abc12345-6789",
       subject: "X",
     });
-    expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
+    expect(calls[0].headers?.["List-Unsubscribe"]).toBeUndefined();
   });
 
   it("skips when the recipient has bounced", async () => {
@@ -431,86 +499,28 @@ describe("EmailService.sendBugReportAck (Sprint 2.3)", () => {
   });
 });
 
-describe("EmailService.buildHeaders (RFC 8058 List-Unsubscribe)", () => {
-  // We exercise buildHeaders via the observable side-effect on the
-  // captured payload in `sendEmail`. White-box coverage (private method)
-  // isn't strictly necessary — the public contract is the rendered
-  // headers.
-
-  it("auto-attaches List-Unsubscribe when listUnsubscribe: true is passed", async () => {
+describe("EmailService headers (service emails have no unsubscribe)", () => {
+  it("does not add List-Unsubscribe to a plain send", async () => {
     const { service, calls } = makeService();
-    await service.sendEmail({
-      to: "x@y.com",
-      subject: "X",
-      html: "<p>X</p>",
-      listUnsubscribe: true,
-    });
-    expect(calls[0].headers["List-Unsubscribe"]).toContain(
-      "mailto:unsubscribe@kiraroom.com",
-    );
-    expect(calls[0].headers["List-Unsubscribe-Post"]).toBe(
-      "List-Unsubscribe=One-Click",
-    );
+    await service.sendEmail({ to: "x@y.com", subject: "X", html: "<p>X</p>" });
+    expect(calls[0].headers === undefined || !calls[0].headers["List-Unsubscribe"]).toBe(true);
   });
 
-  it("does NOT attach List-Unsubscribe when listUnsubscribe: false (default)", async () => {
+  it("passes through caller-supplied headers verbatim", async () => {
     const { service, calls } = makeService();
-    await service.sendEmail({
-      to: "x@y.com",
-      subject: "X",
-      html: "<p>X</p>",
-    });
-    // Headers object should be undefined or empty.
-    expect(
-      calls[0].headers === undefined ||
-        !calls[0].headers["List-Unsubscribe"],
-    ).toBe(true);
-  });
-
-  it("derives the unsubscribe mailto domain from EMAIL_FROM", async () => {
-    const { service, calls } = makeService({
-      env: { EMAIL_FROM: "ops@mi-dominio.es" },
-    });
-    await service.sendEmail({
-      to: "x@y.com",
-      subject: "X",
-      html: "<p>X</p>",
-      listUnsubscribe: true,
-    });
-    expect(calls[0].headers["List-Unsubscribe"]).toContain(
-      "mailto:unsubscribe@mi-dominio.es",
-    );
-  });
-
-  it("uses APP_BASE_URL for the https:// unsubscribe link", async () => {
-    const { service, calls } = makeService({
-      env: {
-        APP_BASE_URL: "https://staging.kiraroom.com/",
-      },
-    });
-    await service.sendEmail({
-      to: "x@y.com",
-      subject: "X",
-      html: "<p>X</p>",
-      listUnsubscribe: true,
-    });
-    // Trailing slash is trimmed.
-    expect(calls[0].headers["List-Unsubscribe"]).toContain(
-      "https://staging.kiraroom.com/dashboard/settings/notifications",
-    );
-  });
-
-  it("passes through caller-supplied headers verbatim and merges with auto-added List-Unsubscribe", async () => {
-    const { service, calls } = makeService();
-    await service.sendEmail({
-      to: "x@y.com",
-      subject: "X",
-      html: "<p>X</p>",
-      listUnsubscribe: true,
-      headers: { "X-Custom": "yes" },
-    });
+    await service.sendEmail({ to: "x@y.com", subject: "X", html: "<p>X</p>", headers: { "X-Custom": "yes" } });
     expect(calls[0].headers["X-Custom"]).toBe("yes");
-    expect(calls[0].headers["List-Unsubscribe"]).toBeDefined();
+    expect(calls[0].headers["List-Unsubscribe"]).toBeUndefined();
+  });
+
+  it("the welcome and verification emails offer no unsubscribe link", async () => {
+    const { service, calls } = makeService();
+    await service.sendWelcome({ to: "o@y.com", tenantName: "S", ownerName: "Ana", dashboardUrl: "https://x" });
+    await service.sendEmailVerification({ to: "o@y.com", tenantName: "S", verifyUrl: "https://x", expiresAt: new Date() });
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect(c.headers === undefined || !c.headers["List-Unsubscribe"]).toBe(true);
+    }
   });
 });
 
@@ -562,6 +572,102 @@ describe("EmailService.sendEmail (low-level)", () => {
     });
     expect(calls[0].to).toEqual(["a@example.com", "b@example.com"]);
   });
+
+  it("never sends to a placeholder address", async () => {
+    const { service, calls } = makeService();
+    const sent = await service.sendEmail({
+      to: "wizard-1730000000000@placeholder.local",
+      subject: "X",
+      html: "<p>X</p>",
+    });
+    expect(sent.success).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("drops placeholder addresses from a list and sends to the rest", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({
+      to: ["a@example.com", "[anonymized]+abcd1234@deleted.local"],
+      subject: "X",
+      html: "<p>X</p>",
+    });
+    expect(calls[0].to).toEqual(["a@example.com"]);
+  });
+
+  it("sends under a display name in front of the platform's address, cleaned of quotes and line breaks", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", fromName: 'Salón "Lucía"\r\nBcc: otra@example.test' });
+    expect(calls[0].from).toBe('"Salón Lucía Bcc: otra@example.test" <hola@kiraroom.com>');
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+    expect(calls[1].from).toBe("KiraRoom <hola@kiraroom.com>");
+  });
+
+  it("passes tags to Resend, and sends none when there are none", async () => {
+    const { service, calls } = makeService();
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", tags: [{ name: "tenant_id", value: "t1" }] });
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+    expect(calls[0].tags).toEqual([{ name: "tenant_id", value: "t1" }]);
+    expect(calls[1]).not.toHaveProperty("tags");
+  });
+
+  it("says whether a failed send is worth retrying", async () => {
+    const limited = makeService({ resendError: { message: "Too many requests", statusCode: 429, name: "rate_limit_exceeded" } as any });
+    expect(await limited.service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" })).toMatchObject({
+      success: false,
+      statusCode: 429,
+      retryable: true,
+    });
+    const refused = makeService({ resendError: { message: "Invalid to field", statusCode: 422, name: "validation_error" } as any });
+    expect(await refused.service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" })).toMatchObject({
+      success: false,
+      statusCode: 422,
+      retryable: false,
+    });
+    expect(isRetryableSendError({ statusCode: 503 })).toBe(true);
+    expect(isRetryableSendError({ statusCode: null })).toBe(true);
+    expect(isRetryableSendError({ statusCode: 409, name: "concurrent_idempotent_requests" })).toBe(true);
+    expect(isRetryableSendError({ statusCode: 409, name: "invalid_idempotent_request" })).toBe(false);
+    expect(isRetryableSendError({ statusCode: 403 })).toBe(false);
+  });
+
+  it("passes the idempotency key to Resend", async () => {
+    const { service, resend } = makeService();
+    const send = jest.spyOn(resend.emails, "send");
+    await service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>", idempotencyKey: "reminder-1" });
+    expect(send).toHaveBeenCalledWith(expect.anything(), { idempotencyKey: "reminder-1" });
+  });
+
+  it(`gives up on a provider that does not answer within ${EMAIL_SEND_TIMEOUT_MS / 1000} s`, async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, resend } = makeService();
+      resend.emails.send = () => new Promise(() => undefined) as any; // hangs
+      const pending = service.sendEmail({ to: "a@example.com", subject: "X", html: "<p>X</p>" });
+      await jest.advanceTimersByTimeAsync(EMAIL_SEND_TIMEOUT_MS);
+      const sent = await pending;
+      expect(sent.success).toBe(false);
+      expect(sent.error).toMatch(/did not answer/);
+      expect(sent.retryable).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe("isPlaceholderEmail", () => {
+  it("knows KiraRoom's stand-in addresses and reserved domains", () => {
+    expect(isPlaceholderEmail("wizard-1@placeholder.local")).toBe(true);
+    expect(isPlaceholderEmail(placeholderEmail("wizard-2"))).toBe(true);
+    expect(isPlaceholderEmail("[anonymized]+abcd1234@deleted.local")).toBe(true);
+    expect(isPlaceholderEmail("x@foo.invalid")).toBe(true);
+    expect(isPlaceholderEmail(" Ana@Mail.LOCAL ")).toBe(true);
+    expect(isPlaceholderEmail("ana@gmail.com")).toBe(false);
+    expect(isPlaceholderEmail("ana@local-salon.es")).toBe(false);
+    expect(isPlaceholderEmail(null)).toBe(false);
+    expect(realEmail(null)).toBeNull();
+    expect(realEmail("wizard-1@placeholder.local")).toBeNull();
+    expect(realEmail(" ana@gmail.com ")).toBe("ana@gmail.com");
+  });
 });
 
 describe("EmailService.escapeHtml (anti-XSS)", () => {
@@ -586,5 +692,184 @@ describe("EmailService.escapeHtml (anti-XSS)", () => {
     );
     const escaped = (svc as any).escapeHtml("hello world");
     expect(escaped).toBe("hello world");
+  });
+});
+describe("EmailService with the platform console's settings", () => {
+  it("uses the key and sender set in the console, and a new key at once", async () => {
+    // Built at runtime: fictitious values that only look like Resend keys.
+    const [key1, key2, serverKey] = ["consoleKey0001", "consoleKey0002", "serverKey0001"].map((k) => ["re", k].join("_"));
+    let settings = { apiKey: key1, from: "KiraRoom <notificaciones@kiraroom.com>", webhookSecret: null };
+    const platformEmail = { current: () => settings };
+    const service = new EmailService(
+      makeConfigMock({ RESEND_API_KEY: serverKey, EMAIL_FROM: "noreply@kiraroom.com" }),
+      makeTranslationsMock(),
+      makePrismaMock().prisma,
+      platformEmail as any,
+    );
+    expect(service.isConfigured()).toBe(true);
+    expect(service.isTrackingConfigured()).toBe(false);
+
+    const first = (service as any).client();
+    expect((service as any).resendKey).toBe(key1);
+    expect((service as any).fromAddress()).toBe("KiraRoom <notificaciones@kiraroom.com>");
+    expect((service as any).client()).toBe(first);
+
+    settings = { ...settings, apiKey: key2 };
+    expect((service as any).client()).not.toBe(first);
+    expect((service as any).resendKey).toBe(key2);
+
+    settings = { ...settings, apiKey: null as any };
+    expect(service.isConfigured()).toBe(false);
+    expect((service as any).client()).toBeNull();
+  });
+});
+
+describe("EmailService.sendReviewRequest: the points line", () => {
+  const base = {
+    to: "clienta@example.com",
+    clientName: "Lucía",
+    serviceName: "Corte",
+    salonName: "Salón Luna",
+    reviewUrl: "https://app.example.test/public/r/tok",
+    optOutUrl: "https://app.example.test/public/r/tok?baja=1",
+  };
+
+  it("adds her balance and the expiry rule when given", async () => {
+    const { service, calls } = makeService();
+    await service.sendReviewRequest({
+      ...base,
+      loyalty: { balance: 1240, expiryRule: "Tus puntos caducan si pasan 12 meses sin visitas" },
+    });
+    expect(calls[0].text).toContain("Tienes 1240 puntos en Salón Luna.");
+    expect(calls[0].text).toContain("Tus puntos caducan si pasan 12 meses sin visitas.");
+    expect(calls[0].html).toContain("Tus puntos caducan si pasan 12 meses sin visitas.");
+  });
+
+  it("has no points line without them", async () => {
+    const { service, calls } = makeService();
+    await service.sendReviewRequest(base);
+    expect(calls[0].text).not.toMatch(/puntos/);
+    expect(calls[0].html).not.toMatch(/puntos/);
+  });
+});
+
+describe("Appointment emails go out in the salon's name (audit 7 N5, N15)", () => {
+  const data = {
+    clientName: "Lucía Pérez",
+    clientEmail: "lucia@mail.test",
+    serviceName: "Corte",
+    professionalName: "Ana",
+    date: "2026-11-09",
+    time: "10:00",
+    salonName: "Peluquería Lucía",
+  };
+
+  it("every appointment email carries the salon's name, and its email as Reply-To", async () => {
+    const { service, calls } = makeService();
+    const d = { ...data, salonEmail: "hola@peluquerialucia.test" };
+    await service.sendAppointmentConfirmation(d);
+    await service.sendBookingNotConfirmed(d);
+    await service.sendAppointmentReminder(d, 24);
+    await service.sendAppointmentCancellation(d);
+    await service.sendAppointmentRescheduled(d, "2026-11-08", "09:00");
+    expect(calls).toHaveLength(5);
+    for (const c of calls) {
+      expect(c.from).toMatch(/^"?Peluquería Lucía"? <hola@kiraroom\.com>$/);
+      expect(c.replyTo).toBe("hola@peluquerialucia.test");
+    }
+  });
+
+  it("without a salon email there is no Reply-To", async () => {
+    const { service, calls } = makeService();
+    await service.sendAppointmentConfirmation({ ...data, salonEmail: null });
+    expect(calls[0].replyTo).toBeUndefined();
+    expect(calls[0].from).toContain("Peluquería Lucía");
+  });
+
+  it("the confirmation with a cancel link says until when, if the salon passed its deadline", async () => {
+    const { service, calls } = makeService();
+    await service.sendAppointmentConfirmation({ ...data, cancelUrl: "https://x.test/c/1", minCancelHours: 24 });
+    expect(calls[0].html).toContain("Puedes cancelar online hasta 24 h antes.");
+    expect(calls[0].text).toContain("Puedes cancelar online hasta 24 h antes.");
+    await service.sendAppointmentConfirmation({ ...data, minCancelHours: 24 });
+    expect(calls[1].html).not.toContain("Puedes cancelar online");
+  });
+});
+
+describe("EmailService.sendSalonBookingAlert (audit 7 D12)", () => {
+  const base = {
+    to: "duena@salon.test",
+    tenantName: "Salón <Luna>",
+    clientName: "Lucía García",
+    serviceName: "Corte",
+    professionalName: "Marta",
+    date: "2026-11-20",
+    time: "10:30",
+    appointmentUrl: "https://app.kiraroom.com/dashboard/appointments/apt-1",
+    settingsUrl: "https://app.kiraroom.com/dashboard/settings/seguridad",
+  };
+
+  it("an online booking: who, what, when and a link to the appointment, in Spanish", async () => {
+    const { service, calls } = makeService();
+    await service.sendSalonBookingAlert({ ...base, kind: "booked" });
+    const sent = calls[0];
+    expect(sent.subject).toBe("Nueva reserva online: Lucía García, viernes, 20 de noviembre de 2026 a las 10:30");
+    expect(sent.html).toContain("ha reservado online");
+    expect(sent.html).toContain("Salón &lt;Luna&gt;");
+    expect(sent.html).toContain(base.appointmentUrl);
+    expect(sent.html).toContain("Ajustes &gt; Seguridad");
+    expect(sent.text).toContain(`Ver la cita: ${base.appointmentUrl}`);
+  });
+
+  it("a cancellation by the client herself", async () => {
+    const { service, calls } = makeService();
+    await service.sendSalonBookingAlert({ ...base, kind: "cancelled", time: null });
+    expect(calls[0].subject).toBe("Lucía García ha anulado su cita del viernes, 20 de noviembre de 2026");
+    expect(calls[0].text).toContain("desde el enlace del email");
+  });
+});
+
+describe("EmailService.sendOnboardingReminder (audit 7 D17)", () => {
+  it("lists what is missing with links, and carries the unsubscribe link and headers", async () => {
+    const { service, calls } = makeService();
+    await service.sendOnboardingReminder({
+      to: "duena@salon.test",
+      firstName: "Ana",
+      tenantName: "Salón Luna",
+      missing: [
+        { label: "Tu primer servicio", url: "https://app.kiraroom.com/dashboard/services/new" },
+        { label: "El horario de tu equipo", url: "https://app.kiraroom.com/dashboard/professionals" },
+      ],
+      unsubscribeUrl: "https://app.kiraroom.com/public/baja-consejos/tok",
+      headers: { "List-Unsubscribe": "<https://api.kiraroom.com/x>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
+    });
+    const sent = calls[0];
+    expect(sent.subject).toBe("Te faltan 2 pasos para recibir reservas en Salón Luna");
+    expect(sent.html).toContain('href="https://app.kiraroom.com/dashboard/services/new"');
+    expect(sent.html).toContain("No quiero recibir consejos de KiraRoom");
+    expect(sent.text).toContain("- El horario de tu equipo: https://app.kiraroom.com/dashboard/professionals");
+    expect(sent.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  });
+});
+
+describe("EmailService.sendBugReportAck excerpt (audit 8 D2)", () => {
+  it("keeps the reporter's text out of the subject and cuts it short in the body", async () => {
+    const { service, calls } = makeService();
+    const long = "Agenda ".repeat(40);
+    await service.sendBugReportAck({ to: "user@example.com", reportId: "abc12345-6789", subject: long });
+    expect(calls[0].subject).toBe("Hemos recibido tu reporte (abc12345)");
+    expect(calls[0].text).not.toContain(long.trim());
+    expect(bugReportExcerpt(long).length).toBeLessThanOrEqual(BUG_REPORT_ACK_EXCERPT_CHARS);
+    expect(bugReportExcerpt("a\r\nb\tc")).toBe("a b c");
+  });
+});
+
+describe("EmailService.sendBugReportAck response time (audit 8 D13)", () => {
+  it("promises 2-3 working days, not 24 hours", async () => {
+    const { service, calls } = makeService();
+    await service.sendBugReportAck({ to: "user@example.com", reportId: "abc12345-6789", subject: "X" });
+    expect(calls[0].html).toContain("2-3 días laborables");
+    expect(calls[0].text).toContain("2-3 días laborables");
+    expect(calls[0].html).not.toContain("24h");
   });
 });

@@ -11,8 +11,16 @@ model Tenant {
   id                     String             @id @default(uuid())
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
-  name                   String             @unique
+  /// Not unique: two salons may share a name (the slug is the identifier).
+  name                   String
   slug                   String             @unique
+  /// D4: when the owner changed the web address (once: Ajustes > Web).
+  /// The old one redirects for 12 months (TenantSlugRedirect).
+  slugChangedAt          DateTime?
+  /// Audit 8 D2: "Permitir que soporte de KiraRoom entre en mi panel"
+  /// (Ajustes > Seguridad, owner only). Off: the console cannot open a
+  /// support session, and an open one ends on its next request.
+  allowSupportAccess     Boolean            @default(true)
   /// P2A Ã¢â‚¬â€ Spanish tax compliance: NIF/CIF/NIE del emisor (obligatorio si fiscalMode != 'none')
   taxId                  String?
   taxIdType              NifType?
@@ -21,9 +29,17 @@ model Tenant {
   logo                   String?
   coverImage             String?
   website                String?
+  /// The salon's Instagram and Facebook as canonical https URLs
+  /// (common/social-links.ts), linked from its public page.
+  instagram              String?
+  facebook               String?
   email                  String?
   phone                  String?
   whatsapp               String?
+  /// The salon's own privacy policy (https URL), when it has one: the
+  /// booking page, widget and chat link to it instead of the generated
+  /// /sites/<slug>/privacidad.
+  privacyPolicyUrl       String?
   street                 String?
   city                   String?
   state                  String?
@@ -39,6 +55,13 @@ model Tenant {
   cancellationPolicy     String?
   minCancelHours         Int                @default(24)
   openingHours           Json               @default("{}")
+  /// Minutes between the start times offered when booking (site, widget,
+  /// receptionist, the panel's suggestions): 10, 15, 20, 30 or 60.
+  bookingSlotMinutes     Int                @default(30)
+  /// Online bookings (site, widget, receptionist) start confirmed instead
+  /// of pending. The team's own bookings from the panel are unaffected.
+  /// On for new salons (2026-11-04); salons created before keep theirs.
+  autoConfirmOnlineBookings Boolean         @default(true)
   /// Subscription
   plan                   SubscriptionPlan
   subscriptionStatus     SubscriptionStatus
@@ -47,22 +70,73 @@ model Tenant {
   trialEnd               DateTime?
   stripeCustomerId       String?
   stripeSubscriptionId   String?
+  /// Stripe mode (livemode) of KiraRoom's keys when the customer and the
+  /// subscription above were created: a test-mode customer does not exist
+  /// for the live keys, and the other way round. Null: unknown.
+  stripeCustomerLivemode     Boolean?
+  stripeSubscriptionLivemode Boolean?
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
+  /// Retention (audit 7 D7): the salon's data is anonymised 30 days after
+  /// readOnlyUntil. The owner is warned 7 days before; the warning is for
+  /// the readOnlyUntil it was sent for (a later cancellation warns again).
+  anonymizationWarnedAt  DateTime?
+  anonymizationWarnedFor DateTime?
+  /// When the retention job anonymised it (also sets deletedAt).
+  anonymizedAt           DateTime?
+  /// "Borrar mi salón": when the owner asked, and what to restore if she
+  /// changes her mind ({ status, readOnlyUntil, cancelledAt,
+  /// subscriptionCancelAt, stripeScheduled }).
+  deletionRequestedAt    DateTime?
+  deletionRestore        Json?
+  /// When the paid subscription ends because the owner cancelled it
+  /// (Stripe cancel_at_period_end): full access until then, read-only
+  /// after. Null when it renews.
+  subscriptionCancelAt   DateTime?
   /// Sprint 2 / 2.2 Ã¢â‚¬â€ payment-failure grace lifecycle. Set on the
   /// first Stripe `invoice.payment_failed` webhook; cleared on the
   /// next successful payment. When `gracePeriodEndsAt < now` the
   /// daily GracePeriodScheduler flips status to `suspended`.
   paymentFailedAt        DateTime?
   gracePeriodEndsAt      DateTime?
+  /// First time the salon paid KiraRoom (a Stripe invoice with an amount
+  /// paid). Null while it never has: its trial sends at most 200 campaign
+  /// emails a month (owner decision D2, 2026-11-04).
+  firstPaidAt            DateTime?
   /// Soft-delete (rev): when set, the tenant is hidden from SaaS listings
   /// but its data (users, appointments, payments, etc.) is preserved so
   /// an accidental delete can be reversed via Prisma Studio.
   deletedAt              DateTime?
+  /// "Bloquear" from the console (audit 8 D4, abuse): nobody in the salon
+  /// signs in, its page is offline, nothing is sent and nothing is charged
+  /// (Stripe collection paused). "Desbloquear" clears it.
+  blockedAt              DateTime?
+  blockedReason          String?
+  /// "Cortesía" from the console (audit 8 D6): active without paying, on
+  /// courtesyPlan, until courtesyUntil; then read-only like any salon that
+  /// left (CourtesyScheduler). Not paying: out of MRR, and the never-paid
+  /// email cap still applies. courtesyWarnedAt: the email 3 days before.
+  courtesyUntil          DateTime?
+  courtesyPlan           SubscriptionPlan?
+  courtesyWarnedAt       DateTime?
+  /// Audit 8 D11: one of KiraRoom's own salons (the Platform tenant and our
+  /// test salons). Left out of platform figures and alerts
+  /// (countableTenantWhere) and allowed to use Stripe test mode. Set from
+  /// the console, audit-logged.
+  isInternal             Boolean            @default(false)
   /// P2A-ia-fairuse - virtual receptionist usage counter (Esencial cap)
+  /// Messages in `aiConversationsPeriod` (YYYY-MM, UTC); another month reads as 0.
   aiConversationsUsed    Int                @default(0)
+  aiConversationsPeriod  String?
   aiConversationsResetAt DateTime?
+  /// AI messages on `aiMessagesDay` (YYYY-MM-DD, UTC), for the daily cap
+  /// that stops an attack or a runaway loop the same day.
+  aiMessagesToday        Int                @default(0)
+  aiMessagesDay          String?
+  /// Day (YYYY-MM-DD, UTC) the salon was last told it hit an AI cap, so
+  /// it hears once a day, not on every refused message.
+  aiCapNotifiedOn        String?
   /// Saas-owner-configurable: how the assistant reacts to cap overflows
   /// degrade (default) -> FAQ cache only, no LLM.
   /// notify           -> LLM still runs, warn tenant next login.
@@ -75,6 +149,11 @@ model Tenant {
   tenantAddOns        TenantAddOn[]
   /// P2A-plans-v2 - message credit wallet (message_bundles add-on).
   messageCreditWallet MessageCreditWallet?
+  /// Marketing emails sent per calendar month (the plan's monthly cap).
+  emailMarketingUsage EmailMarketingUsage[]
+  /// Bought marketing emails ("bono de emails") not used yet.
+  emailCreditWallet   EmailCreditWallet?
+  emailPackPurchases  EmailPackPurchase[]
 
   addons                        Json                     @default("{}")
   maxLocations                  Int                      @default(1)
@@ -127,10 +206,15 @@ model Tenant {
   consents                      Consent[]
   reviews                       Review[]
   whatsappConnection            WhatsAppConnection?
+  /// Messenger Page, Instagram account and Telegram bot of the salon (unique across salons).
+  channelAccounts               ChannelAccount[]
+  /// "BAJA" replies to the salon's WhatsApp, kept until applied.
+  whatsappOptOuts               WhatsAppOptOut[]
   /// The salon's own domain for its public page (see CustomDomain).
   customDomain                  CustomDomain?
   whatsappCampaigns             WhatsAppCampaign[]
   invites                       TenantInvite[]
+  timeOff                       TimeOff[]
 
   /// Bug reports submitted from the in-app "Ã°Å¸ÂÅ¾ Report a bug" widget.
   /// Anonymous reports (no user, no tenant) are stored with both FKs null.
@@ -147,8 +231,39 @@ model Tenant {
   /// straight away instead of leaving it to the "Avisar" button.
   waitListAutoNotify Boolean @default(false)
 
+  /// Time off requests by email too (Resend), besides the panel: each new
+  /// request to the owner and admins, each answer to the professional.
+  timeOffEmailNotices Boolean @default(true)
+  /// Ajustes > Recepcionista "Chat en mi web": off, the salon page shows no
+  /// chat and the public chat endpoint refuses its messages.
+  webChatEnabled      Boolean @default(true)
+
+  /// Till (POS) discounts: the most a staff member may take off a line, in
+  /// percent (0-100). 0, the default: only the owner or a manager discount.
+  /// Edited by them in the till settings (PUT /pos/settings).
+  maxStaffDiscountPercent Int           @default(0)
+  /// Commissions (commissions/commission-terms.ts). The rate a service earns
+  /// when neither the appointment nor the professional sets one, in percent
+  /// (0-100). New salons: 0; salons that existed before this setting: 10,
+  /// the rate that used to be hard-coded.
+  commissionDefaultRate        Decimal @default(0) @db.Decimal(5, 2)
+  /// The rate a product sold at the till earns when the professional has no
+  /// "Comisión de productos" of their own, in percent. 0: products earn nothing.
+  productCommissionDefaultRate Decimal @default(0) @db.Decimal(5, 2)
+  /// What commissions are worked out on: "net" (the price without the tax,
+  /// the default) or "gross" (the price with the tax).
+  commissionBase               String  @default("net") @db.VarChar(10)
+  /// Discounts given by hand at the till, one row each (audit).
+  posDiscounts            PosDiscount[]
+  posSales                PosSale[]
+  /// The cash drawer (arqueo): its sessions and the money put in or taken out.
+  cashSessions            CashSession[]
+  cashMovements           CashMovement[]
+
   /// P1.3 Ã¢â‚¬â€ Onboarding wizard state (one row per tenant)
   onboardingState      OnboardingState?
+  /// When the day-2 onboarding reminder went to the owner (audit 7 D17). Once per salon; also the claim that makes it idempotent.
+  onboardingNudgeSentAt DateTime?
   /// P1.4 Ã¢â‚¬â€ Rebooking per-tenant settings (analogous to `features` / `addons`)
   rebookingSettings    Json                   @default("{\"enabled\": false, \"leadDays\": 3, \"channelFallback\": \"both\", \"minVisits\": 3}")
   /// P1.4 Ã¢â‚¬â€ Cadence / reminder log relations
@@ -175,8 +290,12 @@ model Tenant {
   /// we've sent so the daily cron doesn't re-email a tenant who has
   /// already received the warning for this trial window.
   trialNotifications   TrialNotificationLog[]
+  /// Terms (with the art. 28 GDPR processing agreement) and privacy policy acceptances.
+  legalAcceptances     LegalAcceptance[]
+  slugRedirects        TenantSlugRedirect[]
 
   @@index([deletedAt])
+  @@index([courtesyUntil])
   @@index([subscriptionStatus, deletedAt])
   @@index([deletedAt, plan])
   @@index([deletedAt, country])
@@ -255,6 +374,54 @@ model CustomDomain {
   @@map("custom_domains")
 }
 
+/// Marketing emails (one-shot and re-engagement campaigns) sent in a calendar
+/// month of the salon's timezone. `planSent` counts against the plan's monthly
+/// cap; `packSent` were paid from the bono (EmailCreditWallet). Transactional
+/// emails (reminders, review requests, receipts) are not counted.
+model EmailMarketingUsage {
+  tenantId  String
+  /// "YYYY-MM" in the salon's timezone.
+  month     String
+  planSent  Int      @default(0)
+  packSent  Int      @default(0)
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, month])
+  @@map("email_marketing_usage")
+}
+
+/// Marketing emails bought in packs ("bono de emails"), used once the month's
+/// cap is reached. Like the message credits, they do not expire.
+model EmailCreditWallet {
+  tenantId              String    @id
+  creditsRemaining      Int       @default(0)
+  creditsPurchasedTotal Int       @default(0)
+  creditsUsedTotal      Int       @default(0)
+  lastTopupAt           DateTime?
+  updatedAt             DateTime  @updatedAt
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("email_credit_wallet")
+}
+
+/// One bono de emails paid (or granted). The Stripe Checkout session id is
+/// unique, so a webhook delivered twice credits the pack once.
+model EmailPackPurchase {
+  id                      String   @id @default(uuid())
+  createdAt               DateTime @default(now())
+  tenantId                String
+  emails                  Int
+  priceCents              Int
+  /// "stripe" | "manual"
+  source                  String   @default("stripe")
+  stripeCheckoutSessionId String?  @unique
+  tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("email_pack_purchases")
+}
+
 model MessageCreditWallet {
   tenantId              String    @id
   creditsRemaining      Int       @default(0)
@@ -315,6 +482,26 @@ model UsedImpersonationToken {
   @@map("used_impersonation_tokens")
 }
 
+// One signed-in browser or device. The refresh token names its session (sid)
+// and the current rotation (jti): each refresh issues a new jti, and a jti
+// presented again after it was replaced means the token was copied, so the
+// session is revoked. See auth/sessions/auth-sessions.service.ts.
+model AuthSession {
+  id          String    @id @default(uuid())
+  subjectId   String /// User.id or Client.id
+  subjectType String /// "user" or "client"
+  currentJti  String
+  previousJti String?
+  rotatedAt   DateTime?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([subjectId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
 // Single-use tenant onboarding invite (Sprint 2, Workstream 2.1).
 // The SaaS admin mints a `TenantInvite` row when they want to bring a
 // new salon onto the platform. The owner receives a magic link via
@@ -350,12 +537,53 @@ model TenantInvite {
   @@map("tenant_invites")
 }
 
+/// Who accepted which version of the Terms of Service (which include the
+/// art. 28 GDPR data processing agreement) and the Privacy Policy, when and
+/// from where: KiraRoom's evidence that the processing contract exists.
+/// Written on signup and on invite acceptance. acceptedByUserId is a plain
+/// id, not a relation, so the record outlives a removed user; it goes with
+/// the salon.
+/// D4: a salon's previous web address, redirected (301) to its current one
+/// until expiresAt (12 months after the change). After that the address is
+/// free again: lookups ignore the row and the next salon to take the address
+/// deletes it (web-address/web-address.service.ts).
+model TenantSlugRedirect {
+  id        String   @id @default(uuid())
+  oldSlug   String   @unique
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([tenantId])
+  @@map("tenant_slug_redirects")
+}
+
+model LegalAcceptance {
+  id               String   @id @default(uuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  acceptedByUserId String?
+  /// TERMS_VERSION (auth/legal-terms.ts): the terms page's "Última actualización".
+  termsVersion     String
+  acceptedAt       DateTime @default(now())
+  ip               String?
+  /// "signup" | "invite" | "login_prompt" (auth/legal-terms.ts)
+  source           String
+
+  @@index([tenantId, acceptedAt])
+  @@map("legal_acceptances")
+}
+
 model User {
   id                       String                  @id @default(uuid())
   createdAt                DateTime                @default(now())
   updatedAt                DateTime                @updatedAt
   tenantId                 String
   professionalId           String?                 @unique
+  /// Stored trimmed and lower-case (auth/email-normalize.ts). Migration
+  /// 20261104101000_users_email_lowercase adds a unique index on lower(email)
+  /// when no case-insensitive duplicates exist; schema.prisma cannot express it.
   email                    String                  @unique
   firstName                String
   lastName                 String
@@ -368,10 +596,13 @@ model User {
   /// the address is updated and the field is cleared manually.
   emailBouncedAt           DateTime?
   emailBounceReason        String?
+  /// The user unsubscribed from KiraRoom's tips (the onboarding reminder, audit 7 D17), from the link in that email.
+  productTipsOptOutAt      DateTime?
   lastLoginAt              DateTime?
   passwordHash             String
   profileImage             String?
   phone                    String?
+  /// Two-step sign-in is on; see auth/two-factor.
   twoFactorEnabled         Boolean                 @default(false)
   language                 String                  @default("es")
   twoFactorSecret          String?
@@ -383,6 +614,14 @@ model User {
   /// Bumped on logout and password change; tokens carry it as `tv` and
   /// stop working once it moves on.
   tokenVersion             Int                     @default(0)
+  /// Two-step sign-in (TOTP, auth/two-factor), with twoFactorEnabled and
+  /// twoFactorSecret above; secrets are encrypted with EncryptionService. The
+  /// pending one waits for the first code to confirm the authenticator app.
+  twoFactorPendingSecret   String?
+  /// Last 30 s step accepted, so a code cannot be used twice.
+  twoFactorLastStep        Int?
+  /// SHA-256 of the unused recovery codes.
+  twoFactorRecoveryCodes   String[]                @default([])
   emailVerificationToken   String?
   emailVerificationExpires DateTime?
   preferences              Json                    @default("{}")
@@ -436,6 +675,8 @@ model Client {
   lastVisit                DateTime?
   lastReengagementSent     DateTime? /// Last time a re-engagement email was sent
   source                   String?
+  /// Created by the onboarding wizard for its test booking (D27): not counted, deleted with it.
+  isTest                   Boolean                  @default(false)
   allergies                Json                     @default("[]")
   medicalConditions        Json                     @default("[]")
   notes                    String?
@@ -463,6 +704,12 @@ model Client {
   /// P2A-receptionist-advanced -- this client is on the virtual wait-list.
   waitListEntries WaitList[]
 
+  // Emails are stored in lower case (clients/client-contact.ts). The
+  // case-insensitive unique index "clients_tenantId_lower_email_key" on
+  // ("tenantId", lower(email)) is an expression index Prisma cannot describe:
+  // it lives only in migration 20261101110000_client_email_lowercase, which
+  // skips it while a salon still has two clients with the same email in
+  // different capitals.
   @@unique([tenantId, email])
   @@index([tenantId])
   @@index([tenantId, email])
@@ -487,7 +734,7 @@ model Service {
   processingDuration  Int? /// Duration of processing time in minutes (default from service duration)
   maxAdvanceBooking   Int                   @default(30)
   minAdvanceBooking   Int                   @default(2)
-  bufferTime          Int                   @default(15)
+  bufferTime          Int                   @default(0) /// Cleanup time after each appointment, in minutes: blocks the agenda (0 = none)
   isOnlineBookable    Boolean               @default(true)
   isMobile            Boolean               @default(false)
   /// Deposit settings
@@ -521,7 +768,7 @@ model Professional {
   userId              String?                @unique
   firstName           String
   lastName            String
-  email               String                 @unique
+  email               String
   phone               String?
   profileImage        String?
   bio                 String?
@@ -535,9 +782,23 @@ model Professional {
   isActive            Boolean                @default(true)
   isOwner             Boolean                @default(false)
   position            String?
+  /// How the salon's public page, widget and schema.org data name this
+  /// professional: full name, first name and initial, or not at all (still
+  /// bookable, as "Profesional"). New professionals: initial, no photo, until
+  /// the salon has their consent; rows from before the setting keep what
+  /// they showed (full name and photo).
+  webNameDisplay      ProfessionalWebName    @default(initial)
+  /// Whether their photo and portfolio are shown on the public page.
+  webShowPhoto        Boolean                @default(false)
   commissionRate      Decimal?
+  /// "Comisión de productos": percent of the products this professional sells
+  /// at the till. None: the salon's productCommissionDefaultRate.
+  productCommissionRate Decimal? @db.Decimal(5, 2)
   hireDate            DateTime
   terminationDate     DateTime?
+  /// Version of this professional's calendar feed link (ics.controller.ts),
+  /// added to the salon's: "Quitar acceso" bumps it, so the link stops working.
+  icsFeedVersion      Int                    @default(0)
   workingHours        Json                   @default("[]")
   availability        Json                   @default("{}")
   settings            Json                   @default("{}")
@@ -546,6 +807,7 @@ model Professional {
   appointments        Appointment[]
   appointmentServices AppointmentService[]
   locations           ProfessionalLocation[]
+  timeOff             TimeOff[]
   user                User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
   tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -607,6 +869,8 @@ model Appointment {
   amountPaid             Decimal             @default(0)
   amountDue              Decimal             @default(0)
   source                 AppointmentSource   @default(online)
+  /// The onboarding wizard's test booking (D27): kept out of every figure and deleted the next salon day.
+  isTest                 Boolean             @default(false)
   utmSource              String?
   utmMedium              String?
   utmCampaign            String?
@@ -620,20 +884,45 @@ model Appointment {
   depositAmount          Decimal?
   depositPaid            Boolean             @default(false)
   depositPaymentIntentId String?
+  /// The appointment's own service as it was booked (or as it was when the
+  /// salon switched the appointment to another service): its name, its price
+  /// in EUROS and its length in minutes. Editing the service in the catalog
+  /// no longer changes appointments already made: the visit totals, the till,
+  /// the invoice and the notices read these (appointment-snapshot.ts). Null on
+  /// rows from before the snapshot that the backfill left alone (history):
+  /// those fall back to the live service.
+  serviceName            String?
+  servicePrice           Decimal?
+  serviceDuration        Int?
   /// Multi-location (plan Empresa)
   locationId             String?
   salonLocation          Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
-  /// Commission tracking
+  /// Commission tracking: a snapshot taken when the visit is completed
+  /// and paid (commissions/appointment-commission.ts). commissionRate is
+  /// the rate that applies (set at booking by the salon, else filled from
+  /// the professional's); commissionAmount, whole cents of totalAmount x
+  /// rate, is null until worked out (a real 0 % stores 0). Recomputed while
+  /// commissionPaid is false; once paid, what was paid.
   commissionRate   Decimal?
-  commissionAmount Decimal?  @default(0)
+  commissionAmount Decimal?
   commissionPaid   Boolean   @default(false)
   commissionDate   DateTime?
 
   /// Reminder tracking flags
   reminder24hSent   Boolean @default(false)
   reminder1hSent    Boolean @default(false)
+  /// Set only once the review request reached the client.
   reviewRequestSent Boolean @default(false)
+  /// Review request tries that did not send (provider error). Retried on
+  /// later ticks, in the salon's sending hours, up to MAX_REQUEST_ATTEMPTS
+  /// (reviews.service.ts); a request that can never go (no email, opted out,
+  /// suppressed address) is set straight to the cap.
+  reviewRequestAttempts Int @default(0)
+  /// Reminder sends that reached no channel. The scheduler retries on later
+  /// ticks up to a cap (MAX_REMINDER_ATTEMPTS in notifications.scheduler.ts).
+  reminder24hAttempts Int @default(0)
+  reminder1hAttempts  Int @default(0)
 
   /// P0 Ã¢â‚¬â€ Widget instance attribution
   widgetInstanceId String?
@@ -642,9 +931,12 @@ model Appointment {
   activities   AppointmentActivity[]
   payments     Payment[]
   services     AppointmentService[]
-  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  professional Professional          @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-  service      Service               @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: deleting a client, professional or service took
+  /// its whole appointment history with it. Records with history are
+  /// deactivated instead (see the panel's delete endpoints).
+  client       Client              @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  professional Professional          @relation(fields: [professionalId], references: [id], onDelete: Restrict)
+  service      Service               @relation(fields: [serviceId], references: [id], onDelete: Restrict)
   tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
@@ -653,6 +945,9 @@ model Appointment {
   @@index([tenantId, clientId])
   @@index([status])
   @@index([paymentStatus])
+  /// Periodic jobs: the reminders select by startTime, the loyalty sweep by updatedAt.
+  @@index([startTime])
+  @@index([updatedAt])
   @@map("appointments")
 }
 
@@ -717,6 +1012,13 @@ model AppointmentService {
   /// Order within the appointment
   order Int @default(0)
 
+  /// The service as it was when it was added to the visit: name, price in
+  /// EUROS, length in minutes (see Appointment.serviceName). Null on rows
+  /// from before the snapshot that the backfill left alone.
+  serviceName     String?
+  servicePrice    Decimal?
+  serviceDuration Int?
+
   /// Status
   status AppointmentServiceStatus @default(pending)
 
@@ -727,6 +1029,13 @@ model AppointmentService {
   @@index([professionalId])
   @@index([scheduledStart])
   @@map("appointment_services")
+}
+
+/// How a professional is named on the salon's public page (Professional.webNameDisplay).
+enum ProfessionalWebName {
+  full
+  initial
+  hidden
 }
 
 enum SubscriptionPlan {
@@ -845,6 +1154,14 @@ model ChatConversation {
   handoffAt      DateTime?
   lastActivityAt DateTime    @default(now())
   context        Json        @default("{}")
+  /// Set from the panel (Conversaciones): the assistant stores the client's
+  /// messages but does not answer, on every channel, until it is resumed.
+  assistantPausedAt   DateTime?
+  assistantPausedById String?
+  /// The salon was told this conversation needs it: client_asked_person or
+  /// assistant_could_not_answer. attentionAt is cleared when it is attended.
+  attentionReason     String?
+  attentionAt         DateTime?
 
   messages      ChatMessage[]
   intentHistory IntentHistoryItem[]
@@ -857,6 +1174,7 @@ model ChatConversation {
   @@index([channel])
   @@index([status])
   @@index([lastActivityAt])
+  @@index([tenantId, lastActivityAt])
   @@map("chat_conversations")
 }
 
@@ -938,13 +1256,19 @@ model Promotion {
   startDate            DateTime
   endDate              DateTime?
   isActive             Boolean       @default(true)
-  /// Applicable service IDs (stored as JSON)
+  /// Applicable service IDs (stored as JSON). Empty: the whole ticket.
+  /// Otherwise the till's promotion discount comes off only the lines of
+  /// these services (and of applicableProductIds' products).
   applicableServiceIds Json          @default("[]")
   applicableProductIds Json          @default("[]")
+  /// Deleted from the panel after it was used at the till: kept (its uses
+  /// point at it), hidden from the list and never valid again.
+  archivedAt           DateTime?
 
   /// Relations
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   emailCampaigns EmailCampaign[]
+  usages         PromotionUsage[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -959,17 +1283,29 @@ enum PromotionType {
   BUY_X_GET_Y /// Buy X get Y free
 }
 
+/// One use of a promotion code, written by the till inside the sale's
+/// transaction (promotions/promotion-at-till.ts). A full refund of the sale
+/// releases it (releasedAt) and gives the use back (Promotion.usedCount).
 model PromotionUsage {
-  id             String   @id @default(uuid())
-  createdAt      DateTime @default(now())
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
   promotionId    String
-  clientId       String
+  /// The sale's client; null on a sale without one (allowed when the
+  /// promotion has no per-client limit).
+  clientId       String?
   orderId        String?
+  /// In euros: the money the code took off the ticket (tax included).
   discountAmount Decimal
   appointmentId  String? /// Link to appointment if applicable
+  /// The till sale (PosSale.id) the code was used on.
+  saleId         String?
+  /// The sale was refunded in full: this use no longer counts.
+  releasedAt     DateTime?
+  promotion      Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
 
   @@index([promotionId])
   @@index([clientId])
+  @@index([saleId])
   @@map("promotion_usage")
 }
 
@@ -1158,16 +1494,25 @@ model Payment {
   status PaymentStatus @default(pending)
   method PaymentMethod @default(card)
 
-  /// Client and appointment
+  /// Client and appointment. Restrict: a payment is accounting history, so
+  /// neither can be deleted from under it (SetNull left payments nobody
+  /// could attribute).
   clientId      String?
-  client        Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client        Client?      @relation(fields: [clientId], references: [id], onDelete: Restrict)
   appointmentId String?
-  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
 
   /// For deposits
   isDeposit       Boolean @default(false)
   depositAmount   Int?
   remainingAmount Int?
+
+  /// The team member who recorded it at the till (staff see their own sales). Not a relation: the record outlives the account.
+  recordedById String?
+
+  /// The cash-drawer session open when it was taken at the till (arqueo): its cash counts in that drawer.
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
 
   /// Additional info
   description String?
@@ -1188,6 +1533,8 @@ model Payment {
   @@index([clientId])
   @@index([appointmentId])
   @@index([status])
+  @@index([tenantId, recordedById])
+  @@index([cashSessionId])
   @@map("payments")
 }
 
@@ -1232,8 +1579,83 @@ model Refund {
   note    String?
   adminId String?
 
+  /// The cash-drawer session open when it was given back (arqueo): a cash refund comes out of that drawer.
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+
+  /// The till sale lines it gave back, when it was a POS sale's refund:
+  /// [{ lineId, quantity, cents }] (quantity: units back in stock for a
+  /// product; cents: the part of this refund that line takes). Empty for a
+  /// refund that is not of a sale. See payments/refund-lines.ts.
+  saleLines Json @default("[]")
+
+  /// Commission taken back by this refund from work whose commission had
+  /// already been paid (commissions/commission-clawback.ts).
+  commissionAdjustments CommissionAdjustment[]
+
   @@index([paymentId])
+  @@index([cashSessionId])
   @@map("refunds")
+}
+
+/// A correction to a professional's commission after it was paid. Today one
+/// kind: "refund" ("Ajuste por devolución"), a refund of a visit or of a
+/// walk-in service line given after its commission was paid. The paid period
+/// is not rewritten: the adjustment (negative) counts in the summary until
+/// the next payout settles it, and in the payroll report of the period it was
+/// recorded in. One per refund and item (refundId + sourceKey), so recording
+/// it again changes nothing. See commissions/commission-clawback.ts.
+model CommissionAdjustment {
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
+  tenantId       String
+  professionalId String
+  kind           String    @default("refund") @db.VarChar(20)
+  refundId       String
+  refund         Refund    @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  /// What it corrects: the visit, or the till sale line (walk-in service).
+  appointmentId  String?
+  posSaleLineId  String?
+  /// "appointment:<id>" or "sale_line:<id>": one adjustment per refund and item.
+  sourceKey      String    @db.VarChar(80)
+  /// Negative: the commission taken back (same units as commissionAmount).
+  amount         Decimal   @db.Decimal(12, 2)
+  /// Settled with the next payout (POST /commissions/pay), like commissionPaid.
+  settled        Boolean   @default(false)
+  settledAt      DateTime?
+
+  @@unique([refundId, sourceKey])
+  @@index([tenantId, professionalId, settled])
+  @@index([tenantId, createdAt])
+  @@index([appointmentId])
+  @@index([posSaleLineId])
+  @@map("commission_adjustments")
+}
+
+/// A commission payout ("Pagar", POST /commissions/pay): what was paid to a
+/// professional, up to which salon day, and exactly which items it marked
+/// paid, so "Deshacer último pago" can unmark them (commissions.service.ts).
+model CommissionPayout {
+  id             String    @id @default(uuid())
+  createdAt      DateTime  @default(now())
+  tenantId       String
+  professionalId String
+  /// What was paid, in cents (the commissions' own units); negative when refund
+  /// adjustments outweighed what was earned.
+  amountCents    Int
+  itemCount      Int
+  /// The salon day the payout ran up to ("Pagar hasta"); null when paid by ids.
+  upTo           DateTime? @db.Date
+  /// { appointments: [{ id, rate, amount, prevRate, prevAmount }], lines: [id], adjustments: [id] }
+  items          Json
+  /// The user who paid (no FK: the history outlives a deleted user).
+  createdById    String?
+  undoneAt       DateTime?
+  undoneById     String?
+
+  @@index([tenantId, professionalId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("commission_payouts")
 }
 
 model ClientWallet {
@@ -1282,7 +1704,19 @@ model WalletTransaction {
   /// Balance after
   balanceAfter Int
 
+  /// A top-up (money the client hands over to load her wallet) or a withdrawal (money handed
+  /// back to her): how. Null for other movements (a refund back to the wallet, a wallet
+  /// payment at the till). Not a Payment: the wallet is a prepayment, recognised as revenue
+  /// when it is spent (a wallet payment).
+  method        PaymentMethod?
+  /// The cash-drawer session open when it was taken or handed back: a cash one counts in that drawer.
+  cashSessionId String?
+  cashSession   CashSession?   @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  /// The team member who took the top-up or handed back the withdrawal. Not a relation: the record outlives the account.
+  recordedById  String?
+
   @@index([walletId])
+  @@index([cashSessionId])
   @@map("wallet_transactions")
 }
 
@@ -1332,10 +1766,19 @@ model GiftCardTransaction {
   /// Reference
   paymentId String?
 
+  /// The card's balance right after this movement (cents). Null on rows
+  /// written before it was recorded.
+  balanceAfter Int?
+
+  /// The team member who made the movement (sale, redemption, refund...).
+  /// Null on older rows and on movements made by the system.
+  createdById String?
+
   /// Notes
   note String?
 
   @@index([giftCardId])
+  @@index([paymentId])
   @@map("gift_card_transactions")
 }
 
@@ -1369,8 +1812,18 @@ model LoyaltyProgram {
   /// Welcome bonus
   welcomePoints Int @default(0)
 
-  /// Expiration
-  pointsExpirationDays Int? /// Points expire after X days
+  /// Expiration: a member's whole balance expires after this many days
+  /// with no paid visit or purchase (LoyaltyMember.pointsRenewedAt); null:
+  /// points never expire.
+  pointsExpirationDays Int?      @default(365)
+  /// No points expire before this moment: the grace given when expiry was
+  /// introduced (deploy + 30 days), and again when it is switched on or
+  /// shortened.
+  pointsExpiryStartsAt DateTime?
+
+  /// "Mostrar puntos en el email tras la visita": the client's balance in
+  /// the post-visit review request.
+  showPointsInReviewEmail Boolean @default(true)
 
   /// Relations
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1419,6 +1872,11 @@ model LoyaltyMember {
 
   /// Stats
   lifetimePoints Int   @default(0)
+  /// The most lifetimePoints have ever been. The tier follows it: levels
+  /// never go down, not even when a reversal lowers lifetimePoints.
+  peakLifetimePoints Int @default(0)
+  /// Can be negative: a refund that takes back points already spent
+  /// (earn, redeem, refund). Later earnings pay it off; no redeeming meanwhile.
   currentPoints  Int   @default(0)
   totalEarned    Int   @default(0)
   totalRedeemed  Int   @default(0)
@@ -1428,6 +1886,9 @@ model LoyaltyMember {
   status         LoyaltyMemberStatus @default(active)
   joinedAt       DateTime            @default(now())
   lastActivityAt DateTime?
+  /// The last paid visit or purchase (or the sign-up): the balance expires
+  /// LoyaltyProgram.pointsExpirationDays after it.
+  pointsRenewedAt DateTime?
   /// How the client joined: "staff", "auto" (first paid visit) or "portal".
   enrolledVia    String?
 
@@ -1437,6 +1898,7 @@ model LoyaltyMember {
   transactions     LoyaltyTransaction[]
 
   @@unique([clientId, programId])
+  @@index([programId, pointsRenewedAt])
   @@map("loyalty_members")
 }
 
@@ -1516,11 +1978,11 @@ model LoyaltyTransaction {
   memberId  String
   member    LoyaltyMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
-  /// earn | redeem | reversal | redeem_reversal | welcome | adjust
+  /// earn | redeem | reversal | redeem_reversal | welcome | adjust | expire
   type        String
   /// Signed: positive adds to the balance, negative takes from it.
   points      Int
-  /// appointment | pos_sale | payment | enrollment | manual
+  /// appointment | pos_sale | payment | refund | enrollment | manual | expiry
   source      String
   sourceId    String?
   description String?
@@ -1583,6 +2045,8 @@ enum PaymentMethod {
   wallet
   gift_card
   loyalty_points
+  /// Bizum to the salon's phone: like a transfer, exact amount (pos-tenders.ts).
+  bizum
 }
 
 enum TransactionType {
@@ -1894,8 +2358,19 @@ model EmailCampaign {
   unsubscribes    Int @default(0)
 
   /// Settings
-  fromName String? /// Sender name override
-  replyTo  String? /// Reply-to email
+  fromName String? /// Not used: campaigns go out under the salon's name (see EmailCampaignSender)
+  replyTo  String? /// Reply-to email; the salon's email when empty
+
+  /// Archived campaigns are hidden from the default list. A campaign that
+  /// emailed anyone is archived, never deleted: its recipient rows carry the
+  /// unsubscribe links and the delivery history.
+  archivedAt DateTime?
+  /// Why the last send stopped or reached nobody, in Spanish for the panel.
+  lastError  String?
+  /// Set when sending stopped at the month's marketing email cap: the rest
+  /// stays pending and the sender resumes it when there is allowance again
+  /// (next month, or a bono de emails). Null otherwise.
+  capPausedAt DateTime?
 
   /// Relations
   tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1921,7 +2396,7 @@ model EmailCampaignRecipient {
   name  String?
 
   /// Delivery status
-  status         String    @default("pending") /// pending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
+  status         String    @default("pending") /// pending, sending, sent, delivered, opened, clicked, bounced, complained, failed, suppressed, unsubscribed
   sentAt         DateTime?
   deliveredAt    DateTime?
   openedAt       DateTime?
@@ -1934,15 +2409,25 @@ model EmailCampaignRecipient {
   messageId    String? /// Email provider message ID
   errorMessage String?
 
+  /// Background sending (EmailCampaignSender): how many times the send was
+  /// tried, and when it may be tried next -- the backoff after a 429/5xx, or
+  /// the lease of a send in flight (status "sending").
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+
   /// Relations
   campaign EmailCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   client   Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
   @@index([campaignId])
+  /// The sender picks a campaign's pending recipients every minute.
+  @@index([campaignId, status])
   @@index([clientId])
   @@index([email])
   /// Resend webhooks find the recipient by the id Resend returned on send.
   @@index([messageId])
+  /// A client is on a campaign's list once (adding her twice emailed her twice).
+  @@unique([campaignId, clientId])
   @@map("email_campaign_recipients")
 }
 
@@ -2207,6 +2692,8 @@ model Location {
 
   appointments  Appointment[]
   professionals ProfessionalLocation[]
+  /// Closures of this location only.
+  timeOff       TimeOff[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -2388,6 +2875,24 @@ model Review {
   /// screen. Whether they then posted on Google is not knowable without the
   /// Business Profile API, so nothing claims they did.
   googleLinkClickedAt  DateTime?
+  /// Why the salon rejected or hid it: one of REVIEW_REJECTION_REASONS
+  /// (reviews/review-rules.ts), or "legacy_unspecified" for rejections from
+  /// before reasons were required. Cleared on approval. Who (User id) and
+  /// when it was last moderated.
+  moderationReason     String?
+  moderatedById        String?
+  moderatedAt          DateTime?
+  /// Whether the client let the salon show it on its site with her name and
+  /// initial: "granted" | "declined" | "legacy" (answered under the old
+  /// notice) | "anonymised". Only granted and legacy are listed publicly;
+  /// every answered rating not rejected counts in the average, anonymously.
+  /// The version names the checkbox text she saw.
+  publishConsent        String    @default("legacy")
+  publishConsentVersion String?
+  publishConsentAt      DateTime?
+  /// Resend id of the request email: a hard bounce or complaint on it puts
+  /// the address on the salon's suppression list.
+  requestMessageId     String?      @unique
   tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
@@ -2419,16 +2924,83 @@ model WhatsAppConnection {
   messagingLimit  Json?
   isActive        Boolean   @default(true)
   lastSyncAt      DateTime?
+  /// KiraRoom's Meta app confirmed as subscribed to the WhatsApp Business account (POST /{waba}/subscribed_apps).
+  webhookSubscribedAt DateTime?
+  /// Why the subscription failed or could not be confirmed, in Spanish; null when it is active.
+  webhookError    String?
+  /// The last webhook event received for this number: the proof that messages arrive.
+  lastInboundAt   DateTime?
+  /// Meta refused the access token (expired, revoked): nothing is sent until the salon reconnects.
+  authErrorAt     DateTime?
+  /// The send result's reason ("meta_190"), see campaigns/meta-account-errors.ts.
+  authError       String?
+  /// When the owner was told about authErrorAt (once per occurrence).
+  attentionNotifiedAt DateTime?
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// Plus a partial unique index on phoneNumberId for active connections
+  /// (raw SQL in migration 20261104040000: Prisma cannot declare it).
   @@index([phoneNumberId])
   @@map("whatsapp_connections")
+}
+
+/// A "BAJA" (opt-out) reply to the salon's WhatsApp, written before anything
+/// else is done with it so it cannot be lost: then applied to the clients
+/// with that number, and retried by a sweep while that fails. Unique per
+/// message, so Meta's retries are idempotent. The phone is cleared once the
+/// opt-out is applied (the consent record keeps the proof).
+model WhatsAppOptOut {
+  id           String    @id @default(uuid())
+  createdAt    DateTime  @default(now())
+  tenantId     String
+  /// Meta's message id (wamid).
+  messageId    String
+  /// The sender's WhatsApp id (digits), until the opt-out is applied and confirmed.
+  phone        String
+  processedAt  DateTime?
+  clientsFound Int?
+  attempts     Int       @default(0)
+  lastError    String?
+  /// When the "Hecho..." reply was claimed: sent at most once per BAJA.
+  confirmedAt  DateTime?
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, messageId])
+  @@index([processedAt])
+  @@map("whatsapp_opt_outs")
+}
+
+/// A Facebook Page, Instagram professional account or Telegram bot connected
+/// to a salon. The unique index keeps one account in one salon (the lookups
+/// by JSON path on Tenant.features could not, and raced), and inbound
+/// messages are routed by it. The health of the Page or bot token lives
+/// here too (on the facebook row for the Page token Instagram shares).
+model ChannelAccount {
+  id                  String      @id @default(uuid())
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  tenantId            String
+  channel             ChatChannel
+  /// Page id, Instagram account id or bot id.
+  externalId          String
+  /// Meta / Telegram refused the token (expired, revoked).
+  authErrorAt         DateTime?
+  authError           String?
+  /// When the owner was told about authErrorAt (once per occurrence).
+  attentionNotifiedAt DateTime?
+  tenant              Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([channel, externalId])
+  @@unique([tenantId, channel])
+  @@map("channel_accounts")
 }
 
 enum WhatsAppCampaignStatus {
   draft
   scheduled
   sending
+  /// Stopped by an account-level Meta error (token, payment, template, restriction); the rest stays pending until "Reanudar".
+  paused
   completed
   failed
   cancelled
@@ -2582,6 +3154,9 @@ model ClientCadence {
   lastComputedAt            DateTime  @default(now())
   reminderSentFor           Json      @default("[]")
   optedOut                  Boolean   @default(false)
+  // When a dispatcher tick last took this row (RebookingDispatcherService):
+  // a second tick or instance does not take it again within the lease.
+  dispatchClaimedAt         DateTime?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
   tenant                    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2640,7 +3215,12 @@ model WaitList {
   // `notified` means a slot opened and we told the client.
   // `cancelled` is terminal (client or system removed).
   // `fulfilled` means the client booked the appointment they wanted.
+  // `expired` means its dates passed or it sat untouched too long.
   status         String    @default("waiting")
+  // Why and when it closed, when the system or the client closed it:
+  // window_passed / too_old (expired) or client_left ("Ya no me interesa").
+  closedReason   String?
+  closedAt       DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   notifiedAt     DateTime?
@@ -2723,7 +3303,15 @@ model Invoice {
   /// Rectificativas: the invoice this one corrects (FacturasRectificadas).
   rectifiesInvoiceId   String?
 
-  /// Metadata
+  /// Metadata. What the invoice was issued for: an appointment's invoice has
+  /// sourceType "appointment" and sourceId = the appointment's id. One live
+  /// invoice per source: unique index "invoices_tenantId_sourceType_sourceId_key"
+  /// on (tenantId, sourceType, sourceId) WHERE status <> 'cancelled'
+  /// (migration 20261101190000), so a cancelled invoice keeps its source but
+  /// does not stop a new one being issued for it. Prisma 5 cannot express a
+  /// partial index, so it lives only in that migration: it is NOT declared
+  /// here (an @@unique would make `migrate dev` replace it with a full one).
+  /// A manual invoice has no sourceId, and NULLs never collide.
   sourceType InvoiceSource
   sourceId   String?
   notes      String?
@@ -2751,13 +3339,37 @@ model InvoiceLine {
   taxRate        Decimal @default(0)
   taxCents       Int
   totalCents     Int
+  /// The price was given with the tax included and split into base + tax
+  /// (InvoiceLineInput.taxIncluded); unitPriceCents is the net one either way.
+  /// A rectification crediting part of the line splits it the same way.
+  /// False on lines from before the column (not backfilled).
+  taxIncluded    Boolean @default(false)
   /// Trazabilidad
   productId      String?
   serviceId      String?
   appointmentId  String?
+  /// On a rectificativa: the line of the original invoice this line credits
+  /// (rectification-lines.ts). What is left to credit of a line is its
+  /// amounts minus every non-cancelled line naming it. Null on ordinary
+  /// lines, on free "por diferencias" lines and on rectificativas issued
+  /// before the column (those count against the original as a whole).
+  rectifiesLineId String?
+  rectifiesLine   InvoiceLine?  @relation("LineRectifications", fields: [rectifiesLineId], references: [id], onDelete: SetNull)
+  /// The part of the line's discount that is the client's loyalty reward,
+  /// in the line's price terms (with the tax when taxIncluded, else the
+  /// base). Already inside discountPct and the amounts; the PDF names it
+  /// ("Descuento fidelidad"). 0 on lines from before the column.
+  loyaltyDiscountCents Int @default(0)
+  /// The part of the line's discount that is a promotion code applied at
+  /// the till, in the same terms as loyaltyDiscountCents, and its code. The
+  /// PDF names it ("Descuento promoción VERANO10"). 0 / null otherwise.
+  promotionDiscountCents Int @default(0)
+  promotionCode   String?       @db.VarChar(50)
+  rectifiedBy     InvoiceLine[] @relation("LineRectifications")
   invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
+  @@index([rectifiesLineId])
   @@map("invoice_lines")
 }
 
@@ -2827,6 +3439,8 @@ enum InvoiceSource {
   appointment
   manual
   subscription
+  /// The simplified invoice (series T) of a sale at the till.
+  pos_sale
 }
 
 enum InvoiceAccountingStatus {
@@ -3025,12 +3639,16 @@ model BugReport {
   resolvedById String?
   resolvedAt   DateTime?
   resolution   String?         @db.Text
+  /// When its personal data was removed (audit 8 D14): 12 months after it
+  /// was closed (resolvedAt), or when its salon was anonymised.
+  anonymizedAt DateTime?
   tenant       Tenant?         @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   author       User?           @relation("BugReportAuthor", fields: [authorId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([status, createdAt])
   @@index([tenantId, createdAt])
+  @@index([resolvedAt])
   @@map("bug_reports")
 }
 
@@ -3056,6 +3674,60 @@ enum ChatChannel {
   telegram
 }
 
+// KiraRoom's own Stripe account (it bills the salons), set by the saas_owner in
+// the console. Each field is optional: empty falls back to the server .env
+// (STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET,
+// STRIPE_TAX_ENABLED). Secret key and webhook secret are encrypted with
+// EncryptionService and never returned by the API.
+model PlatformStripeConfig {
+  id                     String   @id @default("global")
+  secretKeyEncrypted     String?  @db.Text
+  publishableKey         String?
+  webhookSecretEncrypted String?  @db.Text
+  /// The other mode's webhook secret (test or live, whichever the secret
+  /// key is not): its events are verified and acknowledged, not applied.
+  otherWebhookSecretEncrypted String? @db.Text
+  /// Ignored: KiraRoom charges no VAT (D6). Kept for the column.
+  taxEnabled             Boolean?
+  updatedAt              DateTime @updatedAt
+  updatedBy              String?
+
+  @@map("platform_stripe_config")
+}
+
+// Platform email (Resend), set by the saas_owner in the console. Each field
+// is optional: an empty one falls back to the server .env (RESEND_API_KEY,
+// EMAIL_FROM, RESEND_WEBHOOK_SECRET). The key and the webhook secret are
+// encrypted with EncryptionService and never returned by the API.
+model PlatformEmailConfig {
+  id                     String   @id @default("global")
+  apiKeyEncrypted        String?  @db.Text
+  fromAddress            String?
+  webhookSecretEncrypted String?  @db.Text
+  /// The "bono de emails" salons can buy once their monthly marketing cap
+  /// is reached: how many emails and its price in cents (before VAT). Not
+  /// offered while either is empty.
+  marketingPackEmails     Int?
+  marketingPackPriceCents Int?
+  updatedAt              DateTime @updatedAt
+  updatedBy              String?
+
+  @@map("platform_email_config")
+}
+
+// The switch for the salon-data retention job (saas/retention), flipped by the
+// saas_owner in the console. Off (dry run: nothing is warned or anonymised)
+// until turned on. The env var RETENTION_ANONYMIZE_ENABLED=true also turns it
+// on, as an override that the console cannot turn off.
+model PlatformRetentionConfig {
+  id        String   @id @default("global")
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@map("platform_retention_config")
+}
+
 // ============================================================================
 // P2A-platform-llm: single platform-wide LLM provider config
 // ============================================================================
@@ -3070,9 +3742,9 @@ model PlatformLlmConfig {
   // EncryptionService.decrypt(). Never expose via API; only the
   // last-4-chars hash is returned to the admin UI.
   apiKeyEncrypted String   @db.Text
-  defaultModel    String   @default("claude-haiku-4-5")
-  // Optional fields that the provider factory needs (e.g. MiniMax
-  // requires MINIMAX_BASE_URL).
+  defaultModel    String   @default("claude-haiku-5-5")
+  // Optional base URL for the provider (a proxy or gateway in front of
+  // the provider API).
   baseUrl         String?
   // P2A-anthropic-workspace: Identity-linked Anthropic keys (created
   // from console.anthropic.com since late 2025) require this header
@@ -3353,4 +4025,339 @@ model VerifactuSubmission {
 
   @@index([tenantId, createdAt])
   @@map("verifactu_submissions")
+}
+
+/// Time a professional is away (vacation, a day off, sick leave, a few hours
+/// for an appointment of their own), or, with no professional, days or hours
+/// the whole salon is closed (bank holidays, closures).
+///
+/// Dates are the salon's calendar days and times its clock, the same way an
+/// appointment's scheduledDate + scheduledTime are: no timezone math. Both
+/// times null means all day; set, the block is those hours of one day.
+/// Availability, booking, moves, the calendar and the receptionist read it
+/// (time-off/time-off-rules.ts). Nothing booked is cancelled by it: the
+/// salon is shown the clashes and decides.
+model TimeOff {
+  id             String        @id @default(uuid())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  tenantId       String
+  /// Null: the whole salon is closed (kind is then always closure).
+  professionalId String?
+  kind           TimeOffKind
+  startDate      DateTime      @db.Date
+  /// Inclusive.
+  endDate        DateTime      @db.Date
+  /// "HH:MM"; with endTime, the same hours on every day of the range.
+  startTime      String?
+  endTime        String?
+  note           String?       @db.VarChar(200)
+  /// Who recorded it (a user id). Not a relation: the record outlives the account.
+  createdById    String?
+  /// Only approved time off blocks the agenda. A professional's own request
+  /// is pending until whoever runs the salon approves or rejects it; what an
+  /// owner or manager records is approved from the start.
+  status         TimeOffStatus @default(approved)
+  /// The staff user who asked for it (null: recorded by the salon). Not a relation.
+  requestedById  String?
+  /// Who approved or rejected the request (a user id), and when.
+  decidedById    String?
+  decidedAt      DateTime?
+  /// Why it was rejected (or a word on approval), for the requester.
+  decisionNote   String?       @db.VarChar(200)
+  /// A closure of one location only (multi-local); null: every location.
+  /// Never set on a professional's time off.
+  locationId     String?
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  location       Location?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, startDate, endDate])
+  @@index([tenantId, status])
+  @@index([professionalId])
+  @@index([locationId])
+  @@map("time_off")
+}
+
+enum TimeOffStatus {
+  approved
+  pending
+  rejected
+}
+
+enum TimeOffKind {
+  vacation
+  day_off
+  sick_leave
+  closure
+  other
+}
+
+/// A discount given by hand at the till (POS): "10 % a esta clienta", "5 €
+/// menos". One row per discount, written in the same transaction as the
+/// ticket's payments, so who gave how much, on what and why stays on record.
+/// The amounts are the server's: the till sends only the type, the value and
+/// the reason (pos/pos-discounts.ts).
+model PosDiscount {
+  id            String           @id @default(uuid())
+  createdAt     DateTime         @default(now())
+  tenantId      String
+  /// The ticket: `posSaleId` in the metadata of its payments.
+  saleId        String
+  /// The whole ticket, or one of its lines.
+  scope         PosDiscountScope
+  /// Position of the line in the ticket as the server priced it (scope line).
+  lineIndex     Int?
+  /// What the line sells (scope line). Not relations: the record outlives them.
+  serviceId     String?
+  productId     String?
+  /// The appointment the line charges, if any (scope line).
+  appointmentId String?
+  /// The line's name, or "Ticket".
+  description   String           @db.VarChar(200)
+  type          PosDiscountType
+  /// As entered: a percent (0-100) or cents.
+  value         Decimal          @db.Decimal(12, 2)
+  /// What it came off, in cents: the line (price x quantity), or the ticket
+  /// after its line discounts.
+  baseCents     Int
+  /// What it took off, in cents.
+  amountCents   Int
+  reason        String?          @db.VarChar(120)
+  /// Who gave it (a user id) and their role then. Not a relation: the
+  /// record outlives the account.
+  appliedById   String?
+  appliedByRole String?
+  /// The rectificativa issued for this discount, when it came off an
+  /// appointment whose invoice was already issued (pos.service.ts). Not a
+  /// relation, like the ids above.
+  rectificationInvoiceId String?
+  /// type promotion: the promotion whose code was applied, and the code
+  /// (not a relation, like the ids above). Outside the staff discount limit.
+  promotionId   String?
+  promotionCode String?          @db.VarChar(50)
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([saleId])
+  @@index([appointmentId])
+  @@map("pos_discounts")
+}
+
+enum PosDiscountScope {
+  order
+  line
+}
+
+enum PosDiscountType {
+  percentage
+  fixed
+  /// A promotion code (Promociones) applied to the ticket at the till.
+  promotion
+}
+
+/// A sale at the till (POST /pos/checkout, /pos/quick-sale): one row per
+/// ticket, the idempotency key the panel sends with it (`requestId`), the
+/// totals in cents (money: tax included, what the client paid), and the
+/// invoice it was issued with. `id` is the sale id stamped on its payments
+/// (`metadata.posSaleId`), its discounts (PosDiscount.saleId) and its
+/// simplified invoice (sourceType pos_sale). cashSessionId links it to the
+/// cash-drawer session (arqueo) open when it was charged.
+model PosSale {
+  id                   String        @id @default(uuid())
+  createdAt            DateTime      @default(now())
+  tenantId             String
+  /// The client-generated id of the request (UUID): a retry with the same one returns this sale.
+  requestId            String
+  /// Not relations: the record outlives them (like PosDiscount).
+  clientId             String?
+  createdById          String?
+  /// checkout | quick_sale
+  kind                 String        @default("checkout") @db.VarChar(20)
+  subtotalCents        Int           @default(0)
+  /// Every discount of the ticket: the manual ones and the promotion's.
+  discountCents        Int           @default(0)
+  loyaltyDiscountCents Int           @default(0)
+  /// The promotion code's part of discountCents, its promotion and code.
+  promotionDiscountCents Int         @default(0)
+  promotionId          String?
+  promotionCode        String?       @db.VarChar(50)
+  totalCents           Int           @default(0)
+  /// Cash handed back.
+  changeCents          Int           @default(0)
+  /// The simplified (series T) or full invoice of its lines without an appointment.
+  invoiceId            String?
+  /// The cash-drawer session (arqueo) open when it was charged; null when the drawer was closed (card, Bizum...).
+  cashSessionId        String?
+  cashSession          CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  /// What the checkout answered, returned again on a retry.
+  result               Json          @default("{}")
+  tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines                PosSaleLine[]
+
+  @@unique([tenantId, requestId])
+  @@index([tenantId, createdAt])
+  @@index([cashSessionId])
+  @@map("pos_sales")
+}
+
+/// One line of a till sale, in money (tax included). Commissions for a
+/// service sold without an appointment come from here (professionalId).
+model PosSaleLine {
+  id                  String    @id @default(uuid())
+  createdAt           DateTime  @default(now())
+  saleId              String
+  tenantId            String
+  lineIndex           Int
+  /// appointment | service | product | gift_card | loyalty_gift (a reward handed over, price 0)
+  kind                String    @db.VarChar(20)
+  serviceId           String?
+  productId           String?
+  appointmentId       String?
+  giftCardId          String?
+  /// Who did the service (walk-in services): their commission.
+  professionalId      String?
+  description         String    @db.VarChar(200)
+  quantity            Int       @default(1)
+  unitPriceCents      Int
+  discountCents       Int       @default(0)
+  totalCents          Int
+  /// Percent (21); 0 for a gift card (not taxed when sold).
+  taxRate             Decimal   @default(0) @db.Decimal(5, 2)
+  taxCents            Int       @default(0)
+  /// What the commission is a percent of: the line in the salon's catalogue terms (as Appointment.totalAmount).
+  commissionBaseCents Int       @default(0)
+  commissionRate      Decimal?  @db.Decimal(5, 2)
+  commissionAmount    Decimal?  @db.Decimal(12, 2)
+  commissionPaid      Boolean   @default(false)
+  commissionDate      DateTime?
+  /// The part of the loyalty reward that came off this line (money cents):
+  /// totalCents and taxCents are after it, as the sale's invoice says.
+  loyaltyDiscountCents Int      @default(0)
+  /// Given back so far (refunds of the sale): units (back in stock for a
+  /// product) and money cents. The commission counts what is left:
+  /// commissionAmount x (totalCents - refundedCents) / totalCents.
+  refundedQuantity    Int       @default(0)
+  refundedCents       Int       @default(0)
+  sale                PosSale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([tenantId, professionalId])
+  @@map("pos_sale_lines")
+}
+
+enum CashSessionStatus {
+  open
+  closed
+}
+
+/// A cash-drawer session at the till (apertura y cierre de caja, arqueo):
+/// opened with a float, closed with the cash counted. The till has no
+/// location of its own, so at most ONE session is open per salon: partial
+/// unique index "cash_sessions_one_open_per_tenant" on (tenantId) WHERE
+/// status = 'open' (migration 20261101220000). Prisma 5 cannot express a
+/// partial index, so it lives only in that migration: it is NOT declared
+/// here (an @@unique would make `migrate dev` replace it with a full one).
+///
+/// Amounts in cents. expectedCashCents = float + cash taken (net of change)
+/// - cash refunds + cash put in - cash taken out, worked out and stored at
+/// close (pos/cash-session-math.ts); discrepancyCents = counted - expected.
+/// openedById / closedById are not relations: the record outlives the account.
+model CashSession {
+  id                String            @id @default(uuid())
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  tenantId          String
+  status            CashSessionStatus @default(open)
+  openedById        String
+  openedAt          DateTime          @default(now())
+  openingFloatCents Int
+  openingNotes      String?           @db.VarChar(500)
+  closedById        String?
+  closedAt          DateTime?
+  countedCashCents  Int?
+  expectedCashCents Int?
+  discrepancyCents  Int?
+  closingNotes      String?           @db.VarChar(500)
+  /// The count by coin and note, when it was made with the helper: { "5000": 2, "200": 3 } (cents -> pieces).
+  countBreakdown    Json?
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  movements         CashMovement[]
+  sales             PosSale[]
+  payments          Payment[]
+  refunds           Refund[]
+  walletTopUps      WalletTransaction[]
+
+  @@index([tenantId, openedAt])
+  @@index([tenantId, status])
+  @@map("cash_sessions")
+}
+
+enum CashMovementType {
+  in
+  out
+}
+
+/// Money put into or taken out of the drawer during a session, with why:
+/// paying a supplier from the drawer, taking cash to the bank, adding change.
+model CashMovement {
+  id          String           @id @default(uuid())
+  createdAt   DateTime         @default(now())
+  tenantId    String
+  sessionId   String
+  type        CashMovementType
+  amountCents Int
+  reason      String           @db.VarChar(300)
+  /// Who did it. Not a relation: the record outlives the account.
+  createdById String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  session     CashSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([tenantId, createdAt])
+  @@map("cash_movements")
+}
+
+/// Stripe webhook events already handled, by Stripe's event id. Stripe
+/// delivers an event at least once and retries it for days: a replayed
+/// event is acknowledged and skipped instead of being applied twice.
+model StripeWebhookEvent {
+  /// Stripe's event id (evt_...).
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
+  @@map("stripe_webhook_events")
+}
+
+/// One SMS a booking made from outside the salon (its page, the widget, the
+/// chat receptionist) would send: allowed, or held back because the salon or
+/// the number reached its daily cap (appointments/public-booking-sms-cap.ts).
+/// Anyone can book, and each booking texted the number typed in, so a bot
+/// could make KiraRoom pay for unlimited SMS. No phone number is stored:
+/// `phoneHash` is an HMAC of its last nine digits, enough to count.
+model PublicBookingSms {
+  id            String   @id @default(uuid())
+  tenantId      String
+  appointmentId String?
+  phoneHash     String
+  allowed       Boolean
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([phoneHash, createdAt])
+  @@index([appointmentId])
+  @@map("public_booking_sms")
+}
+
+/// One-time maintenance jobs that run after boot (auth/default-password-sweep.service.ts):
+/// a row means the job finished and must not run again.
+model MaintenanceTask {
+  name        String   @id
+  completedAt DateTime @default(now())
+  /// Counts only, never personal data.
+  result      Json     @default("{}")
+
+  @@map("maintenance_tasks")
 }

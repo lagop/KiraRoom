@@ -4,6 +4,11 @@ import { PublicViewerModule } from "../common/tenancy/public-viewer.service";
 import { AppointmentsService } from "./appointments.service";
 import { AppointmentServicesController } from "./appointment-services.controller";
 import { AppointmentServicesService } from "./appointment-services.service";
+import { HomeSummaryService } from "./home-summary.service";
+import { PublicAppointmentController } from "./public-appointment.controller";
+import { PendingBookingExpiryScheduler } from "./pending-booking-expiry.scheduler";
+import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
+import { AnalyticsModule } from "../analytics/analytics.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { TranslationsModule } from "../translations/translations.module";
 import { ConsentModule } from "../consent/consent.module";
@@ -27,9 +32,17 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     RebookingModule,
     InvoicesModule,
     WaitListModule,
+    // Inicio (HomeSummaryService): the location filter and today's occupancy, as in Analítica.
+    AnalyticsModule,
   ],
-  controllers: [AppointmentsController, AppointmentServicesController],
-  providers: [AppointmentsService, AppointmentServicesService],
-  exports: [AppointmentsService, AppointmentServicesService],
+  controllers: [AppointmentsController, AppointmentServicesController, PublicAppointmentController],
+  providers: [
+    AppointmentsService,
+    AppointmentServicesService,
+    HomeSummaryService,
+    PendingBookingExpiryScheduler,
+    SalonBookingAlertsService,
+  ],
+  exports: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
 })
 export class AppointmentsModule {}

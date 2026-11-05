@@ -1,15 +1,16 @@
 import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, UseGuards, BadRequestException } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
 import { IsBoolean, IsOptional } from "class-validator";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
-import { Public } from "../auth/decorators/public.decorator";
 import { ConsentService } from "./consent.service";
+import { CreateConsentFormDto, RevokeConsentDto, SignConsentDto, UpdateConsentFormDto } from "./consent.dto";
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
+// The signer's address from the trusted proxy, not the header she sends.
+import { clientIp } from "../common/client-ip";
 
-/** A client's choice about commercial communications. */
+/** A choice about email promotions (the salon only records a refusal). */
 export class MarketingChoiceDto {
   @IsBoolean()
   accepts!: boolean;
@@ -27,6 +28,29 @@ export class SalonWhatsAppChoiceDto {
   @IsOptional()
   @IsBoolean()
   confirmedInPerson?: boolean;
+}
+
+/**
+ * The channels of a client's appointment notices, set from her file. Only
+ * the channels sent change. Turning WhatsApp on needs `clientAsked`: the
+ * team member confirms the client asked for it, and the record says who.
+ */
+export class ClientNoticesDto {
+  @IsOptional()
+  @IsBoolean()
+  email?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sms?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  whatsapp?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  clientAsked?: boolean;
 }
 
 interface AuthedRequest extends Request {
@@ -48,7 +72,7 @@ export class ConsentFormsController {
 
   @Post()
   @Roles(...SALON_MANAGERS)
-  create(@Req() req: AuthedRequest, @Body() body: any) {
+  create(@Req() req: AuthedRequest, @Body() body: CreateConsentFormDto) {
     return this.service.createForm(req.user.tenantId, body);
   }
 
@@ -57,7 +81,7 @@ export class ConsentFormsController {
   update(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: any,
+    @Body() body: UpdateConsentFormDto,
   ) {
     return this.service.updateForm(req.user.tenantId, id, body);
   }
@@ -86,81 +110,33 @@ export class ConsentController {
     return this.service.getRequiredForms(req.user.tenantId, serviceId);
   }
 
+  /**
+   * Records a signed consent taken in the salon. It used to be public and
+   * take the salon and the client from the body; a signature now needs a
+   * team member's session, and the salon is the session's. The team member
+   * names the client and types the name she signed with; the record keeps
+   * who recorded it. (Clients have no accounts, so none signs for herself.)
+   */
   @Post("sign")
-  @Public()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
-  async sign(@Body() body: any, @Req() req: Request) {
-    if (!body?.tenantId || !body?.clientId || !body?.formId) {
-      throw new BadRequestException("tenantId, clientId and formId required");
+  async sign(@Body() body: SignConsentDto, @Req() req: AuthedRequest) {
+    if (!body.clientId) throw new BadRequestException("Indica la clienta que firma");
+    if (!body.signatureName?.trim()) {
+      throw new BadRequestException("Escribe el nombre con el que firma la clienta");
     }
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
     return this.service.sign({
-      tenantId: body.tenantId,
-      clientId: body.clientId,
+      tenantId: req.user.tenantId,
       formId: body.formId,
       responses: body.responses ?? {},
-      signatureName: body.signatureName,
-      ip,
+      ip: clientIp(req),
       appointmentId: body.appointmentId,
       serviceId: body.serviceId,
-    });
-  }
-
-  /** The signed-in client's choice about promotions and news by email. */
-  @Get("me/marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  myMarketing(@Req() req: AuthedRequest) {
-    return this.service.getMarketingConsent(req.user.tenantId, req.user.id);
-  }
-
-  /**
-   * Records it as a signed Consent (see marketing-consent.ts). The account
-   * page used to keep this checkbox in localStorage only.
-   */
-  @Put("me/marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  @Throttle({ default: { ttl: 60_000, limit: 20 } })
-  setMyMarketing(@Req() req: AuthedRequest, @Body() dto: MarketingChoiceDto) {
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
-    return this.service.recordMarketingChoice({
-      tenantId: req.user.tenantId,
-      clientId: req.user.id,
-      accepts: dto.accepts,
-      ip,
-    });
-  }
-
-  /** The signed-in client's choice about promotions by WhatsApp. */
-  @Get("me/whatsapp-marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  myWhatsAppMarketing(@Req() req: AuthedRequest) {
-    return this.service.getMarketingConsent(req.user.tenantId, req.user.id, "whatsapp");
-  }
-
-  @Put("me/whatsapp-marketing")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @Roles(UserRole.client)
-  @Throttle({ default: { ttl: 60_000, limit: 20 } })
-  setMyWhatsAppMarketing(@Req() req: AuthedRequest, @Body() dto: MarketingChoiceDto) {
-    return this.service.recordMarketingChoice({
-      tenantId: req.user.tenantId,
-      clientId: req.user.id,
-      accepts: dto.accepts,
-      ip: clientIp(req),
-      channel: "whatsapp",
+      clientId: body.clientId,
+      signatureName: body.signatureName,
+      recordedBy: req.user.id,
     });
   }
 
@@ -170,6 +146,7 @@ export class ConsentController {
   @ApiBearerAuth()
   @Roles(...SALON_TEAM)
   async clientMarketing(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
     const [email, whatsapp] = await Promise.all([
       this.service.getMarketingConsent(req.user.tenantId, clientId, "email"),
       this.service.getMarketingConsent(req.user.tenantId, clientId, "whatsapp"),
@@ -183,7 +160,7 @@ export class ConsentController {
   @ApiBearerAuth()
   @Roles(...SALON_TEAM)
   @Throttle({ default: { ttl: 60_000, limit: 30 } })
-  setClientWhatsAppMarketing(
+  async setClientWhatsAppMarketing(
     @Req() req: AuthedRequest,
     @Param("clientId", ParseUUIDPipe) clientId: string,
     @Body() dto: SalonWhatsAppChoiceDto,
@@ -191,6 +168,7 @@ export class ConsentController {
     if (dto.accepts && dto.confirmedInPerson !== true) {
       throw new BadRequestException("Confirma que el cliente ha aceptado recibir promociones por WhatsApp");
     }
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
     return this.service.recordMarketingChoice({
       tenantId: req.user.tenantId,
       clientId,
@@ -201,6 +179,75 @@ export class ConsentController {
     });
   }
 
+  /**
+   * The salon writes down that the client does not want promotions by
+   * email (she said so in person, by phone, by replying to an email). Only
+   * a refusal: withdrawing is always allowed, but an acceptance of email
+   * promotions is the client's own to give, never the salon's to record.
+   */
+  @Put("clients/:clientId/marketing")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  async setClientEmailMarketing(
+    @Req() req: AuthedRequest,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+    @Body() dto: MarketingChoiceDto,
+  ) {
+    if (dto.accepts !== false) {
+      throw new BadRequestException(
+        "El salón solo puede anotar que la clienta no quiere promociones por email",
+      );
+    }
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    return this.service.recordMarketingChoice({
+      tenantId: req.user.tenantId,
+      clientId,
+      accepts: false,
+      ip: clientIp(req),
+      channel: "email",
+      recordedBy: req.user.id,
+    });
+  }
+
+  /** How the client gets her appointment notices (email, SMS, WhatsApp). */
+  @Get("clients/:clientId/notices")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  async clientNotices(@Req() req: AuthedRequest, @Param("clientId", ParseUUIDPipe) clientId: string) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    return this.service.getClientNotices(req.user.tenantId, clientId);
+  }
+
+  /**
+   * The salon sets the channels of the client's appointment notices: clients
+   * have no account to do it themselves. WhatsApp on is her request, written
+   * down with who recorded it (see ConsentService.setClientNotices).
+   */
+  @Put("clients/:clientId/notices")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Roles(...SALON_TEAM)
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
+  async setClientNotices(
+    @Req() req: AuthedRequest,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+    @Body() dto: ClientNoticesDto,
+  ) {
+    await this.service.assertClientInReach(req.user.tenantId, clientId, req.user);
+    const { clientAsked, ...changes } = dto;
+    return this.service.setClientNotices({
+      tenantId: req.user.tenantId,
+      clientId,
+      changes,
+      ip: clientIp(req),
+      recordedBy: req.user.id,
+      clientAsked,
+    });
+  }
+
   @Post(":id/revoke")
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -208,16 +255,9 @@ export class ConsentController {
   revoke(
     @Req() req: AuthedRequest,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { reason?: string },
+    @Body() body: RevokeConsentDto,
   ) {
     return this.service.revoke(req.user.tenantId, id, body?.reason);
   }
 }
 
-function clientIp(req: Request): string {
-  return (
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    ""
-  );
-}

@@ -1,10 +1,10 @@
-﻿import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { FeatureFlagService } from '../common/feature-flags/feature-flag.service';
 import { AddOnsService } from '../payments/services/addons.service';
 import { MetricsService, COUNTERS } from '../common/observability/metrics.service';
 import Stripe from 'stripe';
+import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
 
 export type CreditChannel = 'whatsapp_marketing' | 'sms_marketing';
 
@@ -35,29 +35,25 @@ export interface ConsumeCreditResult {
  * â€” they remain free as per the spec.
  */
 @Injectable()
-export class MessageBundlesService implements OnModuleInit {
+export class MessageBundlesService {
   private readonly logger = new Logger(MessageBundlesService.name);
-  private stripe: Stripe | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
     private readonly addons: AddOnsService,
     private readonly metrics: MetricsService,
+    private readonly platformStripe: PlatformStripeConfigService,
   ) {}
 
-  onModuleInit() {
-    const key = this.config.get<string>('STRIPE_SECRET_KEY');
-    if (key && key.startsWith('sk_')) {
-      this.stripe = new Stripe(key, {
-        apiVersion: '2024-12-18.acacia' as any,
-      });
-    }
+  /** KiraRoom's Stripe account (console, else .env), for usage records. */
+  private get stripe(): Stripe | null {
+    return this.platformStripe.client();
   }
 
   /**
-   * Read the current balance for a tenant. Auto-creates the wallet
-   * at 0 credits if missing.
+   * Read the current balance for a tenant: zero when it has no wallet yet.
+   * A read creates nothing (it used to create a wallet row for every salon
+   * that opened Facturación); the wallet is created by its first top-up.
    */
   async getBalance(tenantId: string): Promise<{
     creditsRemaining: number;
@@ -65,13 +61,11 @@ export class MessageBundlesService implements OnModuleInit {
     creditsUsedTotal: number;
     lastTopupAt: Date | null;
   }> {
-    let row = await this.prisma.messageCreditWallet.findUnique({
+    const row = await this.prisma.messageCreditWallet.findUnique({
       where: { tenantId },
     });
     if (!row) {
-      row = await this.prisma.messageCreditWallet.create({
-        data: { tenantId },
-      });
+      return { creditsRemaining: 0, creditsPurchasedTotal: 0, creditsUsedTotal: 0, lastTopupAt: null };
     }
     return {
       creditsRemaining: row.creditsRemaining,

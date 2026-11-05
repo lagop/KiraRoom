@@ -1,4 +1,4 @@
-import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, UseInterceptors, Req } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards, UseInterceptors, Req, Logger } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
@@ -9,11 +9,17 @@ import {
 import {
   AppointmentsService,
   CreateAppointmentDto,
-  UpdateAppointmentDto,
   AppointmentFiltersDto,
 } from "./appointments.service";
+// The class, not the service's same-named interface: the ValidationPipe
+// only validates (and strips unknown keys from) a class.
+import { UpdateAppointmentDto } from "./dto/update-appointment.dto";
+import { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payment.dto";
+import { CancelAppointmentDto, CompleteAppointmentDto } from "./dto/appointment-status.dto";
 import { AvailableSlotsDto } from "./dto/available-slots.dto";
-import { OnlineBookingDto, StaffBookingDto } from "./dto/book-appointment.dto";
+import { HomeSummaryService } from "./home-summary.service";
+import { OnlineBookingDto, StaffBookingDto, isHoneypotHit } from "./dto/book-appointment.dto";
+import { randomUUID } from "crypto";
 import { PublicViewerService } from "../common/tenancy/public-viewer.service";
 import { ScrubSecretsInterceptor, publicBooking } from "./appointment-response";
 import { Public } from "../auth/decorators/public.decorator";
@@ -22,6 +28,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { UserRole } from "@prisma/client";
 import { Throttle } from "@nestjs/throttler";
+import { clientIp } from "../common/client-ip";
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -39,9 +46,12 @@ interface AuthenticatedRequest extends Request {
 @UseInterceptors(ScrubSecretsInterceptor)
 @ApiBearerAuth()
 export class AppointmentsController {
+  private readonly logger = new Logger(AppointmentsController.name);
+
   constructor(
     private readonly appointmentsService: AppointmentsService,
     private readonly publicViewer: PublicViewerService,
+    private readonly homeSummary: HomeSummaryService,
   ) {}
 
   @Post()
@@ -49,10 +59,31 @@ export class AppointmentsController {
   @Public()
   @ApiOperation({ summary: "Create a new appointment (public)" })
   @ApiResponse({ status: 201, description: "Appointment created successfully" })
-  async create(@Body() dto: OnlineBookingDto) {
+  async create(@Body() dto: OnlineBookingDto, @Req() req: any) {
+    // The booker's IP, hashed into the record of what she ticked (promotions,
+    // WhatsApp notices), as the consent routes do.
+    // From the trusted proxy, as the rate limiter counts it (clientIp).
+    const ip = clientIp(req);
+    // The hidden field a person never sees was filled in: a bot. Nothing is
+    // booked or sent; it gets an answer shaped like a pending booking, so it
+    // learns nothing. Logged without its data.
+    if (isHoneypotHit(dto)) {
+      this.logger.warn(
+        `Public booking dropped: hidden field filled (service ${dto.serviceId}, professional ${dto.professionalId || "any"})`,
+      );
+      return {
+        id: randomUUID(),
+        status: "pending",
+        scheduledDate: dto.scheduledDate,
+        scheduledTime: dto.scheduledTime,
+        service: null,
+        professional: null,
+        location: null,
+      };
+    }
     // Public: whoever booked gets the booking back, not the client record it
     // attached to nor the salon's row.
-    return publicBooking(await this.appointmentsService.createOnline(dto));
+    return publicBooking(await this.appointmentsService.createOnline(dto, { ip }));
   }
 
   @Post("staff")
@@ -97,6 +128,8 @@ export class AppointmentsController {
       professionalIds,
       serviceId,
       duration,
+      locationId,
+      widgetInstanceId,
     } = query;
     // Parse professionalIds if provided as comma-separated string
     const profIds = professionalIds
@@ -112,8 +145,41 @@ export class AppointmentsController {
       serviceId,
       duration,
       profIds,
-      { onlineWindow: !staff },
+      { onlineWindow: !staff, locationId, widgetInstanceId },
     );
+  }
+
+  /**
+   * Until which day a client may book a service online (its
+   * maxAdvanceBooking, in the salon's calendar), so the booking page and the
+   * widget can stop the date picker there and say why a later day has no
+   * times, instead of "no free times this day".
+   */
+  @Get("booking-window")
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
+  @Public()
+  @ApiOperation({ summary: "Last day a service can be booked online (public)" })
+  @ApiQuery({ name: "tenantId", required: true })
+  @ApiQuery({ name: "serviceId", required: true })
+  async bookingWindow(
+    @Query("tenantId", ParseUUIDPipe) tenantId: string,
+    @Query("serviceId", ParseUUIDPipe) serviceId: string,
+  ) {
+    return this.appointmentsService.publicBookingWindow(tenantId, serviceId);
+  }
+
+  /**
+   * Inicio's lists (home-summary.service.ts): today's appointments, the
+   * pending ones from today on and the visits still owed, five rows each
+   * with the true totals, in the salon's day. Staff: their own. Owner and
+   * admins may ask for one location (Empresa), as in Analítica.
+   */
+  @Get("home")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "The panel's home lists: today, to confirm and to charge" })
+  @ApiQuery({ name: "locationId", required: false, type: String })
+  async home(@Req() req: any, @Query("locationId") locationId?: string) {
+    return this.homeSummary.getHome(req.user, { locationId });
   }
 
   // Literal paths must be declared before ":id". Declared after it,
@@ -137,11 +203,17 @@ export class AppointmentsController {
     );
   }
 
-  @Get("mine")
-  @Roles(UserRole.client)
-  @ApiOperation({ summary: "The calling client's own appointments" })
-  async findMine(@Req() req: any) {
-    return this.appointmentsService.findForClient(req.user);
+  /**
+   * The salon's locations for the panel's booking forms and the agenda's
+   * filter (multi-local): two or more with someone to book, and where each
+   * professional works. Empty for every other salon, which then sees no
+   * location picker at all.
+   */
+  @Get("booking-locations")
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
+  @ApiOperation({ summary: "Locations to book at and where each professional works (multi-location)" })
+  async bookingLocations(@Req() req: any) {
+    return this.appointmentsService.bookingLocations(req.user.tenantId);
   }
 
   @Get(":id")
@@ -150,11 +222,14 @@ export class AppointmentsController {
   @ApiResponse({ status: 200, description: "Appointment found" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async findOne(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.appointmentsService.findOne(req.user, id);
+    // Staff: also a colleague's visit where they do a service, read only.
+    return this.appointmentsService.findOne(req.user, id, "read");
   }
 
+  // A professional edits or moves their own appointments (the service checks
+  // the appointment is theirs and keeps it on their agenda).
   @Patch(":id")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
   @ApiOperation({ summary: "Update an appointment" })
   @ApiResponse({ status: 200, description: "Appointment updated successfully" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
@@ -167,8 +242,7 @@ export class AppointmentsController {
   }
 
   @Put(":id/cancel")
-  // A client may cancel their own appointment, with the salon's notice.
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff, UserRole.client)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Cancel an appointment" })
   @ApiResponse({
     status: 200,
@@ -178,26 +252,46 @@ export class AppointmentsController {
   async cancel(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body("reason") reason?: string,
+    @Body() body: CancelAppointmentDto,
   ) {
-    return this.appointmentsService.cancel(req.user, id, reason);
+    return this.appointmentsService.cancel(req.user, id, body?.reason);
+  }
+
+  // The actions on an appointment that time off or a closure caught
+  // (Solicitudes de ausencia): whoever runs the salon decides each one.
+  @Get(":id/free-professionals")
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Professionals free to take the appointment at its day and time" })
+  async freeProfessionals(@Req() req: any, @Param("id", ParseUUIDPipe) id: string) {
+    return this.appointmentsService.freeProfessionalsFor(req.user, id);
+  }
+
+  @Put(":id/cancel-for-time-off")
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Cancel an appointment caught by time off and tell the client, with a link to book again" })
+  async cancelForTimeOff(
+    @Req() req: any,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: CancelAppointmentDto,
+  ) {
+    return this.appointmentsService.cancelForTimeOff(req.user, id, body?.reason);
   }
 
   @Put(":id/complete")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Mark appointment as completed" })
   @ApiResponse({ status: 200, description: "Appointment marked as completed" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
   async complete(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body("notes") notes?: string,
+    @Body() body: CompleteAppointmentDto,
   ) {
-    return this.appointmentsService.complete(req.user, id, notes);
+    return this.appointmentsService.complete(req.user, id, body?.notes);
   }
 
   @Put(":id/no-show")
-  @Roles(UserRole.owner, UserRole.admin)
+  @Roles(UserRole.owner, UserRole.admin, UserRole.staff) // staff: their own, via findOne
   @ApiOperation({ summary: "Mark appointment as no-show" })
   @ApiResponse({ status: 200, description: "Appointment marked as no-show" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
@@ -226,15 +320,21 @@ export class AppointmentsController {
     return this.appointmentsService.remove(req.user, id);
   }
 
+  // Owner and managers only: a manual correction. A professional marked
+  // their own appointments paid for any amount here, and the client earned
+  // points on it; the till charges appointments itself now (POST
+  // /pos/checkout), staff included.
   @Patch(":id/payment")
-  @Roles(UserRole.owner, UserRole.admin, UserRole.staff)
-  @ApiOperation({ summary: "Update appointment payment status" })
+  @Roles(UserRole.owner, UserRole.admin)
+  @ApiOperation({ summary: "Correct an appointment's payment status (owner/admin)" })
   @ApiResponse({ status: 200, description: "Payment status updated successfully" })
+  @ApiResponse({ status: 400, description: "Amount above the appointment's total" })
   @ApiResponse({ status: 404, description: "Appointment not found" })
+  @ApiResponse({ status: 409, description: "Cancelled or no-show appointment marked paid" })
   async updatePayment(
     @Req() req: any,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { status: string; amountPaid: number; paymentMethod: string },
+    @Body() body: UpdateAppointmentPaymentDto,
   ) {
     return this.appointmentsService.updatePaymentStatus(
       req.user,

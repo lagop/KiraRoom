@@ -1,4 +1,6 @@
-import { SalonCopilotToolsService } from './salon-copilot-tools';
+import { COPILOT_TOOLS, SalonCopilotToolsService } from './salon-copilot-tools';
+import { TOOL_PREVIEW } from '../assistant.service';
+import { AppointmentsService } from '../../appointments/appointments.service';
 
 /**
  * L-4 contract tests for sprint 15 write tools:
@@ -21,6 +23,8 @@ function makePrisma(opts: {
   const wls = opts.waitList ?? [];
 
   return {
+    // A salon in the Canaries: the coupon's days are its calendar days.
+    tenant: { findUnique: jest.fn(async () => ({ timezone: 'Atlantic/Canary' })) },
     appointment: {
       findUnique: jest.fn().mockImplementation(async ({ where }: any) => appts.find((a: any) => a.id === where?.id) ?? null),
       update: jest.fn().mockImplementation(async ({ where, data }: any) => {
@@ -45,7 +49,8 @@ function makePrisma(opts: {
         const matched = wls.filter((w: any) => {
           if (w.tenantId !== where.tenantId) return false;
           if (w.serviceId !== where.serviceId) return false;
-          if (w.status !== where.status) return false;
+          const statuses = where.status?.in ?? [where.status];
+          if (!statuses.includes(w.status)) return false;
           return true;
         });
         return typeof take === 'number' ? matched.slice(0, take) : matched;
@@ -63,6 +68,15 @@ function makePrisma(opts: {
       }),
     },
   };
+}
+
+/** The appointments' own status path over the same fake database, notices off. */
+function appointmentsOver(prisma: any): AppointmentsService {
+  const stub = {} as any;
+  const svc = new AppointmentsService(prisma, stub, stub, stub, stub, stub, stub);
+  (svc as any).logAppointmentActivity = jest.fn(async () => undefined);
+  (svc as any).sendAppointmentNoShowNotifications = jest.fn(async () => undefined);
+  return svc;
 }
 
 const STAFF_USER_ID = 'staff-1';
@@ -90,10 +104,13 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
         id: 'a-1', tenantId: TENANT_ID, status: 'confirmed', client: { firstName: 'Carmen' },
       }];
       const prisma = makePrisma({ appointments: appts });
-      const svc = new SalonCopilotToolsService(prisma);
+      const appointments = appointmentsOver(prisma);
+      const svc = new SalonCopilotToolsService(prisma, undefined, appointments);
       const res = await svc.execute('mark_no_show', { appointmentId: 'a-1' }, {
         ...ctxFor('manager'), prisma,
       });
+      // Through the appointment's own path: the no-show notice goes out.
+      expect((appointments as any).sendAppointmentNoShowNotifications).toHaveBeenCalledTimes(1);
       expect(res).toMatchObject({
         ok: true,
         appointmentId: 'a-1',
@@ -156,11 +173,42 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       expect(res).toMatchObject({
         ok: true,
         discountPercent: 25,
-        clientId: null,
+        maxUses: 1,
+        usableAt: 'till',
       });
+      expect(res).not.toHaveProperty('clientId');
       expect(typeof (res as any).code).toBe('string');
       expect((res as any).code).toMatch(/^[A-Z2-9]{6}$/);
       expect((res as any).expiresAt).toBeTruthy();
+    });
+
+    it('is a general code: no clientId in its schema, and one passed anyway changes nothing', async () => {
+      const tool = (COPILOT_TOOLS as unknown as any[]).find((t) => t.name === 'create_coupon');
+      expect(Object.keys(tool.input_schema.properties)).toEqual(['discountPercent', 'expiresInDays']);
+      expect(tool.description).not.toMatch(/specific client/);
+
+      const prisma = makePrisma({ promotions: [] });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res = await svc.execute(
+        'create_coupon',
+        { discountPercent: 10, expiresInDays: 7, clientId: 'c-1' },
+        { ...ctxFor('owner'), prisma },
+      );
+      expect(res).not.toHaveProperty('clientId');
+      const data = prisma.promotion.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ name: 'Cupón general', type: 'PERCENTAGE', maxUses: 1, applicableServiceIds: [] });
+      expect(data).not.toHaveProperty('clientId');
+      // Seven of the salon's calendar days, today included, stored as the panel stores days (UTC midnight).
+      expect(data.startDate.toISOString()).toMatch(/T00:00:00\.000Z$/);
+      expect((data.endDate.getTime() - data.startDate.getTime()) / 864e5).toBe(6);
+    });
+
+    it('asks for approval with the limits it creates, never for one client', () => {
+      const text = TOOL_PREVIEW.create_coupon({ discountPercent: 15, expiresInDays: 10, clientId: 'c-1' });
+      expect(text).toBe(
+        'Crear un código de descuento del 15% para cualquier clienta, de un solo uso y válido 10 días. Se aplica al cobrar en caja (no en la reserva online).',
+      );
+      expect(text).not.toMatch(/específica/);
     });
 
     it('rejects invalid discount percent', async () => {
@@ -183,6 +231,25 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
         { ...ctxFor('staff'), prisma },
       );
       expect((res as any).error).toBe('forbidden');
+    });
+
+    it('notifies at most 10 clients, whatever topN asks for', async () => {
+      const wls = Array.from({ length: 15 }, (_, i) => ({
+        id: `w-${i}`, tenantId: TENANT_ID, serviceId: 's-1', status: i % 2 ? 'notified' : 'waiting',
+        client: { id: `c-${i}`, firstName: `C${i}`, phone: null },
+      }));
+      const prisma = makePrisma({ waitList: wls });
+      const waitList = { notify: jest.fn().mockResolvedValue({ notified: true, channels: [], bookingUrl: null, summary: 'ok' }) };
+      const svc = new SalonCopilotToolsService(prisma, waitList as any);
+      await svc.execute(
+        'close_waitlist_slot',
+        { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', topN: 500 },
+        { ...ctxFor('owner'), prisma },
+      );
+      expect(prisma.waitList.findMany.mock.calls[0][0].take).toBe(10);
+      expect(waitList.notify).toHaveBeenCalledTimes(10);
+      // Clients already told about an earlier slot are still in line.
+      expect(prisma.waitList.findMany.mock.calls[0][0].where.status).toEqual({ in: ['waiting', 'notified'] });
     });
 
     /*
@@ -222,7 +289,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '10:30', topN: 2 },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
 
       expect(waitList.notify).toHaveBeenCalledTimes(2);
@@ -253,7 +320,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-06' },
-        { ...ctxFor('manager'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect(res.error).toBe('not_delivered');
       expect(res.notified).toBe(0);
@@ -285,7 +352,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res: any = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect(res).toMatchObject({ ok: true, notified: 0 });
       expect(res.message).toContain('No se ha avisado a nadie');
@@ -298,7 +365,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '2026-09-04', windowEnd: '2026-09-04', time: '25:00' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect((res as any).error).toBe('invalid_time');
     });
@@ -309,7 +376,7 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       const res = await svc.execute(
         'close_waitlist_slot',
         { serviceId: 's-1', windowStart: '04/09/2026', windowEnd: '2026-09-05' },
-        { ...ctxFor('receptionist'), prisma },
+        { ...ctxFor('admin'), prisma },
       );
       expect((res as any).error).toBe('invalid_windowStart');
     });

@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { PosService } from "./pos.service";
+import { saleTables, salonTenant } from "./pos-test-kit.testing";
 
 /**
  * The till is where points are spent (a reward comes off the ticket) and
@@ -10,9 +11,30 @@ import { PosService } from "./pos.service";
 function pos(loyaltyOver: Record<string, any> = {}) {
   const prisma: any = {
     payment: { create: jest.fn(async ({ data }: any) => ({ id: `p${Math.random()}`, ...data })) },
-    appointment: { count: jest.fn(async ({ where }: any) => where.id.in.length) },
-    client: { findFirst: jest.fn(), create: jest.fn() },
+    // Appointments of this salon, not yet paid, 20 EUR each (cents).
+    appointment: {
+      findMany: jest.fn(async ({ where }: any) =>
+        where.id.in.map((id: string) => ({
+          id,
+          clientId: "c1",
+          professionalId: "p1",
+          serviceId: "svc1",
+          status: "completed",
+          paymentStatus: "pending",
+          amountPaid: 0,
+          totalAmount: 2000,
+          service: { price: 20 },
+        })),
+      ),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
+    service: { findMany: jest.fn(async () => [{ id: "svc1", name: "Corte", price: 40 }]) },
+    client: { findFirst: jest.fn(async ({ where }: any) => (where.id ? { id: where.id } : null)), create: jest.fn() },
+    tenant: { findUnique: jest.fn(async () => salonTenant()) },
+    professional: { findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
+    ...saleTables(),
   };
+  prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const loyalty: any = {
     redeemAtSale: jest.fn(async () => ({ discountCents: 1000, pointsSpent: 100, rewardName: "10 EUR", redemptionId: "r1" })),
     cancelSaleRedemption: jest.fn(async () => undefined),
@@ -73,7 +95,7 @@ describe("POS and loyalty", () => {
 
   it("refuses appointments of another salon", async () => {
     const { service, prisma } = pos();
-    prisma.appointment.count = jest.fn(async () => 0);
+    prisma.appointment.findMany = jest.fn(async () => []);
     await expect(
       service.processCheckout({
         tenantId: "t1",
@@ -82,7 +104,7 @@ describe("POS and loyalty", () => {
         items,
         payments: [{ method: "card", amount: 4000 }],
       } as any),
-    ).rejects.toThrow(/not found/);
+    ).rejects.toThrow(/no encontrada/);
   });
 
   it("a loyalty failure never fails the sale", async () => {

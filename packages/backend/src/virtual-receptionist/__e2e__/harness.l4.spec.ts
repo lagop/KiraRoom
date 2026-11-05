@@ -18,7 +18,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'Corte de Cabello Hombre 18 EUR',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'contains', value: 'corte de cabello' },
         emptyCatalog,
       );
@@ -30,7 +30,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'Hola',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'contains', value: 'precio' },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -43,7 +43,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'Corte',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'contains', value: 'corte', caseSensitive: true },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -57,7 +57,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'no tenemos ese servicio',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'containsAny', values: ['no tenemos', 'sí tenemos'] },
         emptyCatalog,
       );
@@ -69,7 +69,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'hola',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'containsAll', values: ['precio', 'disponible', 'masaje'] },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -85,7 +85,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'Soy la asistente virtual de Kira',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'notContains', value: 'Soy la asistente virtual' },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -105,7 +105,7 @@ describe('L-1 harness assertions (L-4)', () => {
           '',
           tools,
           undefined,
-          'MiniMax',
+          'anthropic',
           { kind: 'toolCalled', toolName: 'list_services' },
           emptyCatalog,
         ),
@@ -117,7 +117,7 @@ describe('L-1 harness assertions (L-4)', () => {
         '',
         [{ name: 'list_services', input: {} }],
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'toolCalled', toolName: 'list_services', minTimes: 2 },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -130,7 +130,7 @@ describe('L-1 harness assertions (L-4)', () => {
         '',
         [{ name: 'list_services', input: { audience: 'female' } }],
         undefined,
-        'MiniMax',
+        'anthropic',
         {
           kind: 'toolCalled',
           toolName: 'list_services',
@@ -146,7 +146,7 @@ describe('L-1 harness assertions (L-4)', () => {
         '',
         [{ name: 'list_services', input: {} }],
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'toolNotCalled', toolName: 'list_services' },
         emptyCatalog,
       ) as { ok: false; reason: string };
@@ -161,7 +161,7 @@ describe('L-1 harness assertions (L-4)', () => {
           '',
           noTools,
           ChatIntent.SERVICE_INFO,
-          'MiniMax',
+          'anthropic',
           { kind: 'intent', intent: ChatIntent.SERVICE_INFO },
           emptyCatalog,
         ),
@@ -174,8 +174,8 @@ describe('L-1 harness assertions (L-4)', () => {
           '',
           noTools,
           undefined,
-          'MiniMax',
-          { kind: 'provider', provider: 'MiniMax' },
+          'anthropic',
+          { kind: 'provider', provider: 'anthropic' },
           emptyCatalog,
         ),
       ).toEqual({ ok: true });
@@ -192,7 +192,7 @@ describe('L-1 harness assertions (L-4)', () => {
           'El Corte de Cabello Hombre cuesta 18.00 EUR.',
           noTools,
           undefined,
-          'MiniMax',
+          'anthropic',
           {
             kind: 'priceFromCatalog',
             expectedPrices: [
@@ -212,7 +212,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'El Corte de Cabello Hombre cuesta 12.50 EUR.',
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         {
           kind: 'priceFromCatalog',
           expectedPrices: [
@@ -233,7 +233,7 @@ describe('L-1 harness assertions (L-4)', () => {
           'corto',
           noTools,
           undefined,
-          'MiniMax',
+          'anthropic',
           { kind: 'maxLength', maxChars: 10 },
           emptyCatalog,
         ),
@@ -244,7 +244,7 @@ describe('L-1 harness assertions (L-4)', () => {
         'a'.repeat(100),
         noTools,
         undefined,
-        'MiniMax',
+        'anthropic',
         { kind: 'maxLength', maxChars: 50 },
         emptyCatalog,
       ) as { ok: false; reason: string };

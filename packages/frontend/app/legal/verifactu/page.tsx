@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import apiClient, { VerifactuDeclaration } from "@/lib/api";
+import { KIRAROOM_OWNER } from "@/lib/salon-legal";
 
 /**
  * Declaración responsable del sistema informático de facturación (Orden
@@ -11,7 +12,9 @@ import apiClient, { VerifactuDeclaration } from "@/lib/api";
  * public, and linked from the fiscal settings.
  *
  * The name, code and version come from the backend, the same values every
- * billing record carries; the producer's details from its environment.
+ * billing record carries; the producer is KIRAROOM_OWNER; the date and place
+ * are set when the producer signs this version (VERIFACTU_DECLARATION_DATE,
+ * VERIFACTU_DECLARATION_PLACE).
  */
 const PENDING = "[pendiente de completar por la entidad productora]";
 
@@ -25,7 +28,6 @@ export default function VerifactuDeclarationPage() {
   if (error) return <main style={page}>No se ha podido cargar la declaración responsable.</main>;
   if (!d) return <main style={page}>Cargando…</main>;
 
-  const producerName = d.producer?.name ?? PENDING;
   return (
     <main style={page}>
       <h1 style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 24 }}>
@@ -53,10 +55,10 @@ export default function VerifactuDeclarationPage() {
         <p>
           Entre sus funcionalidades están la agenda de citas, la gestión de clientes, profesionales y servicios, el
           punto de venta y la facturación: expedición de facturas completas y simplificadas, facturas rectificativas
-          y anulación de facturas, con el código QR tributario en cada factura.
+          y anulación de facturas, con el código QR tributario en cada factura desde que el salón activa VERI*FACTU.
         </p>
         <p>
-          Cada factura genera, en la misma transacción de base de datos que la expide, su registro de facturación,
+          Desde que el salón activa VERI*FACTU, cada factura genera, en la misma transacción de base de datos que la expide, su registro de facturación,
           encadenado al anterior mediante la huella SHA-256 definida por la Agencia Tributaria, y el sistema lo remite
           automáticamente a la Agencia Tributaria, respetando el control de flujo y reintentando el envío si hay una
           incidencia.
@@ -90,19 +92,19 @@ export default function VerifactuDeclarationPage() {
         Agencia Tributaria con la debida autenticación mediante el adecuado certificado electrónico cualificado.
       </Item>
       <Item n="1.h" q="Razón social de la entidad productora del sistema informático a que se refiere esta declaración responsable:">
-        {producerName}
+        {KIRAROOM_OWNER.name}
       </Item>
       <Item
         n="1.i"
         q="Número de identificación fiscal (NIF) español de la entidad productora del sistema informático a que se refiere esta declaración responsable:"
       >
-        {d.producer?.nif ?? PENDING}
+        {KIRAROOM_OWNER.nif}
       </Item>
       <Item
         n="1.j"
         q="Dirección postal completa de contacto de la entidad productora del sistema informático a que se refiere esta declaración responsable:"
       >
-        {d.address ?? PENDING}
+        {KIRAROOM_OWNER.address}
       </Item>
       <Item n="1.k" q="">
         La entidad productora del sistema informático a que se refiere esta declaración responsable hace constar que
@@ -119,11 +121,9 @@ export default function VerifactuDeclarationPage() {
       </Item>
 
       <h2 style={{ fontSize: 18, fontWeight: 700, textAlign: "center", margin: "32px 0 16px" }}>ANEXO</h2>
-      {d.contactEmail && (
-        <Item n="2.a" q="Otras formas de contacto con la entidad productora del sistema informático a que se refiere esta declaración responsable:">
-          Correo electrónico: {d.contactEmail}
-        </Item>
-      )}
+      <Item n="2.a" q="Otras formas de contacto con la entidad productora del sistema informático a que se refiere esta declaración responsable:">
+        Correo electrónico: {KIRAROOM_OWNER.email}
+      </Item>
       <Item
         n="2.c"
         q="El sistema informático a que se refiere esta declaración responsable cumple las diferentes especificaciones técnicas y funcionales contenidas en la Orden HAC/1177/2024, de 17 de octubre, y en la sede electrónica de la Agencia Estatal de Administración Tributaria para todo aquello que complete las especificaciones de dicha orden, de la siguiente manera:"
@@ -131,7 +131,7 @@ export default function VerifactuDeclarationPage() {
         <ul style={{ paddingLeft: 20, listStyle: "disc" }}>
           <li>
             La expedición de la factura y la generación de su registro de facturación se realizan en una sola unidad
-            transaccional de la base de datos: no puede existir una factura sin su registro.
+            transaccional de la base de datos: desde que el salón activa VERI*FACTU, no puede existir una factura sin su registro.
           </li>
           <li>
             Los registros de facturación no pueden modificarse ni borrarse una vez generados: la base de datos lo

@@ -1,8 +1,14 @@
-import { Controller, Get, Param, NotFoundException, Query } from "@nestjs/common";
+import { Controller, Get, Param, NotFoundException, ParseUUIDPipe, Query, Req, Res } from "@nestjs/common";
+import type { Request, Response } from "express";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
-import { PrismaService } from "../common/prisma/prisma.service";
 import { Public } from "../auth/decorators/public.decorator";
 import { PublicSiteService } from "./public-site.service";
+import { IMAGE_RESPONSE_CSP, PUBLIC_IMAGE_KINDS, type PublicImageKind } from "./public-images";
+
+/** A year: the URL carries the image's version, so a new upload is a new URL. */
+const VERSIONED_MAX_AGE = 31_536_000;
+/** Without (or with an old) version: short, so a new upload shows soon. */
+const UNVERSIONED_MAX_AGE = 300;
 
 @ApiTags("public")
 // Public: the salon's own site resolves it before anyone signs in. It used
@@ -11,58 +17,58 @@ import { PublicSiteService } from "./public-site.service";
 @Public()
 @Controller("public-site")
 export class PublicTenantController {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly site: PublicSiteService,
-  ) {}
-
-  @Get("tenant/:slug")
-  @ApiOperation({ summary: "Resolve a salon by slug or id (public)" })
-  @ApiResponse({ status: 200, description: "Salon found" })
-  @ApiResponse({ status: 404, description: "Salon not found" })
-  async getBySlug(@Param("slug") slug: string) {
-    const tenant = await this.prisma.tenant.findFirst({
-      where: {
-        OR: [{ slug }, { id: slug }],
-        // A deleted salon is hidden everywhere else; its page went on
-        // resolving.
-        deletedAt: null },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        logo: true,
-        street: true,
-        city: true,
-        state: true,
-        country: true,
-        phone: true,
-        email: true,
-        description: true } });
-
-    if (!tenant) {
-      throw new NotFoundException("Salon not found");
-    }
-
-    return {
-      id: tenant.id,
-      name: tenant.name,
-      slug: tenant.slug,
-      logo: tenant.logo,
-      address: tenant.street,
-      city: tenant.city,
-      state: tenant.state,
-      country: tenant.country,
-      phone: tenant.phone,
-      email: tenant.email,
-      description: tenant.description };
-  }
+  // GET tenant/:slug is gone: nothing used it, and it answered the stored
+  // logo (a data: URL of hundreds of KB) to anyone. The page data has
+  // everything (page/:slug).
+  constructor(private readonly site: PublicSiteService) {}
 
   @Get("page/:slug")
   @ApiOperation({ summary: "Everything the salon's public page renders: info, services, team, hours (public)" })
   @ApiResponse({ status: 404, description: "Salon not found" })
   page(@Param("slug") slug: string) {
     return this.site.getPage(slug);
+  }
+
+  /**
+   * The salon's logo or cover photo as an image, for its page, its widget
+   * and link previews (public-images.ts). Same answer for everyone, so it is
+   * cached publicly; with the current `?v=` for a year.
+   */
+  @Get("image/:tenantId/:kind")
+  @ApiOperation({ summary: "The salon's logo or cover photo (public, cacheable)" })
+  @ApiResponse({ status: 404, description: "No such salon or no such image" })
+  async image(
+    @Param("tenantId", ParseUUIDPipe) tenantId: string,
+    @Param("kind") kind: string,
+    @Query("v") v: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    if (!PUBLIC_IMAGE_KINDS.includes(kind as PublicImageKind)) throw new NotFoundException("Image not found");
+    sendImage(await this.site.image(tenantId, kind as PublicImageKind), v, req, res);
+  }
+
+  /** A professional's photo or portfolio picture, the same way (public-professional.ts). */
+  @Get("professional-image/:professionalId/:slot")
+  @ApiOperation({ summary: "A professional's public photo or portfolio picture (public, cacheable)" })
+  @ApiResponse({ status: 404, description: "No such professional, picture, or not shown on the web" })
+  async professionalImage(
+    @Param("professionalId", ParseUUIDPipe) professionalId: string,
+    @Param("slot") slot: string,
+    @Query("v") v: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    sendImage(await this.site.professionalImage(professionalId, slot), v, req, res);
+  }
+
+  /** Who runs the salon, for its privacy page and aviso legal (public). */
+  @Get("legal/:slug")
+  @ApiOperation({ summary: "The salon's legal identity for its privacy page and aviso legal (public)" })
+  @ApiResponse({ status: 404, description: "Salon not found" })
+  @ApiResponse({ status: 410, description: "The salon's page is gone" })
+  legal(@Param("slug") slug: string) {
+    return this.site.legal(slug);
   }
 
   @Get("sitemap")
@@ -89,4 +95,30 @@ export class PublicTenantController {
     await this.site.resolveHost(domain ?? "");
     return { ok: true };
   }
+}
+
+/**
+ * Answers an image from the service (null: 404) with the headers every
+ * public image gets: an ETag (304 when it matches), a long cache only for
+ * the current version, nosniff and a CSP that runs nothing (SVG).
+ */
+function sendImage(
+  image: { contentType: string; body: Buffer; version: string } | null,
+  v: string | undefined,
+  req: Request,
+  res: Response,
+): void {
+  if (!image) throw new NotFoundException("Image not found");
+  const etag = `"${image.version}"`;
+  const maxAge = v === image.version ? VERSIONED_MAX_AGE : UNVERSIONED_MAX_AGE;
+  res.setHeader("Cache-Control", `public, max-age=${maxAge}${maxAge === VERSIONED_MAX_AGE ? ", immutable" : ""}`);
+  res.setHeader("ETag", etag);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", IMAGE_RESPONSE_CSP);
+  if (req.headers["if-none-match"] === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.setHeader("Content-Type", image.contentType);
+  res.send(image.body);
 }

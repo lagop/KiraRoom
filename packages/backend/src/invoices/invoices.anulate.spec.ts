@@ -1,5 +1,6 @@
 import { InvoiceService } from "./invoices.service";
 import { InvoiceCalculator } from "./invoice-calculator.service";
+import { sequenceQuery } from "./invoice-store.testing";
 
 /**
  * Tests for `InvoiceService.anulate()` and `InvoiceService.emitRectification`.
@@ -40,37 +41,16 @@ function makePrismaMock() {
         findMany: async () => [],
       },
       invoiceLine: { create: async () => ({}) },
-      fiscalSequence: {
-        upsert: async (args: any) => {
-          const key = `${args.where.tenantId_series_year.tenantId}|${args.where.tenantId_series_year.series}|${args.where.tenantId_series_year.year}`;
-          const cur = sequences.get(key);
-          const next = cur ? { ...cur, ...args.update } : args.create;
-          sequences.set(key, next);
-          return next;
-        },
-        update: async (args: any) => {
-          const key = `${args.where.tenantId_series_year.tenantId}|${args.where.tenantId_series_year.series}|${args.where.tenantId_series_year.year}`;
-          const cur = sequences.get(key) ?? { lastNumber: 0 };
-          if (args.data.lastNumber?.increment) cur.lastNumber += args.data.lastNumber.increment;
-          sequences.set(key, cur);
-          return cur;
-        },
-      },
       accountingConnection: { findUnique: async () => null },
       accountingsyncLog: { create: async () => ({}) },
       verifactuRecord: { count: async () => 0, findFirst: async () => null },
   };
-  // Invoice number and invoice are created in one transaction.
+  // Invoice number and invoice are created in one transaction; a
+  // rectificativa locks its original first (SELECT ... FOR UPDATE).
+  const counters = new Map<string, number>();
+  prisma.$queryRaw = async (sql: TemplateStringsArray, ...values: unknown[]) =>
+    sequenceQuery(counters, sql, values) ?? [];
   prisma.$transaction = async (fn: any) => fn(prisma);
-
-  // allocateNumber's INSERT ... ON CONFLICT ... RETURNING: values are tenantId, series, year.
-  prisma.$queryRaw = async (_sql: TemplateStringsArray, tenantId: string, series: string, year: number) => {
-    const key = `${tenantId}|${series}|${year}`;
-    const cur = sequences.get(key) ?? { tenantId, series, year, lastNumber: 0 };
-    cur.lastNumber += 1;
-    sequences.set(key, cur);
-    return [{ lastNumber: cur.lastNumber }];
-  };
   return { tenant, invoices, sequences, prisma };
 }
 
@@ -122,7 +102,7 @@ describe("InvoiceService.anulate (no-fiscal path)", () => {
     const { m, svc } = build();
     seedInvoice(m, { status: "cancelled" });
     await expect(svc.anulate("tenant-1", "inv-1", "x")).rejects.toThrow(
-      /already cancelled/,
+      /ya está anulada/,
     );
   });
 

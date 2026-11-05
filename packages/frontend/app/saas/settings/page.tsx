@@ -1,9 +1,11 @@
 "use client";
 
-import { Settings as SettingsIcon, Key, ArrowRight } from "lucide-react";
+import { Settings as SettingsIcon, Key, Mail, CreditCard, ArrowRight, MessageCircle, ShieldAlert } from "lucide-react";
 import Link from "next/link";
+import { useTranslations } from "@/lib/use-translation";
 
 export default function SaasSettingsPage() {
+  const t = useTranslations();
   const sections = [
     {
       href: "/saas/settings/platform-llm",
@@ -13,6 +15,37 @@ export default function SaasSettingsPage() {
         "Configura el modelo y la API key del Asistente Virtual para todos los salones.",
       badge: "Haiku · Sonnet",
     },
+    {
+      href: "/saas/settings/email",
+      icon: Mail,
+      title: "Email de la plataforma",
+      description:
+        "Clave de Resend, dirección de envío y webhook de los emails de todos los salones.",
+      badge: "Resend",
+    },
+    {
+      href: "/saas/settings/stripe",
+      icon: CreditCard,
+      title: "Stripe de la plataforma",
+      description:
+        "Claves, webhook e IVA de la cuenta de Stripe con la que pagan los salones.",
+      badge: "Stripe",
+    },
+    {
+      href: "/saas/settings/meta",
+      icon: MessageCircle,
+      title: "App de Meta de la plataforma",
+      description:
+        "Si KiraRoom puede recibir los mensajes de WhatsApp, Messenger e Instagram, y las URL de webhook para Meta.",
+      badge: "Meta",
+    },
+    {
+      href: "/saas/settings/retention",
+      icon: ShieldAlert,
+      title: t("saas.retention_setting.title"),
+      description: t("saas.retention_setting.description"),
+      badge: "RGPD",
+    },
   ];
 
   return (
@@ -20,7 +53,7 @@ export default function SaasSettingsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 truncate">
-            Platform Settings
+            Ajustes de la plataforma
           </h1>
           <p className="text-gray-500 mt-1">
             Configuración global de la plataforma

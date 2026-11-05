@@ -23,6 +23,8 @@ function fakePrisma() {
     suppressions: [] as Row[],
     users: [] as Row[],
     deliveries: [] as Row[],
+    tenants: [{ id: "tenant-a" }, { id: "tenant-b" }] as Row[],
+    clients: [] as Row[],
   };
 
   const matches = (row: Row, where: Row) =>
@@ -83,6 +85,16 @@ function fakePrisma() {
         return { count: hit.length };
       },
     },
+    tenant: {
+      findUnique: async ({ where }: any) => db.tenants.find((t) => t.id === where.id) ?? null,
+    },
+    client: {
+      findMany: async ({ where }: any) => {
+        const wanted = String(where.email.equals).toLowerCase();
+        const ids = [...new Set(db.clients.filter((c) => c.email.toLowerCase() === wanted).map((c) => c.tenantId))];
+        return ids.slice(0, where.take ?? ids.length).map((tenantId) => ({ tenantId }));
+      },
+    },
     user: {
       updateMany: async ({ where, data }: any) => {
         const hit = db.users.filter((x) => matches(x, where));
@@ -123,24 +135,29 @@ function setup() {
 }
 
 describe("ResendEventsService", () => {
-  it("counts delivered, opened and clicked per recipient", async () => {
+  it("counts delivered and clicked per recipient", async () => {
     const { send, campaign, recipient } = setup();
     await send("email.delivered", "re_1");
     await send("email.delivered", "re_2");
-    await send("email.opened", "re_1");
     await send("email.clicked", "re_1", { click: { link: "https://salon.example.test/promo" } });
 
-    expect(campaign()).toMatchObject({ emailsDelivered: 2, emailsOpened: 1, clicks: 1, bounces: 0 });
+    expect(campaign()).toMatchObject({ emailsDelivered: 2, clicks: 1, bounces: 0 });
     expect(recipient(1).status).toBe("clicked");
     expect(recipient(2).status).toBe("delivered");
   });
 
-  it("counts a recipient who opens five times as one open", async () => {
-    const { send, campaign, db } = setup();
+  it("ignores opens: nothing stored, nothing counted, the recipient unchanged", async () => {
+    // Opens are not measured (owner's decision, no tracking pixel). Resend
+    // still posts them while open tracking is on in its dashboard.
+    const { send, campaign, recipient, db } = setup();
+    await send("email.delivered", "re_1");
     for (let i = 0; i < 5; i++) await send("email.opened", "re_1");
-    expect(campaign().emailsOpened).toBe(1);
-    // Every open is still in the event log.
-    expect(db.analytics.filter((a) => a.eventType === "opened")).toHaveLength(5);
+    await send("email.opened", "re_2");
+    expect(campaign().emailsOpened).toBe(0);
+    expect(recipient(1)).toMatchObject({ status: "delivered", openedAt: null });
+    expect(recipient(2).status).not.toBe("opened");
+    expect(db.analytics.filter((a) => a.eventType === "opened")).toHaveLength(0);
+    expect(db.analytics).toHaveLength(1);
   });
 
   it("ignores a redelivered event (same svix-id)", async () => {
@@ -151,11 +168,11 @@ describe("ResendEventsService", () => {
     expect(db.analytics).toHaveLength(1);
   });
 
-  it("does not move a recipient back when 'delivered' arrives after 'opened'", async () => {
+  it("does not move a recipient back when 'delivered' arrives after 'clicked'", async () => {
     const { send, recipient, campaign } = setup();
-    await send("email.opened", "re_1");
+    await send("email.clicked", "re_1");
     await send("email.delivered", "re_1");
-    expect(recipient(1).status).toBe("opened");
+    expect(recipient(1).status).toBe("clicked");
     expect(campaign().emailsDelivered).toBe(1);
   });
 
@@ -195,6 +212,38 @@ describe("ResendEventsService", () => {
     expect(db.users[0].emailBouncedAt).toBeInstanceOf(Date);
     expect(db.deliveries[0].status).toBe("BOUNCED");
     expect(db.campaigns[0].bounces).toBe(0);
+  });
+
+  describe("a spam complaint on an email with no recipient row", () => {
+    // A deleted campaign, or an older re-engagement email whose row now
+    // carries a newer id: the complaint used to change nothing.
+    it("suppresses the address for the salon named in the email's tags", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-a", email: "queja@example.test" }, { tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["Queja@Example.test"], tags: { tenant_id: "tenant-b", campaign_id: "x" } });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-b", email: "queja@example.test", reason: "complaint" })]);
+    });
+
+    it("reads tags sent as a list too", async () => {
+      const { send, db } = setup();
+      await send("email.complained", "re_old", { to: ["queja@example.test"], tags: [{ name: "tenant_id", value: "tenant-a" }] });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-a", reason: "complaint" })]);
+    });
+
+    it("without tags, uses the one salon that has this client", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["queja@example.test"] });
+      expect(db.suppressions).toEqual([expect.objectContaining({ tenantId: "tenant-b", reason: "complaint" })]);
+    });
+
+    it("guesses nothing when several salons have that client, or a tag names no salon", async () => {
+      const { send, db } = setup();
+      db.clients.push({ tenantId: "tenant-a", email: "queja@example.test" }, { tenantId: "tenant-b", email: "queja@example.test" });
+      await send("email.complained", "re_old", { to: ["queja@example.test"] });
+      await send("email.complained", "re_old2", { to: ["queja@example.test"], tags: { tenant_id: "no-such-salon" } });
+      expect(db.suppressions).toEqual([]);
+    });
   });
 
   it("ignores event types it does not track", async () => {

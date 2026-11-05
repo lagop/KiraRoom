@@ -18,71 +18,8 @@ import {
   MarkAllReadDto,
   NotificationType,
 } from "./dto";
-
-// Default notification preferences
-const DEFAULT_PREFERENCES: Record<
-  string,
-  { inApp: boolean; email: boolean; sms: boolean; whatsapp: boolean }
-> = {
-  appointment_created: {
-    inApp: true,
-    email: true,
-    sms: false,
-    whatsapp: false,
-  },
-  appointment_confirmed: {
-    inApp: true,
-    email: true,
-    sms: true,
-    whatsapp: false,
-  },
-  appointment_cancelled: {
-    inApp: true,
-    email: true,
-    sms: true,
-    whatsapp: false,
-  },
-  appointment_reminder_24h: {
-    inApp: true,
-    email: true,
-    sms: true,
-    whatsapp: false,
-  },
-  appointment_reminder_1h: {
-    inApp: true,
-    email: false,
-    sms: true,
-    whatsapp: false,
-  },
-  appointment_completed: {
-    inApp: true,
-    email: true,
-    sms: false,
-    whatsapp: false,
-  },
-  review_request: { inApp: true, email: true, sms: false, whatsapp: false },
-  payment_received: { inApp: true, email: true, sms: false, whatsapp: false },
-  payment_failed: { inApp: true, email: true, sms: true, whatsapp: false },
-  promotion: { inApp: true, email: true, sms: false, whatsapp: false },
-  news: { inApp: true, email: true, sms: false, whatsapp: false },
-  special_offer: { inApp: true, email: true, sms: false, whatsapp: false },
-  system_alert: { inApp: true, email: true, sms: false, whatsapp: false },
-  new_appointment_assigned: {
-    inApp: true,
-    email: true,
-    sms: false,
-    whatsapp: false,
-  },
-  schedule_change: { inApp: true, email: true, sms: false, whatsapp: false },
-  new_message: { inApp: true, email: false, sms: false, whatsapp: false },
-  // The client asked to be told: every channel is on unless they turn it off.
-  waitlist_slot_available: {
-    inApp: true,
-    email: true,
-    sms: true,
-    whatsapp: true,
-  },
-};
+import { DEFAULT_PREFERENCES } from "./notification-defaults";
+import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
 
 @Injectable()
 export class NotificationsService {
@@ -132,14 +69,9 @@ export class NotificationsService {
         isRead: notification.isRead,
       };
 
+      // Only the team has live sockets: salon clients have no accounts.
       if (dto.userId) {
         this.gateway.emitToUser(dto.userId, "notification", notificationData);
-      } else if (dto.clientId) {
-        this.gateway.emitToClient(
-          dto.clientId,
-          "notification",
-          notificationData,
-        );
       }
     }
 
@@ -160,6 +92,9 @@ export class NotificationsService {
 
     if (filter.isRead !== undefined) {
       where.isRead = filter.isRead;
+    }
+    if (filter.unreadOnly === true) {
+      where.isRead = false;
     }
 
     if (filter.type) {
@@ -203,61 +138,6 @@ export class NotificationsService {
   }
 
   /**
-   * Get notifications for a client with filtering and pagination
-   */
-  async findForClient(clientId: string, filter: NotificationFilterDto) {
-    this.logger.log(`Finding notifications for client ${clientId}`);
-
-    const where: any = {
-      clientId,
-      archivedAt: null,
-    };
-
-    if (filter.isRead !== undefined) {
-      where.isRead = filter.isRead;
-    }
-
-    if (filter.type) {
-      where.type = filter.type;
-    }
-
-    if (filter.search) {
-      where.OR = [
-        { title: { contains: filter.search, mode: "insensitive" } },
-        { message: { contains: filter.search, mode: "insensitive" } },
-      ];
-    }
-
-    const [notifications, total, unreadCount] = await Promise.all([
-      this.prisma.notification.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take: filter.limit || 20,
-        skip: filter.offset || 0,
-        include: {
-          deliveries: true,
-        },
-      }),
-      this.prisma.notification.count({ where }),
-      this.prisma.notification.count({
-        where: {
-          clientId,
-          isRead: false,
-          archivedAt: null,
-        },
-      }),
-    ]);
-
-    return {
-      data: notifications,
-      total,
-      unreadCount,
-      limit: filter.limit || 20,
-      offset: filter.offset || 0,
-    };
-  }
-
-  /**
    * Get unread count for a user
    */
   async getUnreadCountForUser(userId: string) {
@@ -271,25 +151,10 @@ export class NotificationsService {
   }
 
   /**
-   * Get unread count for a client
-   */
-  async getUnreadCountForClient(clientId: string) {
-    return this.prisma.notification.count({
-      where: {
-        clientId,
-        isRead: false,
-        archivedAt: null,
-      },
-    });
-  }
-
-  /**
    * Mark a notification as read
    */
-  async markAsRead(notificationId: string, userId?: string, clientId?: string) {
-    const where: any = { id: notificationId };
-    if (userId) where.userId = userId;
-    if (clientId) where.clientId = clientId;
+  async markAsRead(notificationId: string, userId: string) {
+    const where: any = { id: notificationId, userId };
 
     const notification = await this.prisma.notification.findFirst({ where });
 
@@ -330,35 +195,10 @@ export class NotificationsService {
   }
 
   /**
-   * Mark all notifications as read for a client
-   */
-  async markAllAsReadForClient(clientId: string, dto: MarkAllReadDto) {
-    const where: any = {
-      clientId,
-      isRead: false,
-      archivedAt: null,
-    };
-
-    if (dto.type) {
-      where.type = dto.type;
-    }
-
-    return this.prisma.notification.updateMany({
-      where,
-      data: {
-        isRead: true,
-        readAt: new Date(),
-      },
-    });
-  }
-
-  /**
    * Archive (soft delete) a notification
    */
-  async archive(notificationId: string, userId?: string, clientId?: string) {
-    const where: any = { id: notificationId };
-    if (userId) where.userId = userId;
-    if (clientId) where.clientId = clientId;
+  async archive(notificationId: string, userId: string) {
+    const where: any = { id: notificationId, userId };
 
     const notification = await this.prisma.notification.findFirst({ where });
 
@@ -390,21 +230,6 @@ export class NotificationsService {
   }
 
   /**
-   * Get notification preferences for a client
-   */
-  async getPreferencesForClient(clientId: string) {
-    const preference = await this.prisma.notificationPreference.findUnique({
-      where: { clientId },
-    });
-
-    if (!preference) {
-      return { preferences: DEFAULT_PREFERENCES };
-    }
-
-    return preference;
-  }
-
-  /**
    * Update notification preferences for a user
    */
   async updatePreferencesForUser(
@@ -426,23 +251,28 @@ export class NotificationsService {
   }
 
   /**
-   * Update notification preferences for a client
+   * Merges a user's choices into what is stored (PATCH): one toggle in the
+   * panel does not overwrite her other preferences.
    */
-  async updatePreferencesForClient(
-    clientId: string,
+  async mergePreferencesForUser(
+    userId: string,
     tenantId: string,
     dto: NotificationPreferenceDto,
   ) {
+    const current = await this.prisma.notificationPreference.findUnique({ where: { userId } });
+    const stored = ((current?.preferences as Record<string, Record<string, boolean>> | null) ?? {});
+    const merged: Record<string, Record<string, boolean>> = { ...stored };
+    for (const [type, channels] of Object.entries(dto.preferences ?? {})) {
+      const clean: Record<string, boolean> = {};
+      for (const [channel, value] of Object.entries(channels ?? {})) {
+        if (typeof value === "boolean") clean[channel] = value;
+      }
+      merged[type] = { ...(stored[type] ?? {}), ...clean };
+    }
     return this.prisma.notificationPreference.upsert({
-      where: { clientId },
-      create: {
-        clientId,
-        tenantId,
-        preferences: dto.preferences as any,
-      },
-      update: {
-        preferences: dto.preferences as any,
-      },
+      where: { userId },
+      create: { userId, tenantId, preferences: merged as any },
+      update: { preferences: merged as any },
     });
   }
 
@@ -455,7 +285,8 @@ export class NotificationsService {
     // If sendToAllClients is true, get all client IDs for the tenant
     if (dto.sendToAllClients) {
       const clients = await this.prisma.client.findMany({
-        where: { tenantId: dto.tenantId },
+        // Not the onboarding test client (O5).
+        where: { tenantId: dto.tenantId, isTest: false },
         select: { id: true },
       });
       clientIds = clients.map((c) => c.id);
@@ -463,6 +294,16 @@ export class NotificationsService {
 
     if (!clientIds || clientIds.length === 0) {
       return { created: 0 };
+    }
+
+    // Only the salon's own clients.
+    if (!dto.sendToAllClients) {
+      const own = await this.prisma.client.findMany({
+        where: { tenantId: dto.tenantId, id: { in: clientIds } },
+        select: { id: true },
+      });
+      clientIds = own.map((c) => c.id);
+      if (clientIds.length === 0) return { created: 0 };
     }
 
     // Create notifications in batches
@@ -578,6 +419,7 @@ export class NotificationsService {
    * Cron job to clean up old archived notifications (90 days)
    */
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @MonitoredJob("NotificationsService.cleanupOldNotifications")
   async cleanupOldNotifications() {
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);

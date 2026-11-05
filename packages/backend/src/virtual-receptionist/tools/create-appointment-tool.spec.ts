@@ -38,6 +38,10 @@ function setup({
   // Online bookings in the last 24 hours, as the client rows the limit reads.
   recentClients = [] as Array<{ email?: string | null; phone?: string | null }>,
   book = async () => ({ id: "apt-1", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
+  // The salon's "bookable online" switch for the service.
+  onlineBookable = true,
+  // A salon from before "Mis precios ya incluyen el impuesto": net catalogue.
+  fiscalSettings = { pricesIncludeTax: false, defaultTaxRate: 21 } as Record<string, unknown>,
 } = {}) {
   let context: Record<string, unknown> = {};
   let userTurns = 1;
@@ -48,10 +52,28 @@ function setup({
       update: async ({ data }: any) => { context = data.context; },
     },
     chatMessage: { count: async () => userTurns },
+    tenant: { findUnique: async () => ({ fiscalSettings }) },
     appointment: { findMany: async () => recentClients.map((client) => ({ client })) },
     service: {
-      findFirst: async () => ({ name: "Masaje Relajante", duration: 60, price: 55, currency: "EUR" }),
-      findMany: async () => [{ id: SERVICE, name: "Masaje Relajante" }],
+      findFirst: async () => ({
+        name: "Masaje Relajante",
+        duration: 60,
+        price: 55,
+        currency: "EUR",
+        isOnlineBookable: onlineBookable,
+      }),
+      findMany: async () => [
+        {
+          id: SERVICE,
+          name: "Masaje Relajante",
+          description: null,
+          category: "MASSAGE",
+          duration: 60,
+          price: 55,
+          currency: "EUR",
+          isOnlineBookable: onlineBookable,
+        },
+      ],
     },
     professional: {
       findFirst: async ({ where }: any) => NAMES[where.id] ?? null,
@@ -172,6 +194,20 @@ describe("the professional in the summary is the one booked", () => {
     });
   });
 
+  it("quotes the price the client pays, tax included, as list_services does", async () => {
+    // 55,00 net + 21 % IVA: what the invoice of this visit comes to.
+    const net: any = await setup().run("propose_appointment", DETAILS);
+    expect(net.summary.price).toBe("66.55 EUR (IVA incluido)");
+    const listed: any = await setup().run("list_services");
+    expect(listed.services[0].price).toBe("66.55");
+
+    // A catalogue written with the IGIC inside is quoted as it is.
+    const canary: any = await setup({
+      fiscalSettings: { pricesIncludeTax: true, defaultTaxRate: 7, taxRegime: "igic" },
+    }).run("propose_appointment", DETAILS);
+    expect(canary.summary.price).toBe("55.00 EUR (IGIC incluido)");
+  });
+
   it("assigns 'whoever is free' at proposal time, and books that same professional", async () => {
     // A proposal without a professional used to be resolved only at booking:
     // the summary said Carmen, the booking went to Ana Martínez.
@@ -225,6 +261,34 @@ describe("what a proposal checks", () => {
   });
 });
 
+describe("a service the salon does not take online", () => {
+  it("is listed as such, offers no times and is not proposed nor booked", async () => {
+    const { run, say, booked, appointmentsService } = setup({ onlineBookable: false });
+
+    const list: any = await run("list_services");
+    expect(list.services[0]).toMatchObject({ id: SERVICE, onlineBookable: false });
+
+    expect(await run("check_availability", { serviceId: SERVICE, date: "2026-10-05" })).toMatchObject({
+      error: "not_bookable_online",
+    });
+    expect(await run("propose_appointment", DETAILS)).toMatchObject({ proposed: false, error: "not_bookable_online" });
+    expect(appointmentsService.getAvailableSlots).not.toHaveBeenCalled();
+
+    say("sí");
+    expect(await run("create_appointment")).toMatchObject({ created: false, error: "nothing_proposed" });
+    expect(booked).toHaveLength(0);
+  });
+
+  it("one that is, as before", async () => {
+    const { run } = setup();
+    const list: any = await run("list_services");
+    expect(list.services[0]).toMatchObject({ id: SERVICE, onlineBookable: true });
+    expect(await run("check_availability", { serviceId: SERVICE, date: "2026-10-05" })).toMatchObject({
+      slots: ["10:00"],
+    });
+  });
+});
+
 describe("limits", () => {
   it("does not book from a shared anonymous session", async () => {
     const { run } = setup({ clientId: "anonymous" });
@@ -268,7 +332,7 @@ describe("limits", () => {
 });
 
 describe("isAffirmative", () => {
-  it.each(["sí", "Si", "Sí, perfecto", "vale", "ok", "de acuerdo", "confirmo", "correcto", "yes", "sure!", "that's right"])(
+  it.each(["sí", "Si", "Sí, perfecto", "vale", "ok", "de acuerdo", "confirmo", "correcto", "yes", "sure!", "that's right", "Sí, confírmala por favor.", "vale, confírmamela", "sí, resérvamelo"])(
     "reads %p as yes",
     (text) => expect(isAffirmative(text)).toBe(true),
   );
@@ -276,4 +340,89 @@ describe("isAffirmative", () => {
     "does not read %p as yes",
     (text) => expect(isAffirmative(text)).toBe(false),
   );
+});
+
+describe("only a reply to the latest summary books it (audit V4)", () => {
+  it("a yes two messages after the summary does not book it", async () => {
+    // Summary of a cut; "¿hacéis uñas?"; the model asks "¿te miro hueco?"; "sí".
+    const { run, say, booked } = setup();
+
+    await run("propose_appointment", DETAILS);
+    say("¿Hacéis uñas?");
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ created: false, error: "not_confirmed" });
+    expect(booked).toHaveLength(0);
+  });
+
+  it("the summary shown again is proposed again, and that one can be booked", async () => {
+    const { run, say, booked } = setup();
+
+    await run("propose_appointment", DETAILS);
+    say("¿Hacéis uñas?");
+    await run("propose_appointment", DETAILS);
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ created: true });
+    expect(booked).toHaveLength(1);
+  });
+
+  it("a stale summary is not booked", async () => {
+    jest.useFakeTimers({ now: new Date("2026-10-01T10:00:00Z") });
+    try {
+      const { run, say, booked } = setup();
+      await run("propose_appointment", DETAILS);
+      jest.setSystemTime(new Date("2026-10-01T11:00:00Z"));
+      say("sí");
+      expect(await run("create_appointment")).toMatchObject({ created: false, error: "not_confirmed" });
+      expect(booked).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe("after booking (audit V1, V7)", () => {
+  it("links the conversation to the client and keeps no copy of her contact details", async () => {
+    const { run, say, state } = setup({
+      book: async () => ({ id: "apt-3", clientId: "client-3", service: { name: "Corte" }, professional: { firstName: "Ana", lastName: "García" } }) as any,
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    await run("create_appointment");
+
+    const pending = (state() as any).pendingBooking;
+    expect(pending).toMatchObject({ bookedAppointmentId: "apt-3", date: "2026-10-05", time: "10:00" });
+    expect(pending.phone).toBeUndefined();
+    expect(pending.email).toBeUndefined();
+    expect(pending.firstName).toBe("");
+  });
+
+  it("does not pass an internal error's text to the model", async () => {
+    const { run, say } = setup({
+      book: async () => {
+        throw new Error("Invalid `prisma.appointment.create()` invocation: column x");
+      },
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    const out = await run("create_appointment");
+
+    expect(out).toMatchObject({ created: false, error: "booking_failed", message: "The booking could not be made." });
+  });
+
+  it("keeps the booking service's own refusal, written for the client", async () => {
+    const { run, say } = setup({
+      book: async () => {
+        throw new ConflictException("Ese hueco ya no está libre.");
+      },
+    });
+
+    await run("propose_appointment", DETAILS);
+    say("sí");
+
+    expect(await run("create_appointment")).toMatchObject({ error: "slot_unavailable", message: "Ese hueco ya no está libre." });
+  });
 });
