@@ -356,7 +356,8 @@ describe("RebookingDispatcherService suggested date", () => {
     await build(m).processOne("client-1", { hasAdvanced: true });
     const slot = m.prisma.rebookingReminder.update.mock.calls[0][0].data.proposedSlot;
     expect(slot.date >= localDay(new Date(Date.now() + DAY))).toBe(true);
-    expect(slot.time).toBe("18:30");
+    // V10: a date only; the agenda is not looked at, so no hour is proposed.
+    expect(slot.time).toBeUndefined();
   });
 
   it("proposes her usual cycle when it is still ahead", async () => {
@@ -379,7 +380,12 @@ describe("RebookingDispatcherService suggested date", () => {
       month: "long",
       timeZone: "Europe/Madrid",
     });
-    expect(m.emailService.sendEmail.mock.calls[0][0].html).toContain(`el ${expected} a las 10:00`);
+    const html: string = m.emailService.sendEmail.mock.calls[0][0].html;
+    expect(html).toContain(`hacia el ${expected}?`);
+    // V10: no hour is promised, and the client is invited to pick one.
+    expect(html).not.toMatch(/a las d/);
+    expect(html).not.toContain("18:30");
+    expect(html).toContain("elige el día y la hora");
   });
 });
 
@@ -533,7 +539,7 @@ describe("RebookingDispatcherService.runDailyTick", () => {
     await build(m).runDailyTick(MORNING);
     const updated = m.prisma.rebookingReminder.update.mock.calls[0][0];
     expect(updated.data.proposedSlot.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(updated.data.proposedSlot.time).toBe("18:30");
+    expect(updated.data.proposedSlot.time).toBeUndefined();
   });
 
   it("proposedSlot is not set when advanced is locked", async () => {

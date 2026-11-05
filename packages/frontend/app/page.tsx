@@ -157,6 +157,9 @@ export default function LandingPage() {
           <p className="mt-2 text-sm text-gray-600">
             {t("landing.pricing.subtitle")}
           </p>
+          <p className="mt-1 text-sm text-gray-600">
+            {t("landing.pricing.finalPrice")}
+          </p>
         </div>
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {plans === null ? (
@@ -219,6 +222,17 @@ export default function LandingPage() {
           <p>
             &copy; {new Date().getFullYear()} KiraRoom. {t("landing.footer")}
           </p>
+          <nav aria-label="Legal" className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+            <Link href="/legal/terms" className="hover:text-gray-900">
+              {t("landing.footerLinks.terms")}
+            </Link>
+            <Link href="/legal/privacy" className="hover:text-gray-900">
+              {t("landing.footerLinks.privacy")}
+            </Link>
+            <a href="mailto:info@kiraroom.com" className="hover:text-gray-900">
+              {t("landing.footerLinks.contact")}
+            </a>
+          </nav>
         </div>
       </footer>
     </div>

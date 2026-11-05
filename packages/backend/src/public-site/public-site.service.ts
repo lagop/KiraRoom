@@ -2,6 +2,7 @@ import { GoneException, Injectable, NotFoundException, Optional } from "@nestjs/
 import { Prisma, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { redirectedTenantId } from "../web-address/web-address.service";
+import { COUNTABLE_TENANT_WHERE } from "../saas/saas.constants";
 import { TENANT_OWNER_EMAIL_VERIFIED } from "../auth/email-verified/owner-email-verified";
 import { salonOpenShifts, salonOpenWeek, SalonDayWindow } from "../appointments/working-hours";
 import { normalizeDomain } from "../web-domain/custom-domain";
@@ -413,7 +414,9 @@ export class PublicSiteService {
   async listForSitemap() {
     const rows = await this.prisma.tenant.findMany({
       where: {
-        deletedAt: null,
+        // Not deleted and not internal (the platform's own test salons):
+        // the sitemap invites search engines to index what it lists.
+        ...COUNTABLE_TENANT_WHERE,
         blockedAt: null,
         subscriptionStatus: { in: LISTED_STATUSES },
         // A page with nothing to book is thin content; leave it out.

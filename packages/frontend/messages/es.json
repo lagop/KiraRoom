@@ -1,6 +1,6 @@
 {
   "landing": {
-    "badge": "Plataforma disponible en español e inglés",
+    "badge": "Panel en español y, en buena parte, en inglés",
     "hero": {
       "title": "Gestiona tu peluquería o centro de belleza sin fricción",
       "subtitle": "Agenda online, recordatorios automáticos, recepcionista IA en tu web y en WhatsApp, fidelización, wallet y mucho más. 14 días gratis, sin tarjeta.",
@@ -16,7 +16,7 @@
       },
       "whatsapp": {
         "title": "Recordatorios automáticos",
-        "desc": "Reduce las ausencias con avisos por email y SMS antes de cada cita."
+        "desc": "Reduce las ausencias con avisos por email y WhatsApp antes de cada cita. SMS en los planes Pro y Empresa."
       },
       "ai": {
         "title": "Recepcionista IA",
@@ -28,7 +28,7 @@
       },
       "analytics": {
         "title": "Analítica",
-        "desc": "Sabe que funciona con métricas claras."
+        "desc": "Sabe qué funciona con métricas claras."
       },
       "multi": {
         "title": "Multi-local",
@@ -36,10 +36,10 @@
       }
     },
     "how": {
-      "title": "Como funciona",
+      "title": "Cómo funciona",
       "step1": {
         "title": "Crea tu cuenta",
-        "desc": "30 segundos. Tu salón, tu email y listo."
+        "desc": "Tu salón, tu email y listo. Sin tarjeta."
       },
       "step2": {
         "title": "Configura tus servicios",
@@ -53,7 +53,8 @@
     "pricing": {
       "title": "Precios simples",
       "subtitle": "Sin costes de alta. Cancela cuando quieras. 14 días de prueba Pro incluidos.",
-      "popular": "Popular",
+      "popular": "Recomendado",
+      "finalPrice": "Precios finales, sin impuestos añadidos.",
       "perMonth": "/mes",
       "price": "{amount} €",
       "perLocation": "por local",
@@ -61,7 +62,12 @@
       "learnMore": "Más info",
       "planCta": "Elegir plan"
     },
-    "footer": "Hecho para negocios de belleza y bienestar."
+    "footer": "Hecho para negocios de belleza y bienestar.",
+    "footerLinks": {
+      "terms": "Términos del servicio",
+      "privacy": "Política de privacidad",
+      "contact": "Contacto"
+    }
   },
   "invoices": {
     "title": "Facturas",

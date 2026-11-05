@@ -437,6 +437,8 @@ describe("PublicSiteService.listForSitemap", () => {
     const args = (prisma.tenant.findMany.mock.calls[0] as any[])[0];
     expect(args.where).toEqual({
       deletedAt: null,
+      // Audit 9 T8: the platform's own test salons are never listed.
+      isInternal: false,
       blockedAt: null,
       subscriptionStatus: { in: ["active", "trialing", "past_due"] },
       services: { some: { isActive: true } },
