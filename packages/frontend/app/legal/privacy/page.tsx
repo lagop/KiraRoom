@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import {
   CONVERSATION_RETENTION_MONTHS,
   KIRAROOM_DOMAIN,
+  KIRAROOM_OWNER,
   KIRAROOM_PRIVACY_EMAIL,
   SUB_PROCESSORS,
   subProcessorText,
@@ -39,10 +40,12 @@ export default function PrivacyPage() {
 
       <Section title="1. Responsable del tratamiento">
         <p>
-          <strong>KiraRoom</strong> (en adelante, "KiraRoom"), con sede en
-          España, es el responsable del tratamiento de los datos de las
-          cuentas de los salones que usan la plataforma{" "}
-          <code>{KIRAROOM_DOMAIN}</code>.
+          <strong>KiraRoom</strong> (en adelante, "KiraRoom") es una
+          plataforma titularidad de <strong>{KIRAROOM_OWNER.name}</strong>,
+          con NIF {KIRAROOM_OWNER.nif} y domicilio en {KIRAROOM_OWNER.address}.
+          Es el responsable del tratamiento de los datos de las cuentas de
+          los salones que usan la plataforma <code>{KIRAROOM_DOMAIN}</code>.
+          Más datos en el <a href="/legal/aviso-legal">Aviso legal</a>.
         </p>
         <p>
           De los datos de los <strong>clientes de cada salón</strong> (sus

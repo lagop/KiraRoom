@@ -14,6 +14,19 @@
 export const KIRAROOM_DOMAIN = "kiraroom.net";
 export const KIRAROOM_PRIVACY_EMAIL = "info@kiraroom.com";
 
+/**
+ * Who is behind KiraRoom (LSSI art. 10: the provider's identification; RGPD
+ * art. 13.1.a: the controller's identity and address). Given by the owner on
+ * 2026-11-05; a legal advisor still has to validate the aviso legal texts.
+ * The public site kiraroom.com shows the same data.
+ */
+export const KIRAROOM_OWNER = {
+  name: "Orlando Perdomo Sosa",
+  nif: "44309432R",
+  address: "Calle San Germán, 50, 1.º, 35018 Las Palmas de Gran Canaria (Las Palmas), España",
+  email: KIRAROOM_PRIVACY_EMAIL,
+} as const;
+
 /** How long the receptionist's conversations are kept (backend retention job). */
 export const CONVERSATION_RETENTION_MONTHS = 12;
 

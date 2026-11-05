@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CONVERSATION_RETENTION_MONTHS, SUB_PROCESSORS } from "@/lib/salon-legal";
+import { CONVERSATION_RETENTION_MONTHS, KIRAROOM_OWNER, SUB_PROCESSORS } from "@/lib/salon-legal";
 
 // Its own title: it showed the root layout's, in English.
 export const metadata: Metadata = { title: "Términos del servicio · KiraRoom" };
@@ -19,6 +19,13 @@ export default function TermsPage() {
           Al crear una cuenta o utilizar el servicio SaaS KiraRoom,
           acepta estos Términos del Servicio. Si no está de acuerdo, no
           use el servicio.
+        </p>
+        <p>
+          El servicio lo presta {KIRAROOM_OWNER.name} (NIF{" "}
+          {KIRAROOM_OWNER.nif}), con domicilio en {KIRAROOM_OWNER.address}.
+          Contacto:{" "}
+          <a href={`mailto:${KIRAROOM_OWNER.email}`}>{KIRAROOM_OWNER.email}</a>.
+          Más datos en el <a href="/legal/aviso-legal">Aviso legal</a>.
         </p>
       </Section>
 
