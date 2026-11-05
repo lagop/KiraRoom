@@ -11,7 +11,7 @@
 | Production API | `https://api.kiraroom.net` |
 | Production dashboard (tenants) | `https://app.kiraroom.net` |
 | SaaS admin console | `https://admin.kiraroom.net` |
-| Commercial website (separate repo) | `https://kiraroom.com` |
+| Commercial website | `https://kiraroom.com`: static site in the private repo `lagop/kiraroom-landing`, published to Hostinger from `main` (see [website.md](website.md)) |
 | Database host | Hostinger VPS, **NOT** exposed to internet |
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |
@@ -252,7 +252,7 @@ of quoting (ssh, then the remote shell) is enough for a `# Operational runbook
 | Production API | `https://api.kiraroom.net` |
 | Production dashboard (tenants) | `https://app.kiraroom.net` |
 | SaaS admin console | `https://admin.kiraroom.net` |
-| Commercial website (separate repo) | `https://kiraroom.com` |
+| Commercial website | `https://kiraroom.com`: static site in the private repo `lagop/kiraroom-landing`, published to Hostinger from `main` (see [website.md](website.md)) |
 | Database host | Hostinger VPS, **NOT** exposed to internet |
 | Deploy method | Hostinger hPanel → VPS → Docker Manager → Compose URL |
 | Compose source | `https://raw.githubusercontent.com/lagop/KiraRoom/main/docker-compose.prod.yml` |

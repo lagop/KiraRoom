@@ -32,7 +32,7 @@ Total bundle weight (gzipped, post-build): < 5 KB per page.
 | `/pricing` | Full pricing table + FAQ |
 | `/privacy` | Privacy policy (AEPD template) |
 | `/tos` | Terms of service |
-| `/login` | One-hop redirect to `https://app.kiraroom.com/login` |
+| `/login` | One-hop redirect to `https://app.kiraroom.net/login` |
 
 All copy is in Spanish. The customer is Spanish — localization is part
 of the brand, not a feature toggle.
@@ -92,7 +92,7 @@ Configure in Cloudflare dashboard → Pages → `kiraroom-marketing` → Custom 
 
 - `marketing.kiraroom.com` → this Pages project
 
-The SaaS dashboard continues to live at `app.kiraroom.com` (existing
+The SaaS dashboard continues to live at `app.kiraroom.net` (existing
 Hetzner VPS or current host). Apex `kiraroom.com` can stay on
 whichever registrar — only the subdomains need Cloudflare proxying.
 
@@ -100,7 +100,7 @@ whichever registrar — only the subdomains need Cloudflare proxying.
 
 | Variable | Where | Required |
 |---|---|---|
-| `PUBLIC_APP_URL` | Cloudflare Pages dashboard → Settings → Environment variables | yes (defaults to `https://app.kiraroom.com`) |
+| `PUBLIC_APP_URL` | Cloudflare Pages dashboard → Settings → Environment variables | yes (defaults to `https://app.kiraroom.net`) |
 
 Only `PUBLIC_*` vars are exposed to the client bundle. No secrets.
 

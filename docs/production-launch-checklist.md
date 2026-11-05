@@ -172,7 +172,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
 
 - [ ] SEC-5 — schedule real SMB pen-test (~€1.5-3k, ~1-2 weeks engagement). Block open GA until clean.
 - [ ] Self-service signup flow on `kiraroom.com` (commercial site → `/auth/register` on the SaaS).
-- [ ] Public landing page on `kiraroom.com` (separate repo, marketing site).
+- [x] Public landing page on `kiraroom.com` (private repo `lagop/kiraroom-landing`, auto-published; see `docs/website.md`).
 - [ ] Stripe billing portal links in dashboard.
 - [ ] Status page (Instatus free tier or BetterStack).
 - [ ] Decide which of the 10 "low priority" features from `docs/saas-development-status-review.md` actually matter for the GA story:
