@@ -8,6 +8,7 @@ import {
   SUB_PROCESSORS,
   controllerName,
   legalAddressLine,
+  subProcessorText,
 } from "@/lib/salon-legal";
 import { LegalSection, SalonLegalLayout } from "../components/legal-layout";
 
@@ -114,10 +115,9 @@ export default async function SalonPrivacyPage({ params }: Props) {
           proveedores (subencargados):
         </p>
         <ul>
-          {SUB_PROCESSORS.map((s) => (
+          {SUB_PROCESSORS.filter((s) => !s.platformOnly).map((s) => (
             <li key={s.name}>
-              <strong>{s.name}</strong>: {s.purpose}
-              {s.onlyIf ? ` (${s.onlyIf})` : ""}. {s.location}.
+              <strong>{s.name}</strong>: {subProcessorText(s)}
             </li>
           ))}
         </ul>
