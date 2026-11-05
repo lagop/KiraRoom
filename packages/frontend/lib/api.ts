@@ -6545,6 +6545,14 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/platform/email-config/test`, { method: "POST", body: JSON.stringify(typed) });
   }
 
+  /** The retention job's switch (the saas_owner only). */
+  async getPlatformRetentionConfig(): Promise<PlatformRetentionConfig> {
+    return this.request(`/platform/retention-config`);
+  }
+  async updatePlatformRetentionConfig(enabled: boolean): Promise<PlatformRetentionConfig> {
+    return this.request(`/platform/retention-config`, { method: "PUT", body: JSON.stringify({ enabled }) });
+  }
+
   // KiraRoom's own Stripe account. Secret key and webhook secret are
   // write-only: GET says where each comes from, never its value.
   async getPlatformStripeConfig(): Promise<PlatformStripeConfig> {
@@ -6683,6 +6691,15 @@ export interface PlatformEmailConfig {
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
   /** The bono de emails salons can buy: offered once both are set. */
   marketingPack: { emails: number | null; priceCents: number | null; offered: boolean };
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/** The retention switch: `enabled` is the console's, `effective` also counts the server's env override. */
+export interface PlatformRetentionConfig {
+  enabled: boolean;
+  envOverride: boolean;
+  effective: boolean;
   updatedAt: string | null;
   updatedBy: string | null;
 }

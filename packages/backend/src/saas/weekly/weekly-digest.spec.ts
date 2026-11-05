@@ -6,6 +6,8 @@ import { DAY_MS } from "../retention/salon-retention";
 const NOW = new Date("2026-11-09T07:00:00Z"); // Monday 08:00 in Madrid
 const days = (n: number) => new Date(NOW.getTime() + n * DAY_MS);
 
+const retention = (on = false) => ({ isEnabled: jest.fn(async () => on) }) as any;
+
 function fakePrisma() {
   const tenantFindMany = jest.fn(async (args: any) => {
     const w = args.where;
@@ -72,7 +74,7 @@ describe("isoWeek / consoleWeek", () => {
 
 describe("WeeklyDigestService.build (audit 8 D12)", () => {
   it("gathers every block", async () => {
-    const d = await new WeeklyDigestService(fakePrisma()).build(NOW);
+    const d = await new WeeklyDigestService(fakePrisma(), retention()).build(NOW);
     expect(d.week).toBe("2026-W46");
     expect(d.pastDue.map((t) => t.id)).toEqual(["t-pd"]);
     expect(d.trialsEnding).toEqual([{ id: "t-tr", name: "Prueba", trialEnd: days(2).toISOString(), hasSubscription: false }]);
@@ -82,8 +84,13 @@ describe("WeeklyDigestService.build (audit 8 D12)", () => {
     expect(d.openBugReports.latest[0].tenantName).toBe("Salón X");
   });
 
+  it("retention.enabled follows the platform switch", async () => {
+    expect((await new WeeklyDigestService(fakePrisma(), retention(false)).build(NOW)).retention.enabled).toBe(false);
+    expect((await new WeeklyDigestService(fakePrisma(), retention(true)).build(NOW)).retention.enabled).toBe(true);
+  });
+
   it("retention: tonight's run and what comes due within the week, from the SalonRetention rules", async () => {
-    const d = await new WeeklyDigestService(fakePrisma()).build(NOW);
+    const d = await new WeeklyDigestService(fakePrisma(), retention()).build(NOW);
     expect(d.retention.items.map((r) => [r.id, r.kind, r.dueNow])).toEqual([
       ["t-r1", "warn", true],
       ["t-r2", "warn", false],
@@ -92,7 +99,7 @@ describe("WeeklyDigestService.build (audit 8 D12)", () => {
 
   it("AI spend: this month, counted salons only, unknown models listed apart", async () => {
     const prisma = fakePrisma();
-    const d = await new WeeklyDigestService(prisma).build(NOW);
+    const d = await new WeeklyDigestService(prisma, retention()).build(NOW);
     expect(prisma.tenantLlmUsage.findMany).toHaveBeenCalledWith({ where: { period: "2026-11" } });
     expect(d.aiSpend.salons.map((s) => [s.id, s.calls])).toEqual([["t-ai", 12]]);
     expect(d.aiSpend.salons[0].usd).toBeGreaterThan(0);
@@ -101,7 +108,7 @@ describe("WeeklyDigestService.build (audit 8 D12)", () => {
   });
 
   it("the email escapes what comes from the database", async () => {
-    const d = await new WeeklyDigestService(fakePrisma()).build(NOW);
+    const d = await new WeeklyDigestService(fakePrisma(), retention()).build(NOW);
     const mail = renderWeeklyDigestEmail(d);
     expect(mail.html).toContain("Pago &lt;fallido&gt;");
     expect(mail.html).toContain("No &lt;carga&gt;");
@@ -126,7 +133,7 @@ describe("WeeklyDigestScheduler", () => {
         delete: jest.fn(async ({ where }: any) => tasks.delete(where.name)),
       },
     };
-    const digest = { build: jest.fn(async (now: Date) => new WeeklyDigestService(fakePrisma()).build(now)) };
+    const digest = { build: jest.fn(async (now: Date) => new WeeklyDigestService(fakePrisma(), retention()).build(now)) };
     const email = { sendEmail: jest.fn(async (_opts: any) => (sendOk ? { success: true } : { success: false, error: "down" })) };
     return { scheduler: new WeeklyDigestScheduler(prisma, digest as any, email as any), tasks, email };
   }
