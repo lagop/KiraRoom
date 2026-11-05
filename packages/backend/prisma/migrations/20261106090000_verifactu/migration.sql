@@ -52,6 +52,7 @@ CREATE TABLE "verifactu_records" (
     "hash" TEXT NOT NULL,
     "xml" TEXT NOT NULL,
     "subsanacion" BOOLEAN NOT NULL DEFAULT false,
+    "zeroRateAssumed" BOOLEAN NOT NULL DEFAULT false,
     "status" "VerifactuRecordStatus" NOT NULL DEFAULT 'pending',
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "submissionId" TEXT,
@@ -89,6 +90,9 @@ CREATE INDEX "verifactu_chains_nextSendAt_idx" ON "verifactu_chains"("nextSendAt
 
 -- CreateIndex
 CREATE INDEX "verifactu_records_tenantId_status_sequence_idx" ON "verifactu_records"("tenantId", "status", "sequence");
+
+-- CreateIndex
+CREATE INDEX "verifactu_records_tenantId_zeroRateAssumed_idx" ON "verifactu_records"("tenantId", "zeroRateAssumed");
 
 -- CreateIndex
 CREATE INDEX "verifactu_records_invoiceId_idx" ON "verifactu_records"("invoiceId");

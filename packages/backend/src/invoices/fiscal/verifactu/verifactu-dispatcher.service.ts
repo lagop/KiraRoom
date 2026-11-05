@@ -289,7 +289,7 @@ export class VerifactuDispatcher {
   /** The platform owner by email, at most one an hour (audit 8 D15). Never throws. */
   private async alert(tenantId: string, what: string, detail: string): Promise<void> {
     await this.opsAlerts
-      ?.notify("fiscal_rejected", `VERI*FACTU: ${what}`, `Salón (tenantId): ${tenantId}\n${detail}`)
+      ?.notify("fiscal_rejected", `VERI*FACTU: ${what}`, `Salón (tenantId): ${tenantId}\n${detail}`, tenantId)
       .catch(() => undefined);
   }
 

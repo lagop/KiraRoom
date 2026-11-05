@@ -3988,6 +3988,8 @@ model VerifactuRecord {
   /// The RegistroAlta / RegistroAnulacion element, as sent.
   xml              String                @db.Text
   subsanacion      Boolean               @default(false)
+  /// A 0 % line the salon said it does not have: sent as S1, for it to review.
+  zeroRateAssumed  Boolean               @default(false)
   /// Result of the submission
   status           VerifactuRecordStatus @default(pending)
   attempts         Int                   @default(0)
@@ -4002,6 +4004,7 @@ model VerifactuRecord {
 
   @@unique([tenantId, sequence])
   @@index([tenantId, status, sequence])
+  @@index([tenantId, zeroRateAssumed])
   @@index([invoiceId])
   @@map("verifactu_records")
 }

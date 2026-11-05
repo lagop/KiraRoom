@@ -368,7 +368,11 @@ export class InvoicesController {
       await this.auditTaxIdChange(req, tenantId, taxIdBefore, identity.taxId);
     }
     if (dto.fiscalMode && dto.fiscalMode !== current?.fiscalMode) {
-      await this.auditFiscalModeChange(req, tenantId, current?.fiscalMode ?? null, dto.fiscalMode);
+      await this.auditFiscalChange(req, tenantId, "tenant.fiscalMode.change", current?.fiscalMode ?? null, dto.fiscalMode);
+    }
+    const zeroRateBefore = zeroRateTreatmentOf(current?.fiscalSettings);
+    if (dto.zeroRateTreatment && dto.zeroRateTreatment !== zeroRateBefore) {
+      await this.auditFiscalChange(req, tenantId, "tenant.zeroRateTreatment.change", zeroRateBefore, dto.zeroRateTreatment);
     }
     if (Object.keys(identity).length > 0) {
       // Not awaited: Stripe's answer must not slow the save, and it never fails it.
@@ -424,19 +428,22 @@ export class InvoicesController {
     }
   }
 
-  /** Switching VERI*FACTU on binds the salon until 31 December: who and when is kept. */
-  private async auditFiscalModeChange(req: AuthedRequest, tenantId: string, before: string | null, after: string) {
+  /**
+   * Switching VERI*FACTU on binds the salon until 31 December, and what a 0 %
+   * line means changes what the AEAT is told: who and when is kept.
+   */
+  private async auditFiscalChange(req: AuthedRequest, tenantId: string, action: string, before: string | null, after: string) {
     const user = req.user;
     if (!this.auditLog || !user?.id || !user.role) return;
     try {
-      await this.auditLog.record("tenant.fiscalMode.change", {
+      await this.auditLog.record(action, {
         actorId: user.id,
         actorRole: user.role,
         tenantId,
         metadata: { before, after, ...(user.impersonatedBy ? { impersonatedBy: user.impersonatedBy } : {}) },
       });
     } catch (err) {
-      this.logger.warn(`Audit log for the fiscal mode of tenant ${tenantId} failed: ${(err as Error).message}`);
+      this.logger.warn(`Audit log ${action} of tenant ${tenantId} failed: ${(err as Error).message}`);
     }
   }
 
@@ -479,9 +486,16 @@ export class InvoicesController {
           "Para activar Verifactu, sube primero el certificado electrónico con el que se enviarán las facturas a la AEAT.",
         );
       }
-      if (!dto.zeroRateTreatment && !zeroRateTreatmentOf(current?.fiscalSettings)) {
+      const zeroRate = dto.zeroRateTreatment ?? zeroRateTreatmentOf(current?.fiscalSettings);
+      if (!zeroRate) {
         throw new BadRequestException(
           "Para activar Verifactu, indica qué significa el 0 % en tus facturas. Si no lo usas, elige «No uso el 0 %».",
+        );
+      }
+      const defaultRate = dto.defaultTaxRate ?? (current?.fiscalSettings as { defaultTaxRate?: number } | null)?.defaultTaxRate;
+      if (zeroRate === "none" && defaultRate === 0) {
+        throw new BadRequestException(
+          "Tu tipo por defecto es el 0 %, así que no puedes elegir «No uso el 0 %». Indica qué significa el 0 % en tus facturas, o cambia el tipo por defecto.",
         );
       }
       await this.prisma.verifactuChain.upsert({

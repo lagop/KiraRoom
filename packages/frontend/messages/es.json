@@ -108,6 +108,9 @@
       "bannerMany": "{count} facturas están pendientes de enviar a la AEAT",
       "bannerRejectedOne": "La AEAT ha rechazado {count} factura.",
       "bannerRejectedMany": "La AEAT ha rechazado {count} facturas.",
+      "bannerZeroRateOne": "{count} factura con una línea al 0 % se ha registrado como sujeta al 0 %, porque indicaste que no usas el 0 %.",
+      "bannerZeroRateMany": "{count} facturas con una línea al 0 % se han registrado como sujetas al 0 %, porque indicaste que no usas el 0 %.",
+      "zeroRateHelp": "Si fue un error en el tipo, rectifica la factura. Si usas el 0 %, indica en esta página qué significa y consulta con tu gestoría las ya registradas.",
       "details": "Ver detalles"
     },
     "fiscalStatus": {
@@ -214,6 +217,7 @@
       "confirmRegime": "Las facturas nuevas llevarán {tax} en vez de {previous}, al {rate} % por defecto.",
       "confirmPrices": "Un servicio de {price} en tu catálogo: tus clientas pagaban {before} y pagarán {after} ({tax} incluido). Es el precio que verán en tu web de reservas y el total de las facturas nuevas.",
       "confirmCta": "Guardar cambios",
+      "confirmZeroRate": "Cambia lo que se declara a la AEAT por las líneas al 0 % de las facturas nuevas. Las ya registradas no cambian.",
       "zeroRateLabel": "Qué significa el 0 % en tus facturas",
       "zeroRateChoose": "Elige una opción",
       "zeroRateHint": "Hace falta para activar Verifactu y solo afecta a las líneas al 0 %: las demás siguen igual. Si no cobras impuesto porque tu negocio está en franquicia por volumen de ventas, pregunta a tu gestoría cuál de las opciones «Exenta» te corresponde. KiraRoom no puede decidirlo por ti.",

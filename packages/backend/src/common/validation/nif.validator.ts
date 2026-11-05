@@ -6,6 +6,8 @@
  *    Letter is the modulo-23 of the number itself.
  *  - NIE: X/Y/Z + 7 digits + 1 letter (foreign residents)
  *    Substituted: X→0, Y→1, Z→2 then treated as NIF.
+ *  - K/L/M + 7 digits + 1 letter (people without a DNI or NIE)
+ *    The letter is the modulo-23 of the 7 digits.
  *  - CIF: letter + 7 digits + letter/digit (legal entities)
  *    Control character is computed from a weighted-sum checksum.
  *    Whether it is a letter, a digit or either depends on the
@@ -108,6 +110,14 @@ export function validateNif(raw: string): NifValidation {
   if (/^\d{8}[A-Z]$/.test(s)) {
     const letter = computeNifLetter(parseInt(s.slice(0, 8), 10));
     if (letter !== s[8]) {
+      return { valid: false, error: "nif-checksum" };
+    }
+    return { valid: true, type: "nif", normalized: s };
+  }
+
+  // K, L, M: 1 letter + 7 digits + 1 letter
+  if (/^[KLM]\d{7}[A-Z]$/.test(s)) {
+    if (computeNifLetter(parseInt(s.slice(1, 8), 10)) !== s[8]) {
       return { valid: false, error: "nif-checksum" };
     }
     return { valid: true, type: "nif", normalized: s };

@@ -2025,6 +2025,8 @@ export interface VerifactuStatus {
   lastError: string | null;
   nextSendAt: string | null;
   certificate: { alias: string; subject: string | null; notAfter: string | null; certificateType: string } | null;
+  /** Last 30 days: 0 % lines the salon said it does not have, sent as S1. */
+  zeroRateAssumed: number;
 }
 
 /** Public data of the software's declaración responsable (GET /verifactu/declaracion). */

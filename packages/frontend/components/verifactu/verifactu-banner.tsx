@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import apiClient, { VerifactuStatus } from "@/lib/api";
-import { pollWhileActive } from "@/lib/fiscal-settings-form";
+import { pollVerifactuStatus } from "@/lib/fiscal-settings-form";
 import { useTranslations } from "@/lib/use-translation";
 
 /**
@@ -16,20 +16,19 @@ export function VerifactuBanner() {
   const { data } = useQuery<VerifactuStatus>({
     queryKey: ["verifactu", "status"],
     queryFn: () => apiClient.getVerifactuStatus(),
-    // Once for a salon that has not activated it, and never again until
-    // Ajustes fiscales invalidates this query on activating.
-    refetchInterval: pollWhileActive(60_000),
+    refetchInterval: pollVerifactuStatus(60_000),
     retry: false,
   });
-  if (!data?.active) return null;
+  // Not gated on `active`: a salon that left still has its queue to clear.
+  if (!data) return null;
   const waiting = data.pending > 0 && (data.incidentSince || data.lastError);
-  if (!waiting && data.rejected === 0) return null;
+  if (!waiting && data.rejected === 0 && !data.zeroRateAssumed) return null;
 
   return (
     <div
       role="status"
       className={`mb-4 flex items-start gap-2 rounded-md border px-4 py-3 text-sm ${
-        waiting ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-900"
+        waiting || data.rejected === 0 ? "border-amber-200 bg-amber-50 text-amber-900" : "border-red-200 bg-red-50 text-red-900"
       }`}
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -44,9 +43,13 @@ export function VerifactuBanner() {
               : ""}
             . {t("invoices.verifactu.retrying")}. {t("invoices.verifactu.keepInvoicing")}
           </>
-        ) : (
+        ) : data.rejected > 0 ? (
           t(data.rejected === 1 ? "invoices.verifactu.bannerRejectedOne" : "invoices.verifactu.bannerRejectedMany", {
             count: data.rejected,
+          })
+        ) : (
+          t(data.zeroRateAssumed === 1 ? "invoices.verifactu.bannerZeroRateOne" : "invoices.verifactu.bannerZeroRateMany", {
+            count: data.zeroRateAssumed,
           })
         )}{" "}
         <a href="/dashboard/settings/fiscal" className="font-medium underline">

@@ -700,6 +700,13 @@ describeDb("VERI*FACTU with a database", () => {
     expect(anulacion.xml).toContain("<sum1:SinRegistroPrevio>S</sum1:SinRegistroPrevio>");
   });
 
+  it("a salon that left with records queued still sees them", async () => {
+    const tenantId = await salon();
+    await issue(tenantId);
+    await prisma.tenant.update({ where: { id: tenantId }, data: { fiscalMode: "none" } });
+    expect(await statusOf(tenantId)).toMatchObject({ active: false, pending: 1 });
+  });
+
   it("a salon that has not activated it gets its status without a single count", async () => {
     const tenantId = await salon({ fiscalMode: "none" });
     const groupBy = jest.spyOn(prisma.verifactuRecord as any, "groupBy");
@@ -876,14 +883,30 @@ describeDb("VERI*FACTU with a database", () => {
       expect((await expectValidChain(subject))[0].xml).toContain("<sum1:TipoImpositivo>0</sum1:TipoImpositivo><sum1:BaseImponibleOimporteNoSujeto>30.00</sum1:BaseImponibleOimporteNoSujeto><sum1:CuotaRepercutida>0.00</sum1:CuotaRepercutida>");
     });
 
-    it("«No uso el 0 %», or nothing chosen: refused with a clear 400, and nothing is issued", async () => {
+    it("«No uso el 0 %», or nothing chosen: issued as S1 at 0 %, and the salon is told", async () => {
       for (const choice of ["none", undefined]) {
         const tenantId = await salonWith(choice);
-        await expect(withZero(tenantId)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("0 %") });
-        expect(await prisma.invoice.count({ where: { tenantId } })).toBe(0);
+        await withZero(tenantId);
         await issue(tenantId);
-        await expectValidChain(tenantId);
+        const [zero, plain] = await expectValidChain(tenantId);
+        expect(zero.xml).toContain("<sum1:TipoImpositivo>0</sum1:TipoImpositivo>");
+        expect(zero.zeroRateAssumed).toBe(true);
+        expect(plain.zeroRateAssumed).toBe(false);
+        expect((await statusOf(tenantId)).zeroRateAssumed).toBe(1);
       }
+    });
+
+    it("choosing what the 0 % means clears the notice, and a chosen 0 % never raises it", async () => {
+      const tenantId = await salonWith("none");
+      await withZero(tenantId);
+      await prisma.tenant.update({
+        where: { id: tenantId },
+        data: { fiscalSettings: { defaultSeries: "A", taxRegime: "iva", zeroRateTreatment: "E1" } },
+      });
+      expect((await statusOf(tenantId)).zeroRateAssumed).toBe(0);
+      await withZero(tenantId);
+      const rows = await expectValidChain(tenantId);
+      expect(rows.map((r: any) => r.zeroRateAssumed)).toEqual([true, false]);
     });
   });
 

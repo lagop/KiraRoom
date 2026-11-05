@@ -144,6 +144,12 @@ describe("formats", () => {
     expect(format.recipientId("AB1234567")).toEqual({ kind: "foreign" });
     expect(format.recipientId("PT123456")).toEqual({ kind: "foreign" });
     expect(format.recipientId("GB123456789")).toEqual({ kind: "foreign" });
+    // A mistyped NIF is not a foreign document: it is asked for again.
+    for (const typo of ["1234567Z", "12345678", "123456789", "123", "B1234567", "X123456L", "AB"]) {
+      expect(format.recipientId(typo)).toEqual({ kind: "invalid" });
+    }
+    expect(format.recipientId("K1234567L")).toEqual({ kind: "nif", nif: "K1234567L" });
+    expect(format.recipientId("M1234567A")).toEqual({ kind: "invalid" });
     expect(format.recipientId("  ")).toEqual({ kind: "none" });
     expect(format.recipientId(null)).toEqual({ kind: "none" });
   });

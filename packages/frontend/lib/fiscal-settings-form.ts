@@ -57,12 +57,20 @@ export function zeroRateMissing(draft: { fiscalMode?: string; zeroRateTreatment?
   return draft.fiscalMode === "verifactu" && !draft.zeroRateTreatment;
 }
 
+/** How often the status is asked when there is nothing to follow. */
+export const VERIFACTU_IDLE_POLL_MS = 600_000;
+
 /**
- * refetchInterval of the VERI*FACTU status: every `ms` while the salon has
- * it active, nothing otherwise (the first answer says which).
+ * refetchInterval of the VERI*FACTU status: every `ms` while it is active or
+ * something is queued. Otherwise, or with no answer yet, slowly and not never:
+ * a first call that failed, or Verifactu switched on from another device, must
+ * not leave the art. 16.4 notice off until a reload.
  */
-export function pollWhileActive(ms: number) {
-  return (query: { state: { data?: { active?: boolean } } }): number | false => (query.state.data?.active ? ms : false);
+export function pollVerifactuStatus(ms: number) {
+  return (query: { state: { data?: { active?: boolean; pending?: number } } }): number => {
+    const data = query.state.data;
+    return data?.active || (data?.pending ?? 0) > 0 ? ms : VERIFACTU_IDLE_POLL_MS;
+  };
 }
 
 /** The settings a change of which is confirmed before saving. */
@@ -74,6 +82,7 @@ export interface FiscalRiskFields {
   pricesIncludeTax: boolean;
   /** Left out by callers that do not change it. */
   fiscalMode?: string;
+  zeroRateTreatment?: ZeroRateTreatment;
 }
 
 const TAX_LABEL: Record<FiscalRiskFields["taxRegime"], string> = { iva: "IVA", igic: "IGIC", ipsi: "IPSI" };
@@ -96,7 +105,8 @@ function clientTotal(rate: number, included: boolean): number {
 
 /**
  * The lines of the confirmation shown before saving a change to the NIF, the
- * default series, the tax regime or whether prices include the tax: what
+ * default series, the tax regime, whether prices include the tax or what a
+ * 0 % line means once Verifactu is on: what
  * changes for the invoices from now on (the ones already issued keep their
  * values, said by the dialog's intro). Empty when none of those changed, so
  * a save of anything else goes through without a dialog.
@@ -108,6 +118,9 @@ export function fiscalChangeSummary(
   const lines: Array<{ key: string; params: Record<string, string> }> = [];
   if (draft.fiscalMode === "verifactu" && loaded.fiscalMode !== "verifactu") {
     lines.push({ key: "invoices.fiscalSettings.confirmVerifactu", params: {} });
+  }
+  if (loaded.fiscalMode === "verifactu" && loaded.zeroRateTreatment && draft.zeroRateTreatment !== loaded.zeroRateTreatment) {
+    lines.push({ key: "invoices.fiscalSettings.confirmZeroRate", params: {} });
   }
   if (draft.tenantNif.trim().toUpperCase() !== loaded.tenantNif.trim().toUpperCase()) {
     lines.push({ key: "invoices.fiscalSettings.confirmTaxId", params: { taxId: draft.tenantNif.trim().toUpperCase() } });

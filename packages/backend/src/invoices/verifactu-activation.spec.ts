@@ -89,6 +89,29 @@ describe("switching the fiscal mode", () => {
     expect(answered.stored.fiscalSettings).toMatchObject({ zeroRateTreatment: "none", defaultSeries: "A" });
   });
 
+  it("«No uso el 0 %» with a default rate of 0 % is refused when activating, not at the till", async () => {
+    production("1");
+    const contradiction = setup({ fiscalSettings: { defaultSeries: "A", defaultTaxRate: 0 } }, { certificates: 1 });
+    await expect(
+      contradiction.controller.updateFiscalSettings(contradiction.req, { fiscalMode: "verifactu", zeroRateTreatment: "none" } as any),
+    ).rejects.toThrow(/tipo por defecto/);
+    expect(contradiction.prisma.verifactuChain.upsert).not.toHaveBeenCalled();
+  });
+
+  it("changing what the 0 % means is audited, with its old value", async () => {
+    production("1");
+    const { controller, req, auditLog } = setup({ fiscalSettings: { defaultSeries: "A", zeroRateTreatment: "E1" } });
+    await controller.updateFiscalSettings(req, { zeroRateTreatment: "N1" } as any);
+    expect(auditLog.record).toHaveBeenCalledWith(
+      "tenant.zeroRateTreatment.change",
+      expect.objectContaining({ metadata: { before: "E1", after: "N1" } }),
+    );
+    auditLog.record.mockClear();
+    await controller.updateFiscalSettings(req, { zeroRateTreatment: "E1" } as any);
+    await controller.updateFiscalSettings(req, { zeroRateTreatment: "E1" } as any);
+    expect(auditLog.record).toHaveBeenCalledTimes(1);
+  });
+
   it("the 0 % setting only takes the codes of the schema", async () => {
     const check = (zeroRateTreatment: string) =>
       validate(plainToInstance(UpdateTenantFiscalSettingsDto, { zeroRateTreatment }));

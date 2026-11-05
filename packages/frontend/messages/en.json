@@ -108,6 +108,9 @@
       "bannerMany": "{count} invoices are waiting to be sent to the AEAT",
       "bannerRejectedOne": "The AEAT rejected {count} invoice.",
       "bannerRejectedMany": "The AEAT rejected {count} invoices.",
+      "bannerZeroRateOne": "{count} invoice with a 0 % line was recorded as subject at 0 %, because you said you do not use 0 %.",
+      "bannerZeroRateMany": "{count} invoices with a 0 % line were recorded as subject at 0 %, because you said you do not use 0 %.",
+      "zeroRateHelp": "If the rate was a mistake, correct the invoice. If you do use 0 %, say what it means on this page and ask your adviser about the ones already recorded.",
       "details": "See details"
     },
     "fiscalStatus": {
@@ -214,6 +217,7 @@
       "confirmRegime": "New invoices will carry {tax} instead of {previous}, at {rate} % by default.",
       "confirmPrices": "A {price} service in your catalogue: your clients paid {before} and will pay {after} ({tax} included). That is the price they will see on your booking site and the total of new invoices.",
       "confirmCta": "Save changes",
+      "confirmZeroRate": "This changes what is declared to the AEAT for the 0 % lines of new invoices. The ones already recorded do not change.",
       "zeroRateLabel": "What 0 % means on your invoices",
       "zeroRateChoose": "Choose an option",
       "zeroRateHint": "Needed to activate Verifactu, and it only affects 0 % lines: the others stay as they are. If you charge no tax because your business is under the small-business scheme for its sales volume, ask your adviser which of the \"Exempt\" options applies. KiraRoom cannot decide it for you.",

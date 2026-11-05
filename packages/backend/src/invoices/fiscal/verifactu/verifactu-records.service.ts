@@ -9,7 +9,7 @@ import * as format from "./format";
 import { altaHash, anulacionHash } from "./hash";
 import { qrUrl } from "./qr";
 import { AltaRecord, InvoiceId, PreviousRecord, SystemInstallation, TaxLine, registroAlta, registroAnulacion } from "./xml";
-import { OperationCode, ZeroRateTreatment, zeroRateTreatmentOf } from "./zero-rate";
+import { ZERO_RATE_FALLBACK, zeroRateIsChosen, zeroRateTreatmentOf } from "./zero-rate";
 
 type Tx = Prisma.TransactionClient;
 type ChainContext = Awaited<ReturnType<VerifactuRecordsService["lockChain"]>>;
@@ -124,20 +124,22 @@ export class VerifactuRecordsService {
   }
 
   private async appendAnulacion(tx: Tx, ctx: ChainContext, invoiceId: string, records: VerifactuRecord[], rechazoPrevio: boolean) {
-    const alta = records[0];
+    // Its newest record: the alta, or the rejected anulación being repeated.
+    // Both identify the same invoice.
+    const newest = records[0];
     const id = randomUUID();
     const generated = this.generationInstant(ctx.chain.lastGeneratedAt);
     const generatedAt = format.generatedAt(generated, ctx.timeZone);
     const hash = anulacionHash({
-      idEmisorFacturaAnulada: alta.nif,
-      numSerieFacturaAnulada: alta.numSerie,
-      fechaExpedicionFacturaAnulada: alta.fecha,
+      idEmisorFacturaAnulada: newest.nif,
+      numSerieFacturaAnulada: newest.numSerie,
+      fechaExpedicionFacturaAnulada: newest.fecha,
       huellaAnterior: ctx.chain.lastHash,
       fechaHoraHusoGenRegistro: generatedAt,
     });
     const xml = registroAnulacion({
       refExterna: id,
-      invoice: { nif: alta.nif, numSerie: alta.numSerie, fecha: alta.fecha },
+      invoice: { nif: newest.nif, numSerie: newest.numSerie, fecha: newest.fecha },
       sinRegistroPrevio: !holdsAlta(records),
       rechazoPrevio,
       previous: this.previous(ctx.chain),
@@ -149,9 +151,9 @@ export class VerifactuRecordsService {
       id,
       kind: VerifactuRecordKind.anulacion,
       invoiceId,
-      nif: alta.nif,
-      numSerie: alta.numSerie,
-      fecha: alta.fecha,
+      nif: newest.nif,
+      numSerie: newest.numSerie,
+      fecha: newest.fecha,
       generatedAt,
       generatedInstant: generated,
       hash,
@@ -262,9 +264,11 @@ export class VerifactuRecordsService {
     if (breakdown.length < 1 || breakdown.length > 12) {
       throw new BadRequestException("Una factura Verifactu lleva entre 1 y 12 tipos de impuesto");
     }
+    const zeroOperation = zeroRateIsChosen(ctx.zeroRate) ? ctx.zeroRate : ZERO_RATE_FALLBACK;
+    const zeroRateAssumed = !zeroRateIsChosen(ctx.zeroRate) && breakdown.some((t) => Number(t.rate) === 0);
     const desglose: TaxLine[] = breakdown.map((t) => ({
       impuesto: TAX_CODE[ctx.taxRegime],
-      operation: Number(t.rate) === 0 ? zeroRateOperation(ctx.zeroRate) : undefined,
+      operation: Number(t.rate) === 0 ? zeroOperation : undefined,
       rate: format.rate(t.rate),
       base: format.amount(t.baseCents),
       cuota: format.amount(t.taxCents),
@@ -323,6 +327,7 @@ export class VerifactuRecordsService {
         hash,
         xml,
         subsanacion: opts.subsanacion ?? false,
+        zeroRateAssumed,
       },
     };
   }
@@ -387,6 +392,7 @@ export class VerifactuRecordsService {
       hash: string;
       xml: string;
       subsanacion?: boolean;
+      zeroRateAssumed?: boolean;
     },
   ): Promise<void> {
     const sequence = ctx.chain.lastSequence + 1;
@@ -408,6 +414,7 @@ export class VerifactuRecordsService {
         hash: r.hash,
         xml: r.xml,
         subsanacion: r.subsanacion ?? false,
+        zeroRateAssumed: r.zeroRateAssumed ?? false,
       },
     });
     await tx.verifactuChain.update({
@@ -441,16 +448,6 @@ function recipientOf(name: string, id: format.RecipientId): AltaRecord["recipien
   if (!identifies(id)) return undefined;
   const nombre = format.text(name, 120);
   return id.kind === "nif" ? { name: nombre, nif: id.nif } : { name: nombre, otro: id.otro };
-}
-
-/** What a 0 % line is for the AEAT, as the salon said; refused if it said it does not use it. */
-function zeroRateOperation(treatment: ZeroRateTreatment | null): OperationCode {
-  if (!treatment || treatment === "none") {
-    throw new BadRequestException(
-      "Esta factura lleva una línea al 0 % y en Ajustes fiscales consta que el salón no usa el 0 %. Pon el tipo correcto en la línea, o indica en Ajustes fiscales qué significa el 0 % en tus facturas.",
-    );
-  }
-  return treatment;
 }
 
 /** The Impuesto of the record per the salon's regime: 01 IVA, 02 IPSI, 03 IGIC. */

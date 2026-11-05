@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FileKey } from "lucide-react";
 import apiClient, { VerifactuStatus } from "@/lib/api";
-import { pollWhileActive } from "@/lib/fiscal-settings-form";
+import { pollVerifactuStatus } from "@/lib/fiscal-settings-form";
 import { useTranslations } from "@/lib/use-translation";
 
 const when = (iso: string | null) =>
@@ -19,12 +19,14 @@ export function VerifactuCard() {
   const status = useQuery<VerifactuStatus>({
     queryKey: ["verifactu", "status"],
     queryFn: () => apiClient.getVerifactuStatus(),
-    refetchInterval: pollWhileActive(30_000),
+    refetchInterval: pollVerifactuStatus(30_000),
   });
 
   const s = status.data;
   if (!s) return null;
   const waiting = s.pending > 0 && (s.incidentSince || s.lastError);
+  // A salon that left keeps seeing what is still queued or was rejected.
+  const showQueue = s.active || s.pending > 0 || s.rejected > 0;
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-5">
@@ -51,7 +53,7 @@ export function VerifactuCard() {
         </p>
       )}
 
-      {s.active && (
+      {showQueue && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Count label={t("invoices.verifactu.accepted")} value={s.accepted} tone="green" />
           <Count label={t("invoices.verifactu.withWarnings")} value={s.acceptedWithErrors} tone="amber" />
@@ -60,7 +62,7 @@ export function VerifactuCard() {
         </div>
       )}
 
-      {s.active && waiting && (
+      {waiting && (
         <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
@@ -73,10 +75,18 @@ export function VerifactuCard() {
           </div>
         </div>
       )}
-      {s.active && s.rejected > 0 && (
+      {s.rejected > 0 && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
           {t(s.rejected === 1 ? "invoices.verifactu.rejectedOne" : "invoices.verifactu.rejectedMany", { count: s.rejected })}{" "}
           {t("invoices.verifactu.rejectedHelp")}
+        </p>
+      )}
+      {s.zeroRateAssumed > 0 && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {t(s.zeroRateAssumed === 1 ? "invoices.verifactu.bannerZeroRateOne" : "invoices.verifactu.bannerZeroRateMany", {
+            count: s.zeroRateAssumed,
+          })}{" "}
+          {t("invoices.verifactu.zeroRateHelp")}
         </p>
       )}
 

@@ -75,7 +75,14 @@ export function nif(value: string | null | undefined): string | null {
 }
 
 /** The shapes of a Spanish NIF, NIE and CIF: whatever has one is checked as one. */
-const SPANISH_ID_SHAPE = /^(\d{8}[A-Z]|[XYZ]\d{7}[A-Z]|[A-HJNP-SUVW]\d{7}[0-9A-J])$/;
+const SPANISH_ID_SHAPE = /^(\d{8}[A-Z]|[XYZKLM]\d{7}[A-Z]|[A-HJNP-SUVW]\d{7}[0-9A-J])$/;
+
+/**
+ * What a mistyped Spanish NIF looks like (a digit or the letter missing, a
+ * digit too many) and no document of any country needs to be written as
+ * here: on a full invoice it is asked for again, not dropped from the record.
+ */
+const BROKEN_SPANISH_ID = /^(\d{1,9}[A-Z]?|[A-Z]\d{6,8}[0-9A-Z]?)$/;
 
 /**
  * What follows the prefix of a VAT number of each EU country (VIES formats).
@@ -142,7 +149,7 @@ export function recipientId(value: string | null | undefined): RecipientId {
     const id = clean.startsWith("GR") ? `EL${clean.slice(2)}` : clean;
     return { kind: "vat", otro: { country: vat.country, idType: "02", id } };
   }
-  return { kind: "foreign" };
+  return clean.length < 5 || BROKEN_SPANISH_ID.test(bare) ? { kind: "invalid" } : { kind: "foreign" };
 }
 
 /**
