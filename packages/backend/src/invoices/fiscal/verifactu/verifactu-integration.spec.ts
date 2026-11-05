@@ -550,7 +550,7 @@ describeDb("VERI*FACTU with a database", () => {
     await due(tenantId);
     expect(await d.sendNext(tenantId)).toEqual({ kind: "no-credentials" });
     expect(transport.post).not.toHaveBeenCalled();
-    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("anonimizado"), expect.stringContaining(tenantId));
+    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("anonimizado"), expect.stringContaining(tenantId), tenantId);
     const chain = await prisma.verifactuChain.findUniqueOrThrow({ where: { tenantId } });
     expect(chain.nextSendAt.getTime() - Date.now()).toBeGreaterThan(6 * 24 * 3600 * 1000);
     expect((await chainOf(tenantId))[0].status).toBe("pending");
@@ -776,7 +776,7 @@ describeDb("VERI*FACTU with a database", () => {
     transport.post = jest.fn(fault("Client"));
     await due(tenantId);
     await d.sendNext(tenantId);
-    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("SOAP Client"), expect.stringContaining("4102"));
+    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("SOAP Client"), expect.stringContaining("4102"), tenantId);
     expect((await prisma.verifactuChain.findUniqueOrThrow({ where: { tenantId } })).incidentSince).toEqual(since);
     expect((await chainOf(tenantId))[0].status).toBe("pending");
   });
@@ -959,6 +959,6 @@ describeDb("VERI*FACTU with a database", () => {
     const d = new VerifactuDispatcher(prisma as any, {} as any, transport, opsAlerts);
     d.credentials = async () => ({ key: "k", cert: "c", type: "personal" });
     expect(await d.sendNext(tenantId)).toMatchObject({ kind: "sent", rejected: 1 });
-    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("rechazados"), expect.any(String));
+    expect(opsAlerts.notify).toHaveBeenCalledWith("fiscal_rejected", expect.stringContaining("rechazados"), expect.any(String), tenantId);
   });
 });
