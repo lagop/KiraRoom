@@ -6,7 +6,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import apiClient, { FiscalSettings, VerifactuStatus } from "@/lib/api";
+import apiClient, { FiscalSettings, VerifactuStatus, ZeroRateTreatment } from "@/lib/api";
 import { VerifactuCard } from "@/components/verifactu/verifactu-card";
 import { Loader2, Save, Upload, ShieldOff, Lock } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
@@ -15,6 +15,9 @@ import {
   changedFiscalFields,
   fiscalChangeSummary,
   issuerFieldsFromSettings,
+  ZERO_RATE_TREATMENTS,
+  zeroRateMissing,
+  zeroRateTreatmentFrom,
   type TaxIdType,
 } from "@/lib/fiscal-settings-form";
 import { useToast } from "@/components/ui/use-toast";
@@ -148,6 +151,7 @@ export default function FiscalSettingsPage() {
     diputacion: "bizkaia" | "gipuzkoa" | "alava" | null;
     taxRegime: TaxRegime;
     pricesIncludeTax: boolean;
+    zeroRateTreatment: ZeroRateTreatment | undefined;
     tenantNif: string;
     taxIdType: TaxIdType;
     legalName: string;
@@ -160,6 +164,7 @@ export default function FiscalSettingsPage() {
     diputacion: null,
     taxRegime: "iva",
     pricesIncludeTax: false,
+    zeroRateTreatment: undefined,
     tenantNif: "",
     taxIdType: "nif",
     legalName: "",
@@ -187,6 +192,7 @@ export default function FiscalSettingsPage() {
         taxRegime: taxRegimeOf(fs),
         // Missing (a salon from before the setting): tax on top, as always.
         pricesIncludeTax: fs.pricesIncludeTax === true,
+        zeroRateTreatment: zeroRateTreatmentFrom(fs),
         ...issuerFieldsFromSettings(settings.data),
       };
       setDraft(next);
@@ -339,6 +345,40 @@ export default function FiscalSettingsPage() {
             )}
           </div>
 
+          {draft.fiscalMode === "verifactu" && (
+            <div>
+              <label htmlFor="zero-rate" className="text-sm font-medium text-gray-900">
+                {t("invoices.fiscalSettings.zeroRateLabel")}
+              </label>
+              <select
+                id="zero-rate"
+                value={draft.zeroRateTreatment ?? ""}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    zeroRateTreatment: e.target.value as ZeroRateTreatment,
+                  }))
+                }
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="" disabled>
+                  {t("invoices.fiscalSettings.zeroRateChoose")}
+                </option>
+                {ZERO_RATE_TREATMENTS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`invoices.fiscalSettings.zeroRateOption.${option}`)}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {t("invoices.fiscalSettings.zeroRateHint")}
+              </p>
+              {zeroRateMissing(draft) && (
+                <p className="mt-1 text-xs text-red-600">{t("invoices.fiscalSettings.zeroRateMissing")}</p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div>
               <label className="text-sm font-medium text-gray-900">
@@ -488,7 +528,7 @@ export default function FiscalSettingsPage() {
           <div className="mt-6 flex justify-end">
             <button
               type="button"
-              disabled={save.isPending || !hasChanges || !rateValid}
+              disabled={save.isPending || !hasChanges || !rateValid || zeroRateMissing(draft)}
               onClick={submit}
               className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
             >

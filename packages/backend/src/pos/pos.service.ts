@@ -54,6 +54,7 @@ import {
 } from '../invoices/invoices.service';
 import { productTaxRatePercent, salonTaxRate } from '../invoices/salon-tax-settings';
 import { issuerSkippedMessage } from '../invoices/invoice-issuer';
+import { ISSUE_TRANSACTION } from '../invoices/fiscal/verifactu/verifactu-records.service';
 import { taxLabelOf } from '@kira/shared';
 import { CLIENT_POS_SELECT } from '../clients/client-select';
 import { clientReachWhere, maskedPhone } from '../clients/client-reach';
@@ -1291,7 +1292,8 @@ export class PosService {
           data: { result: answer, invoiceId: invoice ? (invoice as SimplifiedSaleInvoice).id : null },
         });
         return answer;
-      });
+        // Its invoice and rectificativas wait for the salon's chain like any other.
+      }, ISSUE_TRANSACTION);
     } catch (err) {
       // Nothing was sold: give the points back.
       await giveBackPoints();

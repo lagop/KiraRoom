@@ -7,6 +7,8 @@
  * both. AEAT tolerates "12.3" or "12.30" when it checks, but a record hashed
  * with one and sent with the other does not match its own fingerprint.
  */
+import { validateNif } from "../../../common/validation/nif.validator";
+import type { ForeignId } from "./xml";
 
 /** Cents -> "12.35", "-0.50", "0.00": always two decimals, no leading zeros. */
 export function amount(cents: number): string {
@@ -42,17 +44,6 @@ function wallClock(instant: Date, timeZone: string) {
   return { y, mo, d, h, mi, s, offsetMinutes };
 }
 
-/** "dd-mm-yyyy": the date the salon's calendar shows at `instant`. */
-export function salonDate(instant: Date, timeZone: string): string {
-  const { y, mo, d } = wallClock(instant, timeZone);
-  return `${d}-${mo}-${y}`;
-}
-
-/** The salon-calendar year at `instant` (invoice numbering restarts with it). */
-export function salonYear(instant: Date, timeZone: string): number {
-  return Number(wallClock(instant, timeZone).y);
-}
-
 /**
  * FechaHoraHusoGenRegistro: "YYYY-MM-DDThh:mm:ss+hh:mm" in the time zone
  * where the invoice is issued (Orden HAC/1177/2024 art. 7.e). Exactly 25
@@ -81,6 +72,77 @@ export function nif(value: string | null | undefined): string | null {
   // An "ES" VAT prefix is not part of the NIF.
   const bare = clean.length === 11 && clean.startsWith("ES") ? clean.slice(2) : clean;
   return /^[0-9A-Z]{9}$/.test(bare) ? bare : null;
+}
+
+/** The shapes of a Spanish NIF, NIE and CIF: whatever has one is checked as one. */
+const SPANISH_ID_SHAPE = /^(\d{8}[A-Z]|[XYZ]\d{7}[A-Z]|[A-HJNP-SUVW]\d{7}[0-9A-J])$/;
+
+/**
+ * What follows the prefix of a VAT number of each EU country (VIES formats).
+ * Precise on purpose: a passport like "PT123456" must not pass as a VAT
+ * number. Greece's prefix is EL, its country code GR; GR is accepted too.
+ */
+const EU_VAT: Record<string, { country: string; format: RegExp }> = {
+  AT: { country: "AT", format: /^U\d{8}$/ },
+  BE: { country: "BE", format: /^[01]\d{9}$/ },
+  BG: { country: "BG", format: /^\d{9,10}$/ },
+  CY: { country: "CY", format: /^\d{8}[A-Z]$/ },
+  CZ: { country: "CZ", format: /^\d{8,10}$/ },
+  DE: { country: "DE", format: /^\d{9}$/ },
+  DK: { country: "DK", format: /^\d{8}$/ },
+  EE: { country: "EE", format: /^\d{9}$/ },
+  EL: { country: "GR", format: /^\d{9}$/ },
+  GR: { country: "GR", format: /^\d{9}$/ },
+  FI: { country: "FI", format: /^\d{8}$/ },
+  FR: { country: "FR", format: /^[0-9A-Z]{2}\d{9}$/ },
+  HR: { country: "HR", format: /^\d{11}$/ },
+  HU: { country: "HU", format: /^\d{8}$/ },
+  IE: { country: "IE", format: /^\d[0-9A-Z]\d{5}[A-Z]{1,2}$/ },
+  IT: { country: "IT", format: /^\d{11}$/ },
+  LT: { country: "LT", format: /^(\d{9}|\d{12})$/ },
+  LU: { country: "LU", format: /^\d{8}$/ },
+  LV: { country: "LV", format: /^\d{11}$/ },
+  MT: { country: "MT", format: /^\d{8}$/ },
+  NL: { country: "NL", format: /^\d{9}B\d{2}$/ },
+  PL: { country: "PL", format: /^\d{10}$/ },
+  PT: { country: "PT", format: /^\d{9}$/ },
+  RO: { country: "RO", format: /^\d{2,10}$/ },
+  SE: { country: "SE", format: /^\d{12}$/ },
+  SI: { country: "SI", format: /^\d{8}$/ },
+  SK: { country: "SK", format: /^\d{10}$/ },
+};
+
+export type RecipientId =
+  /** Nothing given. */
+  | { kind: "none" }
+  /** A valid Spanish NIF, NIE or CIF. */
+  | { kind: "nif"; nif: string }
+  /** A VAT number of another EU country: IDOtro, IDType 02. */
+  | { kind: "vat"; otro: ForeignId }
+  /** Written like a Spanish NIF, but its control character is wrong. */
+  | { kind: "invalid" }
+  /**
+   * Anything else: a passport, a foreign document. There is no country for
+   * it in the data, so it cannot go as IDOtro, and it never goes as a NIF.
+   */
+  | { kind: "foreign" };
+
+/** What the invoice's tax identifier is, as far as the AEAT is concerned. */
+export function recipientId(value: string | null | undefined): RecipientId {
+  const clean = (value ?? "").toUpperCase().replace(/[\s.\-]/g, "");
+  if (!clean) return { kind: "none" };
+  const bare = clean.length === 11 && clean.startsWith("ES") ? clean.slice(2) : clean;
+  if (SPANISH_ID_SHAPE.test(bare)) {
+    const check = validateNif(bare);
+    return check.valid && check.normalized ? { kind: "nif", nif: check.normalized } : { kind: "invalid" };
+  }
+  const vat = EU_VAT[clean.slice(0, 2)];
+  if (vat?.format.test(clean.slice(2))) {
+    // The number as VIES has it, with Greece's own prefix.
+    const id = clean.startsWith("GR") ? `EL${clean.slice(2)}` : clean;
+    return { kind: "vat", otro: { country: vat.country, idType: "02", id } };
+  }
+  return { kind: "foreign" };
 }
 
 /**

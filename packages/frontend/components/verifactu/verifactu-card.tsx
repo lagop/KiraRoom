@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FileKey } from "lucide-react";
 import apiClient, { VerifactuStatus } from "@/lib/api";
+import { pollWhileActive } from "@/lib/fiscal-settings-form";
 import { useTranslations } from "@/lib/use-translation";
 
 const when = (iso: string | null) =>
@@ -18,7 +19,7 @@ export function VerifactuCard() {
   const status = useQuery<VerifactuStatus>({
     queryKey: ["verifactu", "status"],
     queryFn: () => apiClient.getVerifactuStatus(),
-    refetchInterval: 30_000,
+    refetchInterval: pollWhileActive(30_000),
   });
 
   const s = status.data;
@@ -94,8 +95,6 @@ export function VerifactuCard() {
               {s.certificate.certificateType === "seal" && <span className="text-gray-500"> · {t("invoices.verifactu.seal")}</span>}
             </span>
           </p>
-        ) : s.platformCertificate ? (
-          <p className="text-sm text-gray-600">{t("invoices.verifactu.platformCertificate")}</p>
         ) : (
           <p className="text-sm text-gray-600">{t("invoices.verifactu.noCertificate")}</p>
         )}

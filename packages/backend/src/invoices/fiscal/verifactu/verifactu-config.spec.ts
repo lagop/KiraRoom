@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import { join } from "path";
-import { PRODUCER, producer, verifactuAvailable } from "./config";
+import { PRODUCER, producer } from "./config";
 import { fiscalSubmissionAvailable } from "../fiscal-availability";
 
 describe("VERI*FACTU configuration", () => {
@@ -14,9 +14,8 @@ describe("VERI*FACTU configuration", () => {
 
   it("in production nothing is available without the explicit flag", () => {
     const production = { NODE_ENV: "production" } as unknown as NodeJS.ProcessEnv;
-    expect(verifactuAvailable(production)).toBe(false);
     expect(fiscalSubmissionAvailable(production)).toBe(false);
-    expect(verifactuAvailable({ ...production, FISCAL_SUBMISSION_ENABLED: "0" })).toBe(false);
-    expect(verifactuAvailable({ ...production, FISCAL_SUBMISSION_ENABLED: "1" })).toBe(true);
+    expect(fiscalSubmissionAvailable({ ...production, FISCAL_SUBMISSION_ENABLED: "0" })).toBe(false);
+    expect(fiscalSubmissionAvailable({ ...production, FISCAL_SUBMISSION_ENABLED: "1" })).toBe(true);
   });
 });

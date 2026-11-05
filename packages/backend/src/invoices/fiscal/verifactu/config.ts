@@ -88,14 +88,6 @@ export function qrBase(env: NodeJS.ProcessEnv = process.env): string {
   return QR_BASE[environment(env)];
 }
 
-/**
- * Whether salons may switch VERI*FACTU on and records are generated and
- * sent: in production only with the explicit FISCAL_SUBMISSION_ENABLED=1.
- */
-export function verifactuAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV !== "production" || env.FISCAL_SUBMISSION_ENABLED === "1";
-}
-
 /** Maximum records per submission (SuministroLR.xsd, RegistroFactura maxOccurs). */
 export const MAX_RECORDS_PER_SUBMISSION = 1000;
 /** Initial wait between submissions (Orden HAC/1177/2024 art. 16.2). */

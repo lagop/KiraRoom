@@ -120,20 +120,32 @@ describe("formats", () => {
     expect(format.generatedAt(winter, "Europe/Madrid")).toHaveLength(25);
   });
 
-  it("the expedition date is the salon's calendar day, not UTC's", () => {
-    // 23:30 UTC on 31 December is already 1 January in Madrid.
-    const instant = new Date("2026-12-31T23:30:00Z");
-    expect(format.salonDate(instant, "Europe/Madrid")).toBe("01-01-2027");
-    expect(format.salonYear(instant, "Europe/Madrid")).toBe(2027);
-    expect(format.salonDate(instant, "Atlantic/Canary")).toBe("31-12-2026");
-  });
-
   it("NIFs are normalised, and anything else is refused", () => {
     expect(format.nif("12345678-z")).toBe("12345678Z");
     expect(format.nif(" b 12.345.678 ")).toBe("B12345678");
     expect(format.nif("ESB12345678")).toBe("B12345678");
     expect(format.nif("1234")).toBeNull();
     expect(format.nif(null)).toBeNull();
+  });
+
+  it("a recipient's identifier: never a false NIF", () => {
+    // Spanish NIF, NIE and CIF, by their control character.
+    expect(format.recipientId("12345678-z")).toEqual({ kind: "nif", nif: "12345678Z" });
+    expect(format.recipientId("X1234567L")).toEqual({ kind: "nif", nif: "X1234567L" });
+    expect(format.recipientId("ESB87654323")).toEqual({ kind: "nif", nif: "B87654323" });
+    expect(format.recipientId("12345678A")).toEqual({ kind: "invalid" });
+    expect(format.recipientId("B87654321")).toEqual({ kind: "invalid" });
+    // VAT numbers of other EU countries, with their country.
+    expect(format.recipientId("DE 123456789")).toEqual({ kind: "vat", otro: { country: "DE", idType: "02", id: "DE123456789" } });
+    expect(format.recipientId("FRXX123456789")).toEqual({ kind: "vat", otro: { country: "FR", idType: "02", id: "FRXX123456789" } });
+    expect(format.recipientId("EL123456789")).toEqual({ kind: "vat", otro: { country: "GR", idType: "02", id: "EL123456789" } });
+    expect(format.recipientId("GR123456789")).toEqual({ kind: "vat", otro: { country: "GR", idType: "02", id: "EL123456789" } });
+    // Anything else has no country: a passport, even one that starts like a prefix.
+    expect(format.recipientId("AB1234567")).toEqual({ kind: "foreign" });
+    expect(format.recipientId("PT123456")).toEqual({ kind: "foreign" });
+    expect(format.recipientId("GB123456789")).toEqual({ kind: "foreign" });
+    expect(format.recipientId("  ")).toEqual({ kind: "none" });
+    expect(format.recipientId(null)).toEqual({ kind: "none" });
   });
 
   it("invoice numbers AEAT would reject are caught before sending", () => {
@@ -243,6 +255,61 @@ describe("XML against the official XSD", () => {
     });
     expect(await validate(regFactu(salon, [sub, anul], false, true), "SuministroLR.xsd")).toEqual([]);
     expect(sub).toContain("<sum1:Subsanacion>S</sum1:Subsanacion><sum1:RechazoPrevio>X</sum1:RechazoPrevio>");
+  });
+
+  it("a repeated anulación: RechazoPrevio after SinRegistroPrevio, as the schema orders them", async () => {
+    const anul = registroAnulacion({
+      refExterna: "rec-4",
+      invoice: { nif: salon.nif, numSerie: "A000002", fecha: "02-10-2026" },
+      sinRegistroPrevio: true,
+      rechazoPrevio: true,
+      previous: { nif: salon.nif, numSerie: "A000002", fecha: "02-10-2026", huella: "D".repeat(64) },
+      system,
+      generatedAt: "2026-10-02T10:20:00+02:00",
+      huella: "E".repeat(64),
+    });
+    expect(await validate(regFactu(salon, [anul], false, true), "SuministroLR.xsd")).toEqual([]);
+    expect(anul).toContain("<sum1:SinRegistroPrevio>S</sum1:SinRegistroPrevio><sum1:RechazoPrevio>S</sum1:RechazoPrevio>");
+  });
+
+  it("an exempt 0 % line: OperacionExenta, no rate and no cuota; the rest stay S1", async () => {
+    const xml = registroAlta(
+      alta({
+        desglose: [
+          { impuesto: "01", operation: "E1", rate: "0", base: "30.00", cuota: "0.00" },
+          { impuesto: "01", rate: "21", base: "100.00", cuota: "21.00" },
+        ],
+        cuotaTotal: "21.00",
+        importeTotal: "151.00",
+      }),
+    );
+    expect(await validate(regFactu(salon, [xml], false, true), "SuministroLR.xsd")).toEqual([]);
+    expect(xml).toContain(
+      "<sum1:ClaveRegimen>01</sum1:ClaveRegimen><sum1:OperacionExenta>E1</sum1:OperacionExenta><sum1:BaseImponibleOimporteNoSujeto>30.00</sum1:BaseImponibleOimporteNoSujeto></sum1:DetalleDesglose>",
+    );
+    expect(xml).toContain(
+      "<sum1:CalificacionOperacion>S1</sum1:CalificacionOperacion><sum1:TipoImpositivo>21</sum1:TipoImpositivo><sum1:BaseImponibleOimporteNoSujeto>100.00</sum1:BaseImponibleOimporteNoSujeto><sum1:CuotaRepercutida>21.00</sum1:CuotaRepercutida>",
+    );
+  });
+
+  it("a not-subject 0 % line: its N code, no rate and no cuota", async () => {
+    const xml = registroAlta(
+      alta({ desglose: [{ impuesto: "03", operation: "N2", rate: "0", base: "30.00", cuota: "0.00" }], cuotaTotal: "0.00", importeTotal: "30.00" }),
+    );
+    expect(await validate(regFactu(salon, [xml], false, true), "SuministroLR.xsd")).toEqual([]);
+    expect(xml).toContain("<sum1:CalificacionOperacion>N2</sum1:CalificacionOperacion><sum1:BaseImponibleOimporteNoSujeto>30.00");
+    expect(xml).not.toContain("TipoImpositivo");
+    expect(xml).not.toContain("CuotaRepercutida");
+  });
+
+  it("a recipient with an EU VAT number goes as IDOtro", async () => {
+    const xml = registroAlta(
+      alta({ tipoFactura: "F1", recipient: { name: "Kunde GmbH", otro: { country: "DE", idType: "02", id: "DE123456789" } } }),
+    );
+    expect(await validate(regFactu(salon, [xml], false, true), "SuministroLR.xsd")).toEqual([]);
+    expect(xml).toContain(
+      "<sum1:IDOtro><sum1:CodigoPais>DE</sum1:CodigoPais><sum1:IDType>02</sum1:IDType><sum1:ID>DE123456789</sum1:ID></sum1:IDOtro>",
+    );
   });
 
   it("escapes text: the salon's name and the descriptions", () => {

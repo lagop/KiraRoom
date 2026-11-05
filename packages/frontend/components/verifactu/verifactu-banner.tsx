@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import apiClient, { VerifactuStatus } from "@/lib/api";
+import { pollWhileActive } from "@/lib/fiscal-settings-form";
 import { useTranslations } from "@/lib/use-translation";
 
 /**
@@ -15,7 +16,9 @@ export function VerifactuBanner() {
   const { data } = useQuery<VerifactuStatus>({
     queryKey: ["verifactu", "status"],
     queryFn: () => apiClient.getVerifactuStatus(),
-    refetchInterval: 60_000,
+    // Once for a salon that has not activated it, and never again until
+    // Ajustes fiscales invalidates this query on activating.
+    refetchInterval: pollWhileActive(60_000),
     retry: false,
   });
   if (!data?.active) return null;

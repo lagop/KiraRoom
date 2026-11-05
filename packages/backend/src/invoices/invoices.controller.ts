@@ -18,9 +18,9 @@
   UseGuards,
 } from "@nestjs/common";
 import { fiscalSubmissionAvailable, FISCAL_SUBMISSION_UNAVAILABLE } from "./fiscal/fiscal-availability";
-import { verifactuAvailable } from "./fiscal/verifactu/config";
 import { nif as normaliseNif } from "./fiscal/verifactu/format";
 import { NS } from "./fiscal/verifactu/xml";
+import { zeroRateTreatmentOf } from "./fiscal/verifactu/zero-rate";
 import { installationNumberFor } from "./fiscal/verifactu/verifactu-records.service";
 import type { Response } from "express";
 import { Request } from "express";
@@ -334,6 +334,7 @@ export class InvoicesController {
       ...(identity.taxId !== undefined ? { tenantNif: identity.taxId } : {}),
       ...(dto.taxRegime !== undefined ? { taxRegime: dto.taxRegime } : {}),
       ...(typeof dto.pricesIncludeTax === "boolean" ? { pricesIncludeTax: dto.pricesIncludeTax } : {}),
+      ...(dto.zeroRateTreatment !== undefined ? { zeroRateTreatment: dto.zeroRateTreatment } : {}),
     };
 
     // Switching regime without touching the rate would leave a Canarian salon
@@ -440,13 +441,13 @@ export class InvoicesController {
   }
 
   /**
-   * VERI*FACTU: switching it on needs the salon's NIF and a certificate to
-   * submit with; once on, it stays on until 31 December of the year
+   * VERI*FACTU: switching it on needs the salon's NIF, its own certificate to
+   * submit with and what a 0 % line means for it; once on, it stays on until 31 December of the year
    * (Orden HAC/1177/2024 art. 17.2). TicketBAI and SII are not available.
    */
   private async checkFiscalModeChange(
     tenantId: string,
-    current: { fiscalMode: FiscalMode; taxId: string | null; timezone: string } | null,
+    current: { fiscalMode: FiscalMode; fiscalSettings: unknown; taxId: string | null; timezone: string } | null,
     dto: UpdateTenantFiscalSettingsDto,
     newTaxId: string | undefined,
   ) {
@@ -466,16 +467,21 @@ export class InvoicesController {
     }
 
     if (target === FiscalMode.verifactu) {
-      if (!verifactuAvailable()) throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
+      if (!fiscalSubmissionAvailable()) throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
       if (!normaliseNif(newTaxId ?? current?.taxId)) {
         throw new BadRequestException("Para activar Verifactu, indica el NIF del salón.");
       }
-      const hasCertificate =
-        !!process.env.VERIFACTU_PLATFORM_P12 ||
-        (await this.prisma.fiscalCertificate.count({ where: { tenantId, isActive: true, notAfter: { gt: new Date() } } })) > 0;
-      if (!hasCertificate) {
+      const certificates = await this.prisma.fiscalCertificate.count({
+        where: { tenantId, isActive: true, notAfter: { gt: new Date() } },
+      });
+      if (certificates === 0) {
         throw new BadRequestException(
           "Para activar Verifactu, sube primero el certificado electrónico con el que se enviarán las facturas a la AEAT.",
+        );
+      }
+      if (!dto.zeroRateTreatment && !zeroRateTreatmentOf(current?.fiscalSettings)) {
+        throw new BadRequestException(
+          "Para activar Verifactu, indica qué significa el 0 % en tus facturas. Si no lo usas, elige «No uso el 0 %».",
         );
       }
       await this.prisma.verifactuChain.upsert({

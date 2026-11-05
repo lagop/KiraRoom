@@ -10,9 +10,9 @@ import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
+import { runUnscoped } from "../common/tenancy/tenant.context";
 import { ISSUE_TRANSACTION, VerifactuRecordsService } from "./fiscal/verifactu/verifactu-records.service";
 import { VerifactuDispatcher } from "./fiscal/verifactu/verifactu-dispatcher.service";
-import { verifactuAvailable } from "./fiscal/verifactu/config";
 import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { pricesIncludeTaxOf } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
@@ -181,9 +181,14 @@ export class InvoiceService {
     @Optional() private readonly verifactuDispatcher?: VerifactuDispatcher,
   ) {}
 
-  /** Whether this salon's invoices go through the VERI*FACTU record chain. */
+  /**
+   * Whether this salon may be on the VERI*FACTU record chain; insert() also
+   * needs its chain row. It follows the activation alone: the flag only opens
+   * activating and sending, and an activated salon goes on recording, with
+   * its records queued, whatever happens to the flag.
+   */
   private recordsVerifactu(fiscalMode: FiscalMode): boolean {
-    return fiscalMode === FiscalMode.verifactu && !!this.verifactu && verifactuAvailable();
+    return fiscalMode === FiscalMode.verifactu && !!this.verifactu;
   }
 
   async create(input: CreateInvoiceInput): Promise<{ id: string }> {
@@ -855,8 +860,12 @@ export class InvoiceService {
     }
     const last = await this.prisma.verifactuRecord.findFirst({ where: { invoiceId: id }, orderBy: { sequence: "desc" } });
     if (last && this.verifactu) {
-      if (last.status === "rejected" || last.status === "accepted_with_errors") {
-        // A new, corrected record; the rejected one stays as it was.
+      // A new record; the one with errors stays as it was. An anulación
+      // has no correction: rejected, it is generated again; accepted with
+      // errors, it annulled the invoice.
+      if (last.kind === "anulacion") {
+        if (last.status === "rejected") await this.verifactu.recordAnulacionAgain(tenantId, id);
+      } else if (last.status === "rejected" || last.status === "accepted_with_errors") {
         await this.verifactu.recordSubsanacion(tenantId, id);
       }
       // Waiting records go with the next submission; after a failure, try now.
@@ -864,7 +873,7 @@ export class InvoiceService {
         where: { tenantId, failedAttempts: { gt: 0 } },
         data: { nextSendAt: new Date() },
       });
-      void this.verifactuDispatcher?.tick();
+      this.kickDispatcher();
       return this.findOne(tenantId, id);
     }
     await this.prisma.invoice.update({
@@ -876,6 +885,19 @@ export class InvoiceService {
     });
     await this.fiscal.dispatchInvoice(id);
     return this.findOne(tenantId, id);
+  }
+
+  /**
+   * Sends what is due now instead of at the next interval, in the background.
+   * The dispatcher works across salons, so not inside this request's tenant:
+   * there it would only see this salon, and leave the others to wait.
+   */
+  private kickDispatcher(): void {
+    const dispatcher = this.verifactuDispatcher;
+    if (!dispatcher) return;
+    void runUnscoped(() => dispatcher.tick()).catch((err) => {
+      this.logger.warn(`VERI*FACTU submission after a resend failed: ${(err as Error).message}`);
+    });
   }
 
   /** The live (not cancelled) rectificativas of `original`, by note or line link (see creditContext). */

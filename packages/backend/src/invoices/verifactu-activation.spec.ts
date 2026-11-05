@@ -1,10 +1,13 @@
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
+import { UpdateTenantFiscalSettingsDto } from "./dto/invoice.dto";
 import { InvoicesController } from "./invoices.controller";
 
 /** PATCH /invoices/settings/fiscal: when the fiscal mode may change. */
 function setup(row: Record<string, unknown> = {}, counts: { certificates?: number; records?: number } = {}) {
   const stored: Record<string, unknown> = {
     fiscalMode: "none",
-    fiscalSettings: { defaultSeries: "A" },
+    fiscalSettings: { defaultSeries: "A", zeroRateTreatment: "none" },
     taxId: "B12345674",
     taxIdType: "cif",
     legalName: "Peluquería Ejemplo S.L.",
@@ -63,12 +66,34 @@ describe("switching the fiscal mode", () => {
     );
   });
 
-  it("activating needs a NIF and a certificate", async () => {
+  it("activating needs a NIF and the salon's own certificate; no platform certificate stands in", async () => {
     production("1");
-    delete process.env.VERIFACTU_PLATFORM_P12;
+    process.env.VERIFACTU_PLATFORM_P12 = "ignored";
     const noCert = setup();
     await expect(noCert.controller.updateFiscalSettings(noCert.req, { fiscalMode: "verifactu" } as any)).rejects.toThrow(/certificado/);
     expect(noCert.prisma.tenant.update).not.toHaveBeenCalled();
+  });
+
+  it("activating needs an answer for the 0 %; «No uso el 0 %» is one", async () => {
+    production("1");
+    const unanswered = setup({ fiscalSettings: { defaultSeries: "A" } }, { certificates: 1 });
+    await expect(unanswered.controller.updateFiscalSettings(unanswered.req, { fiscalMode: "verifactu" } as any)).rejects.toThrow(
+      /qué significa el 0 %/,
+    );
+    expect(unanswered.prisma.tenant.update).not.toHaveBeenCalled();
+    expect(unanswered.prisma.verifactuChain.upsert).not.toHaveBeenCalled();
+
+    const answered = setup({ fiscalSettings: { defaultSeries: "A" } }, { certificates: 1 });
+    await answered.controller.updateFiscalSettings(answered.req, { fiscalMode: "verifactu", zeroRateTreatment: "none" } as any);
+    expect(answered.stored.fiscalMode).toBe("verifactu");
+    expect(answered.stored.fiscalSettings).toMatchObject({ zeroRateTreatment: "none", defaultSeries: "A" });
+  });
+
+  it("the 0 % setting only takes the codes of the schema", async () => {
+    const check = (zeroRateTreatment: string) =>
+      validate(plainToInstance(UpdateTenantFiscalSettingsDto, { zeroRateTreatment }));
+    for (const ok of ["none", "S1", "E1", "E6", "N1", "N2"]) expect(await check(ok)).toEqual([]);
+    for (const bad of ["E7", "S2", "exento", ""]) expect(await check(bad)).toHaveLength(1);
   });
 
   it("once it has records this year it stays on until 31 December; with none it can go off", async () => {

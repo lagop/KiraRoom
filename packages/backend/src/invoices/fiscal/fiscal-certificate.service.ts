@@ -3,6 +3,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { EncryptionService } from "../../common/encryption/encryption.service";
 import { createHash } from "crypto";
 import { openPkcs12 } from "./verifactu/certificate";
+import { nif } from "./verifactu/format";
 
 /**
  * The columns of a certificate that may be sent to the panel. Never add
@@ -100,25 +101,27 @@ export class FiscalCertificateService {
     // Raw DER kept as well: the XAdES signer (TicketBAI) reads it.
     const rawDer = Buffer.from(input.pkcs12Base64, "base64").toString("binary");
     const tenant = await this.prisma.tenant.findUnique({ where: { id: input.tenantId }, select: { taxId: true } });
-    const salonNif = tenant?.taxId?.toUpperCase().replace(/[\s.\-]/g, "") ?? null;
-    // A new certificate replaces the previous one.
-    await this.prisma.fiscalCertificate.updateMany({ where: { tenantId: input.tenantId, isActive: true }, data: { isActive: false } });
-    const cert = await this.prisma.fiscalCertificate.create({
-      data: {
-        tenantId: input.tenantId,
-        alias: input.alias,
-        provider: input.provider,
-        encryptedPem: this.encryption.encrypt(rawDer),
-        passphraseCipher: this.encryption.encrypt(input.passphrase),
-        encryptedKeyPair: this.encryption.encrypt(JSON.stringify({ keyPem: opened.keyPem, certPem: opened.certPem })),
-        certificateType: input.certificateType ?? "personal",
-        fingerprint: opened.fingerprint,
-        subject: opened.subject,
-        issuer: opened.issuer,
-        notBefore: opened.notBefore,
-        notAfter: opened.notAfter,
-        isActive: true,
-      },
+    const salonNif = nif(tenant?.taxId);
+    const data = {
+      tenantId: input.tenantId,
+      alias: input.alias,
+      provider: input.provider,
+      encryptedPem: this.encryption.encrypt(rawDer),
+      passphraseCipher: this.encryption.encrypt(input.passphrase),
+      encryptedKeyPair: this.encryption.encrypt(JSON.stringify({ keyPem: opened.keyPem, certPem: opened.certPem })),
+      certificateType: input.certificateType ?? "personal",
+      fingerprint: opened.fingerprint,
+      subject: opened.subject,
+      issuer: opened.issuer,
+      notBefore: opened.notBefore,
+      notAfter: opened.notAfter,
+      isActive: true,
+    };
+    // A new certificate replaces the previous one: both or neither, so a
+    // failed save never leaves the salon without a certificate to send with.
+    const cert = await this.prisma.$transaction(async (tx) => {
+      await tx.fiscalCertificate.updateMany({ where: { tenantId: input.tenantId, isActive: true }, data: { isActive: false } });
+      return tx.fiscalCertificate.create({ data });
     });
     return {
       id: cert.id,

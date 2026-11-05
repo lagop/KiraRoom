@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable } from "@nestjs/common";
-import { Invoice, InvoiceLine, Prisma, VerifactuRecordKind, VerifactuRecordStatus } from "@prisma/client";
+import { Invoice, InvoiceLine, Prisma, VerifactuRecord, VerifactuRecordKind, VerifactuRecordStatus } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { PrismaService } from "../../../common/prisma/prisma.service";
 import { DEFAULT_SALON_TIMEZONE, taxRegimeOf } from "@kira/shared";
@@ -9,6 +9,7 @@ import * as format from "./format";
 import { altaHash, anulacionHash } from "./hash";
 import { qrUrl } from "./qr";
 import { AltaRecord, InvoiceId, PreviousRecord, SystemInstallation, TaxLine, registroAlta, registroAnulacion } from "./xml";
+import { OperationCode, ZeroRateTreatment, zeroRateTreatmentOf } from "./zero-rate";
 
 type Tx = Prisma.TransactionClient;
 type ChainContext = Awaited<ReturnType<VerifactuRecordsService["lockChain"]>>;
@@ -97,6 +98,32 @@ export class VerifactuRecordsService {
     if (records[0].kind === VerifactuRecordKind.anulacion) {
       throw new ConflictException("Esta factura ya está anulada");
     }
+    await this.appendAnulacion(tx, ctx, invoiceId, records, false);
+    return true;
+  }
+
+  /**
+   * A new anulación for an invoice whose anulación the AEAT rejected, chained
+   * as the newest record, with RechazoPrevio=S. SinRegistroPrevio is worked
+   * out again: the alta may have been rejected after the first anulación was
+   * generated (the salon cancelled while it was still queued).
+   */
+  async recordAnulacionAgain(tenantId: string, invoiceId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const ctx = await this.lockChain(tx, tenantId);
+      const records = await tx.verifactuRecord.findMany({ where: { tenantId, invoiceId }, orderBy: { sequence: "desc" } });
+      if (records[0]?.kind !== VerifactuRecordKind.anulacion) {
+        throw new BadRequestException("No hay un registro de anulación que repetir");
+      }
+      if (records[0].status !== VerifactuRecordStatus.rejected) {
+        throw new ConflictException("El registro no tiene errores que corregir");
+      }
+      await this.appendAnulacion(tx, ctx, invoiceId, records, true);
+      await tx.invoice.update({ where: { id: invoiceId }, data: { fiscalStatus: "pending", fiscalError: null } });
+    }, ISSUE_TRANSACTION);
+  }
+
+  private async appendAnulacion(tx: Tx, ctx: ChainContext, invoiceId: string, records: VerifactuRecord[], rechazoPrevio: boolean) {
     const alta = records[0];
     const id = randomUUID();
     const generated = this.generationInstant(ctx.chain.lastGeneratedAt);
@@ -111,8 +138,8 @@ export class VerifactuRecordsService {
     const xml = registroAnulacion({
       refExterna: id,
       invoice: { nif: alta.nif, numSerie: alta.numSerie, fecha: alta.fecha },
-      // The AEAT never registered the alta: it was rejected.
-      sinRegistroPrevio: alta.status === VerifactuRecordStatus.rejected,
+      sinRegistroPrevio: !holdsAlta(records),
+      rechazoPrevio,
       previous: this.previous(ctx.chain),
       system: ctx.system,
       generatedAt,
@@ -130,20 +157,20 @@ export class VerifactuRecordsService {
       hash,
       xml,
     });
-    return true;
   }
 
   /**
-   * A new alta for an invoice whose record the AEAT rejected (Subsanacion=S,
-   * RechazoPrevio=X) or accepted with errors (Subsanacion=S), chained as the
-   * newest record. The record with errors is never modified; an issued
+   * A new alta for an invoice whose record the AEAT rejected or accepted
+   * with errors (Subsanacion=S; RechazoPrevio=X when the AEAT holds no alta of
+   * it, S when it holds an earlier one), chained as the newest record. The record with errors is never modified; an issued
    * invoice does not change either, so the new record carries the same
    * invoice data.
    */
   async recordSubsanacion(tenantId: string, invoiceId: string): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       const ctx = await this.lockChain(tx, tenantId);
-      const last = await tx.verifactuRecord.findFirst({ where: { tenantId, invoiceId }, orderBy: { sequence: "desc" } });
+      const records = await tx.verifactuRecord.findMany({ where: { tenantId, invoiceId }, orderBy: { sequence: "desc" } });
+      const last = records[0];
       if (!last || last.kind !== VerifactuRecordKind.alta) {
         throw new BadRequestException("No hay un registro de alta que corregir");
       }
@@ -153,7 +180,7 @@ export class VerifactuRecordsService {
       const invoice = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId }, include: { lines: true } });
       const alta = await this.buildAlta(tx, ctx, invoice, {
         subsanacion: true,
-        rechazoPrevio: last.status === VerifactuRecordStatus.rejected ? "X" : "N",
+        rechazoPrevio: last.status !== VerifactuRecordStatus.rejected ? "N" : holdsAlta(records) ? "S" : "X",
         // The invoice's identity stays the one first recorded.
         fecha: last.fecha,
       });
@@ -171,18 +198,13 @@ export class VerifactuRecordsService {
     tx: Tx,
     ctx: ChainContext,
     invoice: Invoice & { lines: InvoiceLine[] },
-    opts: { subsanacion?: boolean; rechazoPrevio?: "N" | "X"; fecha?: string },
+    opts: { subsanacion?: boolean; rechazoPrevio?: AltaRecord["rechazoPrevio"]; fecha?: string },
   ) {
     const numSerie = format.invoiceNumber(invoice.series, invoice.number);
     // The issue date is the salon's day stored at 00:00 UTC (invoice-numbering.ts).
     const fecha = opts.fecha ?? recordDate(invoice.issueDate, ctx.timeZone);
-    const recipientNif = format.nif(invoice.recipientTaxId);
-    // A ticket is valid without the client's NIF: one that does not parse
-    // leaves it as a plain simplificada, and never stops a sale at the till.
+    const recipient = format.recipientId(invoice.recipientTaxId);
     const ticket = invoice.series === SIMPLIFIED_SERIES;
-    if (invoice.recipientTaxId?.trim() && !recipientNif && !ticket) {
-      throw new BadRequestException(`El NIF del cliente "${invoice.recipientTaxId}" no es válido`);
-    }
 
     let tipoFactura: AltaRecord["tipoFactura"];
     let rectified: InvoiceId[] | undefined;
@@ -192,15 +214,17 @@ export class VerifactuRecordsService {
         orderBy: { sequence: "desc" },
       });
       if (original) {
-        // A simplified invoice is corrected with R5; any other with R1.
+        // A simplified invoice is corrected with R5; any other with R1. It
+        // follows the original, which the AEAT holds under that type.
         tipoFactura = original.tipoFactura === "F2" || original.tipoFactura === "R5" ? "R5" : "R1";
         rectified = [{ nif: original.nif, numSerie: original.numSerie, fecha: original.fecha }];
       } else {
         // Issued before the salon switched VERI*FACTU on: it has no record,
         // and the AEAT only needs its identification. The rectificativa is
-        // an ordinary new record of the chain.
+        // an ordinary new record of the chain. Without a recipient the AEAT
+        // can take, it is corrected as one that names nobody.
         const old = await tx.invoice.findUniqueOrThrow({ where: { id: invoice.rectifiesInvoiceId } });
-        tipoFactura = recipientNif ? "R1" : "R5";
+        tipoFactura = identifies(format.recipientId(old.recipientTaxId)) ? "R1" : "R5";
         rectified = [
           {
             nif: format.nif(old.issuerTaxIdAtIssue) ?? ctx.nif,
@@ -210,15 +234,29 @@ export class VerifactuRecordsService {
         ];
       }
     } else {
-      tipoFactura = recipientNif ? "F1" : "F2";
+      // A ticket is valid without the client's NIF: one that does not check
+      // leaves it as a plain simplificada, and never stops a sale at the till.
+      if (recipient.kind === "invalid" && !ticket) {
+        throw new BadRequestException(
+          `El NIF del cliente "${invoice.recipientTaxId}" no es válido. Si es un documento extranjero y no un NIF español, déjalo fuera de este campo.`,
+        );
+      }
+      // F2 is also the invoice "sin identificación del destinatario": a
+      // passport or foreign document has no country to go with it (IDOtro),
+      // and is never sent as a NIF. It stays on the invoice itself.
+      tipoFactura = identifies(recipient) ? "F1" : "F2";
       if (tipoFactura === "F2" && Math.abs(invoice.totalCents) > SIMPLIFIED_LIMIT_CENTS) {
-        throw new BadRequestException("Una factura de más de 3.000 € tiene que ser completa: añade el nombre y el NIF del cliente.");
+        throw new BadRequestException(
+          recipient.kind === "foreign"
+            ? "Una factura de más de 3.000 € tiene que identificar al cliente: con Verifactu, indica un NIF español o un NIF-IVA de la UE con su prefijo de país (por ejemplo DE123456789). Un pasaporte u otro documento extranjero no sirve aquí, porque la AEAT pide el país."
+            : "Una factura de más de 3.000 € tiene que ser completa: añade el nombre y el NIF del cliente.",
+        );
       }
     }
     const withRecipient = tipoFactura === "F1" || tipoFactura === "R1";
     // A ticket naming the client with her NIF (RD 1619/2012 art. 7.2) goes as F1, flagged.
     const simplifiedWithRecipient = ticket && tipoFactura === "F1";
-    if (withRecipient && !recipientNif) throw new BadRequestException("Esta factura necesita el NIF del cliente");
+    if (withRecipient && !identifies(recipient)) throw new BadRequestException("Esta factura necesita el NIF del cliente");
 
     const breakdown = (invoice.taxBreakdown as Array<{ rate: number; baseCents: number; taxCents: number }>) ?? [];
     if (breakdown.length < 1 || breakdown.length > 12) {
@@ -226,6 +264,7 @@ export class VerifactuRecordsService {
     }
     const desglose: TaxLine[] = breakdown.map((t) => ({
       impuesto: TAX_CODE[ctx.taxRegime],
+      operation: Number(t.rate) === 0 ? zeroRateOperation(ctx.zeroRate) : undefined,
       rate: format.rate(t.rate),
       base: format.amount(t.baseCents),
       cuota: format.amount(t.taxCents),
@@ -259,7 +298,7 @@ export class VerifactuRecordsService {
       rectified,
       descripcion,
       simplifiedWithRecipient,
-      recipient: withRecipient ? { name: format.text(invoice.recipientName, 120), nif: recipientNif! } : undefined,
+      recipient: withRecipient ? recipientOf(invoice.recipientName, recipient) : undefined,
       desglose,
       cuotaTotal,
       importeTotal,
@@ -313,6 +352,7 @@ export class VerifactuRecordsService {
       issuerName: format.text(tenant.legalName || tenant.name, 120),
       timeZone: tenant.timezone || DEFAULT_SALON_TIMEZONE,
       taxRegime: taxRegimeOf(settings),
+      zeroRate: zeroRateTreatmentOf(settings),
       chain,
       system,
     };
@@ -382,6 +422,35 @@ export class VerifactuRecordsService {
       },
     });
   }
+}
+
+/**
+ * Whether the AEAT holds, or is about to get, an alta of this invoice: one
+ * answered as registered, or still queued (it goes first, in chain order).
+ */
+function holdsAlta(records: VerifactuRecord[]): boolean {
+  return records.some((r) => r.kind === VerifactuRecordKind.alta && r.status !== VerifactuRecordStatus.rejected);
+}
+
+/** Whether this identifier can name the recipient of a record. */
+function identifies(id: format.RecipientId): id is Extract<format.RecipientId, { kind: "nif" | "vat" }> {
+  return id.kind === "nif" || id.kind === "vat";
+}
+
+function recipientOf(name: string, id: format.RecipientId): AltaRecord["recipient"] {
+  if (!identifies(id)) return undefined;
+  const nombre = format.text(name, 120);
+  return id.kind === "nif" ? { name: nombre, nif: id.nif } : { name: nombre, otro: id.otro };
+}
+
+/** What a 0 % line is for the AEAT, as the salon said; refused if it said it does not use it. */
+function zeroRateOperation(treatment: ZeroRateTreatment | null): OperationCode {
+  if (!treatment || treatment === "none") {
+    throw new BadRequestException(
+      "Esta factura lleva una línea al 0 % y en Ajustes fiscales consta que el salón no usa el 0 %. Pon el tipo correcto en la línea, o indica en Ajustes fiscales qué significa el 0 % en tus facturas.",
+    );
+  }
+  return treatment;
 }
 
 /** The Impuesto of the record per the salon's regime: 01 IVA, 02 IPSI, 03 IGIC. */

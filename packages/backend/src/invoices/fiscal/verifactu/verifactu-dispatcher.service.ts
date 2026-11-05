@@ -5,7 +5,8 @@ import { EncryptionService } from "../../../common/encryption/encryption.service
 import { OpsAlertService } from "../../../common/ops-alerts/ops-alert.service";
 import { PrismaService } from "../../../common/prisma/prisma.service";
 import { openPkcs12 } from "./certificate";
-import { INITIAL_WAIT_SECONDS, MAX_RECORDS_PER_SUBMISSION, endpoint, verifactuAvailable } from "./config";
+import { fiscalSubmissionAvailable } from "../fiscal-availability";
+import { INITIAL_WAIT_SECONDS, MAX_RECORDS_PER_SUBMISSION, endpoint } from "./config";
 import * as format from "./format";
 import { AeatResponse, ResponseLine, parseResponse } from "./response";
 import { Credentials, VerifactuTransport } from "./transport";
@@ -22,6 +23,7 @@ const ANONYMIZED_RETRY_SECONDS = 7 * 24 * 3600;
 export type SendOutcome =
   | { kind: "nothing" }
   | { kind: "no-credentials" }
+  | { kind: "not-prepared"; message: string }
   | { kind: "sent"; estadoEnvio: string; accepted: number; rejected: number }
   | { kind: "fault"; side: "Server" | "Client"; message: string }
   | { kind: "unreachable"; message: string };
@@ -50,7 +52,7 @@ export class VerifactuDispatcher {
 
   @Interval(15_000)
   async tick(): Promise<void> {
-    if (this.running || !verifactuAvailable()) return;
+    if (this.running || !fiscalSubmissionAvailable()) return;
     this.running = true;
     try {
       const due = await this.dueTenants();
@@ -66,17 +68,16 @@ export class VerifactuDispatcher {
 
   /** Salons with records waiting whose wait time has passed. */
   private async dueTenants(): Promise<string[]> {
-    const pending = await this.prisma.verifactuRecord.findMany({
-      where: { status: VerifactuRecordStatus.pending },
-      select: { tenantId: true },
-      distinct: ["tenantId"],
-    });
-    if (pending.length === 0) return [];
-    const chains = await this.prisma.verifactuChain.findMany({
-      where: { tenantId: { in: pending.map((p) => p.tenantId) }, nextSendAt: { lte: new Date() } },
-      select: { tenantId: true },
-    });
-    return chains.map((c) => c.tenantId);
+    // From the chains, one row per salon: each EXISTS stops at the salon's
+    // first pending record (index tenantId, status, sequence).
+    const due = await this.prisma.$queryRaw<Array<{ tenantId: string }>>`
+      SELECT c."tenantId" FROM verifactu_chains c
+      WHERE c."nextSendAt" <= ${new Date()}
+        AND EXISTS (
+          SELECT 1 FROM verifactu_records r
+          WHERE r."tenantId" = c."tenantId" AND r.status = 'pending'
+        )`;
+    return due.map((c) => c.tenantId);
   }
 
   /** One submission for one salon: up to 1.000 of its oldest pending records. */
@@ -111,7 +112,28 @@ export class VerifactuDispatcher {
       where: { id: tenantId },
       select: { name: true, legalName: true, anonymizedAt: true },
     });
-    const credentials = await this.credentials(tenantId);
+    const incidencia = chain.incidentSince != null;
+    // The slot is claimed: from here a failure has to reach the chain, or the
+    // queue would wait with nothing telling the salon why (art. 16.4).
+    let credentials: Credentials | null;
+    let body = "";
+    try {
+      credentials = await this.credentials(tenantId);
+      if (credentials) {
+        body = envelope(
+          { name: await this.obligadoName(first, tenant), nif: first.nif },
+          records.map((r) => r.xml),
+          incidencia,
+        );
+      }
+    } catch (err) {
+      const detail = (err as Error).message;
+      this.logger.error(`VERI*FACTU ${tenantId}: the submission could not be prepared: ${detail}`);
+      const message = "No se ha podido preparar el envío a la AEAT. Revisa el certificado electrónico.";
+      await this.failed(tenantId, chain.failedAttempts, message, false);
+      await this.alert(tenantId, "envío sin preparar", detail);
+      return { kind: "not-prepared", message };
+    }
     if (!credentials) {
       const message = "Falta el certificado electrónico para enviar a la AEAT";
       if (tenant.anonymizedAt) {
@@ -125,12 +147,6 @@ export class VerifactuDispatcher {
       return { kind: "no-credentials" };
     }
 
-    const incidencia = chain.incidentSince != null;
-    const body = envelope(
-      { name: await this.obligadoName(first, tenant), nif: first.nif },
-      records.map((r) => r.xml),
-      incidencia,
-    );
     const url = endpoint(credentials.type);
     await this.prisma.verifactuRecord.updateMany({
       where: { id: { in: records.map((r) => r.id) } },
@@ -166,8 +182,13 @@ export class VerifactuDispatcher {
         response: reply.body,
       });
       // Server: resend as is, it is the AEAT's problem. Client: the message
-      // or the certificate is wrong; retry hourly in case it gets fixed.
+      // or the certificate is wrong; retry hourly in case it gets fixed, and
+      // tell the platform owner, as nothing here will fix it on its own. It
+      // does not open an incident: an incident already open stays open.
       await this.failed(tenantId, chain.failedAttempts, `La AEAT rechazó el envío: ${parsed.message}`, parsed.side === "Server");
+      if (parsed.side === "Client") {
+        await this.alert(tenantId, "envío rechazado por la AEAT (SOAP Client)", `Código ${parsed.code ?? "?"}: ${parsed.message}`);
+      }
       return { kind: "fault", side: parsed.side, message: parsed.message };
     }
 
@@ -320,11 +341,7 @@ export class VerifactuDispatcher {
     });
   }
 
-  /**
-   * The certificate to submit with: the salon's own, or failing that the
-   * platform's (KiraRoom as colaborador social, which needs the AEAT
-   * agreement and each salon's signed authorisation).
-   */
+  /** The certificate to submit with: always the salon's own. */
   async credentials(tenantId: string): Promise<Credentials | null> {
     const cert = await this.prisma.fiscalCertificate.findFirst({
       where: { tenantId, isActive: true, notAfter: { gt: new Date() } },
@@ -341,11 +358,6 @@ export class VerifactuDispatcher {
       const password = cert.passphraseCipher ? this.encryption.decrypt(cert.passphraseCipher) : "";
       const opened = openPkcs12(Buffer.from(der, "binary").toString("base64"), password);
       return { key: opened.keyPem, cert: opened.certPem, type };
-    }
-    const platform = process.env.VERIFACTU_PLATFORM_P12;
-    if (platform) {
-      const opened = openPkcs12(platform, process.env.VERIFACTU_PLATFORM_P12_PASSWORD ?? "");
-      return { key: opened.keyPem, cert: opened.certPem, type: process.env.VERIFACTU_PLATFORM_CERT_TYPE === "seal" ? "seal" : "personal" };
     }
     return null;
   }

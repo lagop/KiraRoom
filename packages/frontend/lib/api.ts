@@ -2009,6 +2009,9 @@ export interface Invoice {
   lines?: InvoiceLine[];
 }
 
+/** What a 0 % line is for the AEAT (backend: verifactu/zero-rate.ts). */
+export type ZeroRateTreatment = "none" | "S1" | "E1" | "E2" | "E3" | "E4" | "E5" | "E6" | "N1" | "N2";
+
 /** The salon's VERI*FACTU queue (GET /verifactu/status). */
 export interface VerifactuStatus {
   available: boolean;
@@ -2022,7 +2025,6 @@ export interface VerifactuStatus {
   lastError: string | null;
   nextSendAt: string | null;
   certificate: { alias: string; subject: string | null; notAfter: string | null; certificateType: string } | null;
-  platformCertificate: boolean;
 }
 
 /** Public data of the software's declaración responsable (GET /verifactu/declaracion). */
@@ -2049,6 +2051,7 @@ export interface FiscalSettings {
     autoInvoiceAppointments?: boolean;
     defaultSeries?: string;
     defaultTaxRate?: number;
+    zeroRateTreatment?: ZeroRateTreatment;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
@@ -2596,6 +2599,8 @@ export interface ApiClientInterface {
     fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
     defaultSeries?: string;
     defaultTaxRate?: number;
+    /** What a 0 % line is for the AEAT; needed to activate Verifactu. */
+    zeroRateTreatment?: ZeroRateTreatment;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
@@ -6336,6 +6341,8 @@ class ApiClient implements ApiClientInterface {
     fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
     defaultSeries?: string;
     defaultTaxRate?: number;
+    /** What a 0 % line is for the AEAT; needed to activate Verifactu. */
+    zeroRateTreatment?: ZeroRateTreatment;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */

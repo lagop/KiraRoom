@@ -7,7 +7,14 @@
  * The page used to load the razón social and the ID type empty and send the
  * whole form on every save, so it erased the stored razón social.
  */
-import { changedFiscalFields, fiscalChangeSummary, issuerFieldsFromSettings } from "./fiscal-settings-form";
+import {
+  changedFiscalFields,
+  fiscalChangeSummary,
+  issuerFieldsFromSettings,
+  pollWhileActive,
+  zeroRateMissing,
+  zeroRateTreatmentFrom,
+} from "./fiscal-settings-form";
 
 let pass = 0;
 let fail = 0;
@@ -20,6 +27,15 @@ function check(label: string, actual: unknown, expected: unknown): void {
     console.log(`  ✗ ${label}\n      expected: ${JSON.stringify(expected)}\n      actual:   ${JSON.stringify(actual)}`);
   }
 }
+
+check("verifactu with no answer for the 0 % cannot be saved", zeroRateMissing({ fiscalMode: "verifactu" }), true);
+check("«No uso el 0 %» is an answer", zeroRateMissing({ fiscalMode: "verifactu", zeroRateTreatment: "none" }), false);
+check("another fiscal mode does not ask", zeroRateMissing({ fiscalMode: "none" }), false);
+check("the stored choice loads", zeroRateTreatmentFrom({ zeroRateTreatment: "E1" }), "E1");
+check("anything else stored loads as no choice", zeroRateTreatmentFrom({ zeroRateTreatment: "E9" }), undefined);
+check("a salon with it active is polled", pollWhileActive(60_000)({ state: { data: { active: true } } }), 60_000);
+check("a salon without it is not polled again", pollWhileActive(60_000)({ state: { data: { active: false } } }), false);
+check("nor before the first answer", pollWhileActive(60_000)({ state: {} }), false);
 
 check(
   "the razón social, the type and the NIF load from the response",

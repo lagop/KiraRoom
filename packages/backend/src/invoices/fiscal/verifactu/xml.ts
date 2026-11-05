@@ -1,5 +1,6 @@
 import { SYSTEM, Producer } from "./config";
 import { xmlText } from "./format";
+import type { OperationCode } from "./zero-rate";
 
 /**
  * VERI*FACTU XML, element by element in the order of the official schemas
@@ -21,6 +22,19 @@ export interface Party {
   nif: string;
 }
 
+/**
+ * IDOtro: a recipient without a Spanish NIF. IDType 02 is the NIF-IVA of
+ * another EU country; the other types are not generated (format.recipientId).
+ */
+export interface ForeignId {
+  /** CodigoPais (CountryType2). */
+  country: string;
+  idType: "02";
+  id: string;
+}
+
+export type Recipient = { name: string } & ({ nif: string } | { otro: ForeignId });
+
 export interface InvoiceId {
   nif: string;
   numSerie: string;
@@ -31,6 +45,8 @@ export interface InvoiceId {
 export interface TaxLine {
   /** 01 IVA, 02 IPSI (Ceuta y Melilla), 03 IGIC (Canarias). */
   impuesto: "01" | "02" | "03";
+  /** Left out: S1. Only 0 % lines take another one (zero-rate.ts). */
+  operation?: OperationCode;
   rate: string;
   base: string;
   cuota: string;
@@ -62,7 +78,7 @@ export interface AltaRecord {
   /** FacturaSimplificadaArt7273: a simplified invoice that names its recipient (RD 1619/2012 art. 7.2), sent as F1. */
   simplifiedWithRecipient?: boolean;
   /** Mandatory for F1 and R1-R4, forbidden for F2 and R5. */
-  recipient?: Party;
+  recipient?: Recipient;
   desglose: TaxLine[];
   cuotaTotal: string;
   importeTotal: string;
@@ -75,8 +91,10 @@ export interface AltaRecord {
 export interface AnulacionRecord {
   refExterna: string;
   invoice: InvoiceId;
-  /** The alta never reached the AEAT (it was rejected). */
+  /** The AEAT holds no alta of this invoice. */
   sinRegistroPrevio?: boolean;
+  /** A previous anulación of this invoice was rejected by the AEAT. */
+  rechazoPrevio?: boolean;
   previous: PreviousRecord;
   system: SystemInstallation;
   generatedAt: string;
@@ -115,6 +133,29 @@ function sistemaInformatico(s: SystemInstallation): string {
   );
 }
 
+/** One line of the Desglose. Exempt and not-subject lines carry no rate and no cuota. */
+function detalleDesglose(t: TaxLine): string {
+  const code = t.operation ?? "S1";
+  const taxed = code === "S1";
+  return wrap(
+    "DetalleDesglose",
+    el("Impuesto", t.impuesto) +
+      el("ClaveRegimen", "01") +
+      el(code.startsWith("E") ? "OperacionExenta" : "CalificacionOperacion", code) +
+      (taxed ? el("TipoImpositivo", t.rate) : "") +
+      el("BaseImponibleOimporteNoSujeto", t.base) +
+      (taxed ? el("CuotaRepercutida", t.cuota) : ""),
+  );
+}
+
+function idDestinatario(r: Recipient): string {
+  const id =
+    "nif" in r
+      ? el("NIF", r.nif)
+      : wrap("IDOtro", el("CodigoPais", r.otro.country) + el("IDType", r.otro.idType) + el("ID", r.otro.id));
+  return wrap("IDDestinatario", el("NombreRazon", r.name) + id);
+}
+
 export function registroAlta(r: AltaRecord): string {
   const isRectificativa = r.tipoFactura.startsWith("R");
   return wrap(
@@ -147,25 +188,8 @@ export function registroAlta(r: AltaRecord): string {
         : "") +
       el("DescripcionOperacion", r.descripcion) +
       (r.simplifiedWithRecipient ? el("FacturaSimplificadaArt7273", "S") : "") +
-      (r.recipient
-        ? wrap("Destinatarios", wrap("IDDestinatario", el("NombreRazon", r.recipient.name) + el("NIF", r.recipient.nif)))
-        : "") +
-      wrap(
-        "Desglose",
-        r.desglose
-          .map((t) =>
-            wrap(
-              "DetalleDesglose",
-              el("Impuesto", t.impuesto) +
-                el("ClaveRegimen", "01") +
-                el("CalificacionOperacion", "S1") +
-                el("TipoImpositivo", t.rate) +
-                el("BaseImponibleOimporteNoSujeto", t.base) +
-                el("CuotaRepercutida", t.cuota),
-            ),
-          )
-          .join(""),
-      ) +
+      (r.recipient ? wrap("Destinatarios", idDestinatario(r.recipient)) : "") +
+      wrap("Desglose", r.desglose.map(detalleDesglose).join("")) +
       el("CuotaTotal", r.cuotaTotal) +
       el("ImporteTotal", r.importeTotal) +
       encadenamiento(r.previous) +
@@ -188,6 +212,7 @@ export function registroAnulacion(r: AnulacionRecord): string {
       ) +
       el("RefExterna", r.refExterna) +
       (r.sinRegistroPrevio ? el("SinRegistroPrevio", "S") : "") +
+      (r.rechazoPrevio ? el("RechazoPrevio", "S") : "") +
       encadenamiento(r.previous) +
       sistemaInformatico(r.system) +
       el("FechaHoraHusoGenRegistro", r.generatedAt) +

@@ -11,7 +11,7 @@
  * No React and no Next imports, so lib/fiscal-settings-form.spec.ts can run
  * them.
  */
-import type { FiscalSettings } from "./api";
+import type { FiscalSettings, ZeroRateTreatment } from "./api";
 
 export type TaxIdType = "nif" | "cif" | "nie" | "passport" | "other";
 
@@ -41,6 +41,28 @@ export function changedFiscalFields<T extends Record<string, unknown>>(draft: T,
     if (draft[key] !== loaded[key]) patch[key] = draft[key];
   }
   return patch;
+}
+
+/** The choices for the 0 %, in the order the page lists them. */
+export const ZERO_RATE_TREATMENTS: readonly ZeroRateTreatment[] = ["none", "S1", "E1", "E2", "E3", "E4", "E5", "E6", "N1", "N2"];
+
+/** The salon's stored choice, if it has made one. */
+export function zeroRateTreatmentFrom(settings: { zeroRateTreatment?: unknown } | null | undefined): ZeroRateTreatment | undefined {
+  const value = settings?.zeroRateTreatment;
+  return ZERO_RATE_TREATMENTS.find((t) => t === value);
+}
+
+/** Verifactu chosen with no answer for the 0 %: the backend would refuse the save. */
+export function zeroRateMissing(draft: { fiscalMode?: string; zeroRateTreatment?: ZeroRateTreatment }): boolean {
+  return draft.fiscalMode === "verifactu" && !draft.zeroRateTreatment;
+}
+
+/**
+ * refetchInterval of the VERI*FACTU status: every `ms` while the salon has
+ * it active, nothing otherwise (the first answer says which).
+ */
+export function pollWhileActive(ms: number) {
+  return (query: { state: { data?: { active?: boolean } } }): number | false => (query.state.data?.active ? ms : false);
 }
 
 /** The settings a change of which is confirmed before saving. */
