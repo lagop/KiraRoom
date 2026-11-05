@@ -11,7 +11,7 @@ export default function TermsPage() {
         Términos del Servicio
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 4 de noviembre de 2026
+        Última actualización: 5 de noviembre de 2026
       </p>
 
       <Section title="1. Aceptación">
@@ -31,7 +31,7 @@ export default function TermsPage() {
         <ul>
           <li>Agenda de citas y gestión de profesionales y servicios.</li>
           <li>Emisión de facturas con numeración correlativa y facturas rectificativas.</li>
-          <li>Sincronización opcional con software contable (Holded, Sage, A3, NCS).</li>
+          <li>Sincronización opcional con Holded (software contable).</li>
           <li>Recordatorios automáticos por email/WhatsApp.</li>
           <li>Panel SaaS para multi-tenant y multi-localización.</li>
         </ul>
@@ -40,8 +40,11 @@ export default function TermsPage() {
       <Section title="3. Planes y precios">
         <p>
           El servicio se ofrece bajo suscripción mensual. Los precios
-          vigentes están publicados en <code>/dashboard/billing</code> y son
-          el precio final, sin impuestos añadidos.
+          vigentes están publicados en{" "}
+          <a href="https://kiraroom.com/#precios">kiraroom.com/#precios</a> y,
+          al iniciar sesión, en <code>/dashboard/billing</code>. Son el
+          precio final, sin impuestos añadidos. El precio que se cobra es el
+          que ves en el panel antes de pagar.
           Las suscripciones se renuevan automáticamente al final de cada
           período salvo que el cliente cancele.
         </p>
@@ -68,7 +71,7 @@ export default function TermsPage() {
         <p>KiraRoom se compromete a:</p>
         <ul>
           <li>Mantener el servicio disponible al menos el 99% del tiempo medido mensualmente, salvo mantenimientos programados (con aviso de 48h).</li>
-          <li>Realizar backups diarios cifrados con posibilidad de restauración puntual (WAL archiving).</li>
+          <li>Realizar una copia de seguridad diaria cifrada de la base de datos, guardada fuera del servidor: las copias diarias se conservan 35 días y la del día 1 de cada mes, 400 días. Se restaura a la copia diaria más reciente.</li>
           <li>Conservar las facturas durante 4 años conforme al Art. 66 RGGI.</li>
           <li>Cumplir las obligaciones del RGPD y la LOPDGDD, incluyendo atender las solicitudes de acceso, rectificación y supresión en plazo de 30 días.</li>
           <li>Notificar al cliente cualquier incidente de seguridad con impacto en sus datos en un plazo máximo de 72 horas.</li>
@@ -106,10 +109,11 @@ export default function TermsPage() {
           desde <code>/dashboard/billing</code>. Tras la cancelación:
         </p>
         <ul>
-          <li>Acceso de lectura durante 30 días: puedes exportar tus datos hasta el final de ese plazo.</li>
+          <li>Acceso de lectura durante 30 días desde la cancelación o el fin de la prueba: puedes exportar tus datos hasta el final de ese plazo.</li>
           <li>Después se anonimizan: 30 días más tarde (60 días en total desde la cancelación o el fin de la prueba) se borran los datos personales del salón, de su equipo y de sus clientes. Te avisamos por email 7 días antes.</li>
           <li>Lo mismo si borras tu salón desde Ajustes &gt; Seguridad: 30 días para exportar y la anonimización 30 días después. Mientras tanto puedes anular el borrado.</li>
-          <li>Las facturas emitidas se conservan 4 años, como exige la normativa fiscal.</li>
+          <li>Las facturas emitidas y sus datos fiscales no se anonimizan: se conservan 4 años, como exige la normativa fiscal.</li>
+          <li>Las copias de seguridad pueden conservar datos de ese salón hasta 400 días (las diarias, 35; la del día 1 de cada mes, 400) y solo se usan para recuperar el servicio ante un fallo.</li>
         </ul>
       </Section>
 
@@ -130,11 +134,6 @@ export default function TermsPage() {
           a los Juzgados y Tribunales de la ciudad del domicilio del
           cliente, sin perjuicio de los derechos del consumidor ante los
           tribunales de su domicilio.
-        </p>
-        <p>
-          Conforme al Reglamento (UE) 524/2013, los consumidores de la UE
-          pueden acceder a la plataforma de resolución de litigios en
-          línea en <code>ec.europa.eu/consumers/odr</code>.
         </p>
       </Section>
 

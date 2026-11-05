@@ -1,4 +1,4 @@
-# API Design - Kira Room
+# API Design - KiraRoom
 
 ## Overview
 

@@ -6,10 +6,10 @@
  * spec fails when the two drift apart, so changing the terms means changing
  * this too, and every acceptance from then on records the new version.
  */
-export const TERMS_VERSION = "2026-11-04";
+export const TERMS_VERSION = "2026-11-05";
 
 /** The same date as the terms page writes it. */
-export const TERMS_LAST_UPDATED_LABEL = "4 de noviembre de 2026";
+export const TERMS_LAST_UPDATED_LABEL = "5 de noviembre de 2026";
 
 /**
  * "signup" and "invite" when the account is created; "login_prompt" when an

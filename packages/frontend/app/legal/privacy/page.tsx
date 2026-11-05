@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
-import { KIRAROOM_DOMAIN, KIRAROOM_PRIVACY_EMAIL, SUB_PROCESSORS } from "@/lib/salon-legal";
+import {
+  CONVERSATION_RETENTION_MONTHS,
+  KIRAROOM_DOMAIN,
+  KIRAROOM_PRIVACY_EMAIL,
+  SUB_PROCESSORS,
+  subProcessorText,
+} from "@/lib/salon-legal";
 
 // Its own title: it showed the root layout's, in English.
 export const metadata: Metadata = { title: "Política de privacidad · KiraRoom" };
@@ -11,10 +17,11 @@ export default function PrivacyPage() {
         Política de Privacidad
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 4 de noviembre de 2026
+        Última actualización: 5 de noviembre de 2026
       </p>
-      {/* SOURCE OF TRUTH — keep in sync with docs/privacy.md until the
-          Sprint 2 legal-sync generator lands. */}
+      {/* This page is the only source of the privacy policy: docs/privacy.md
+          just points here. Keep it, the terms and SUB_PROCESSORS
+          (lib/salon-legal.ts) telling the same story. */}
       <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 24, fontStyle: "italic" }}>
         Modelo adaptado de las plantillas y orientaciones publicadas por
         la Agencia Española de Protección de Datos (AEPD) en{" "}
@@ -59,9 +66,32 @@ export default function PrivacyPage() {
             contraseña (almacenada con hash + sal), teléfono de contacto.
           </li>
           <li>
+            <strong>Datos del equipo del salón</strong>: nombre, email,
+            teléfono y rol de las personas que usan el panel, y las
+            acciones que hacen en él (registro de actividad).
+          </li>
+          <li>
             <strong>Datos de clientes finales</strong>: nombre, apellidos,
             email, teléfono, NIF (opcional), historial de citas y compras,
             consentimientos registrados (RGPD + LSSI).
+          </li>
+          <li>
+            <strong>Conversaciones con la recepcionista virtual</strong>:
+            lo que escribe el cliente del salón y lo que se le responde, por
+            la web del salón o por los canales que el salón conecte.
+          </li>
+          <li>
+            <strong>Dirección IP y fecha de aceptación</strong>: al aceptar
+            los Términos y esta política se guardan la versión aceptada, la
+            fecha y la IP desde la que se acepta, como prueba del
+            consentimiento. Los servidores también registran datos técnicos
+            de las visitas (IP, fecha y página) para la seguridad del
+            servicio.
+          </li>
+          <li>
+            <strong>Correos que nos envías</strong>: si escribes a{" "}
+            <code>{KIRAROOM_PRIVACY_EMAIL}</code>, guardamos tu mensaje y tu
+            dirección para atender tu consulta.
           </li>
           <li>
             <strong>Datos de facturación</strong>: importes, fechas, NIF
@@ -84,8 +114,8 @@ export default function PrivacyPage() {
         <ol>
           <li>Prestar el servicio SaaS contratado (gestión de citas, profesionales, servicios).</li>
           <li>Emitir facturas (el envío a la AEAT o a las diputaciones forales todavía no está disponible).</li>
-          <li>Sincronizar asientos contables con Holded o Sage Despachos (sólo si el cliente activa la integración).</li>
-          <li>Detectar y prevenir fraude o abuso del servicio.</li>
+          <li>Sincronizar asientos contables con Holded (sólo si el cliente activa la integración).</li>
+          <li>Detectar y prevenir fraude o abuso del servicio, incluida la comprobación anti-robots del alta.</li>
           <li>Cumplir obligaciones legales (Art. 66 RGGI, Art. 24 LOPDGDD, LSSI).</li>
           <li>Enviar comunicaciones operativas del servicio (no marketing sin consentimiento).</li>
         </ol>
@@ -120,10 +150,6 @@ export default function PrivacyPage() {
             les envía las facturas de forma automática (Verifactu,
             TicketBAI, SII): ese envío todavía no está disponible.
           </li>
-          <li>
-            <strong>Holded, Sage Despachos, A3 (Wolters Kluwer), NCS</strong>{" "}
-            si el cliente activa la integración contable correspondiente.
-          </li>
         </ul>
         <p>
           Y a los proveedores en los que KiraRoom se apoya para prestar el
@@ -132,11 +158,15 @@ export default function PrivacyPage() {
         <ul>
           {SUB_PROCESSORS.map((s) => (
             <li key={s.name}>
-              <strong>{s.name}</strong>: {s.purpose}
-              {s.onlyIf ? ` (${s.onlyIf})` : ""}. {s.location}.
+              <strong>{s.name}</strong>: {subProcessorText(s)}
             </li>
           ))}
         </ul>
+        <p>
+          Los mensajes que llegan por Telegram, WhatsApp, Messenger o
+          Instagram pasan además por los servidores de esas plataformas,
+          que tratan los datos según sus propias condiciones.
+        </p>
         <p>
           KiraRoom no vende datos personales. Algunos de estos proveedores
           están en Estados Unidos: esas transferencias internacionales se
@@ -147,11 +177,34 @@ export default function PrivacyPage() {
 
       <Section title="6. Conservación de los datos">
         <ul>
-          <li>Datos de cuenta del salón: mientras dure la relación contractual. Al terminar, 30 días para exportarlos; después se anonimizan (60 días en total).</li>
-          <li>Datos de clientes finales: mientras el salón mantenga la cuenta. Si el salón se va (cancela, termina su prueba o borra su cuenta), puede exportarlos durante 30 días; después se anonimizan, 60 días después del final.</li>
+          <li>Datos de cuenta del salón y de su equipo: mientras dure la relación contractual.</li>
+          <li>Datos de clientes finales: mientras el salón mantenga la cuenta.</li>
+          <li>
+            Conversaciones con la recepcionista virtual: se borran cuando
+            llevan {CONVERSATION_RETENTION_MONTHS} meses sin actividad.
+          </li>
+          <li>Versión aceptada, fecha e IP de la aceptación de los Términos: mientras dure la cuenta; al anonimizarla se borra la IP y queda constancia de la aceptación.</li>
+          <li>Correos que nos envías: el tiempo necesario para atender tu consulta.</li>
           <li>Facturas y datos fiscales: <strong>4 años</strong> (Art. 66 RGGI).</li>
           <li>Registros fiscales de las facturas: mientras esté vigente la obligación fiscal.</li>
         </ul>
+        <p>
+          <strong>Si un salón cancela, termina su prueba o borra su cuenta</strong>:
+          durante <strong>30 días</strong> la cuenta queda en solo lectura para
+          que pueda exportar sus datos. <strong>60 días en total</strong>{" "}
+          después del final se anonimizan los datos personales del salón, de
+          su equipo y de sus clientes (le avisamos por email 7 días antes).
+          Las facturas emitidas y sus datos fiscales no se anonimizan: se
+          conservan por obligación legal.
+        </p>
+        <p>
+          <strong>Copias de seguridad</strong>: guardamos una copia diaria
+          cifrada de la base de datos fuera del servidor. Las copias diarias
+          se conservan 35 días, y la del día 1 de cada mes, 400 días (unos
+          13 meses). Un dato anonimizado o borrado puede seguir en esas copias
+          hasta que caduquen; se usan solo para recuperar el servicio ante un
+          fallo.
+        </p>
       </Section>
 
       <Section title="7. Sus derechos (RGPD Arts. 15-22)">
@@ -212,6 +265,11 @@ export default function PrivacyPage() {
           momento desde &quot;Configurar cookies&quot;. Hoy no se usa
           ninguna cookie de publicidad.
         </p>
+        <p>
+          Al crear la cuenta, recuperar la contraseña o tras varios intentos
+          fallidos de inicio de sesión, se carga la comprobación anti-robots
+          de Cloudflare (Turnstile), mientras esté activada.
+        </p>
       </Section>
 
       <Section title="9. Medidas de seguridad">
@@ -219,13 +277,24 @@ export default function PrivacyPage() {
           Aplicamos las medidas del Art. 32 RGPD:
         </p>
         <ul>
-          <li>Cifrado AES-256-GCM para datos personales en reposo.</li>
-          <li>Tokens JWT firmados con HS256 (recomendamos HS256 con rotación de claves).</li>
-          <li>Hash + sal con bcrypt en contraseñas.</li>
-          <li>Backups diarios cifrados con retención 30 días hot + 1 año frío.</li>
-          <li>Limitación de tasa (100 req/min/IP) para prevenir abuso.</li>
-          <li>Logs de auditoría firmados (inmutables) para todas las acciones SaaS-owner.</li>
-          <li>WAF/CORS restrictivo en producción.</li>
+          <li>
+            Los secretos que guardamos (códigos de doble factor, claves y
+            tokens de conexión con otros servicios, certificados) se cifran
+            en la base de datos con AES-256-GCM.
+          </li>
+          <li>Las contraseñas se guardan con hash + sal (bcrypt), nunca en claro.</li>
+          <li>
+            Copia diaria de la base de datos, comprobada, cifrada y guardada
+            fuera del servidor (ver el apartado 6). Se restaura a la copia
+            diaria más reciente; no hay restauración a un instante exacto.
+          </li>
+          <li>
+            Límite de peticiones por dirección (300 por minuto) y límites más
+            estrictos en el inicio de sesión, el alta y la recuperación de la
+            contraseña, para prevenir abusos.
+          </li>
+          <li>Registro de auditoría de las acciones del administrador de la plataforma.</li>
+          <li>CORS restrictivo en producción.</li>
         </ul>
       </Section>
 
