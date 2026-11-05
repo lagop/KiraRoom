@@ -2009,6 +2009,35 @@ export interface Invoice {
   lines?: InvoiceLine[];
 }
 
+/** What a 0 % line is for the AEAT (backend: verifactu/zero-rate.ts). */
+export type ZeroRateTreatment = "none" | "S1" | "E1" | "E2" | "E3" | "E4" | "E5" | "E6" | "N1" | "N2";
+
+/** The salon's VERI*FACTU queue (GET /verifactu/status). */
+export interface VerifactuStatus {
+  available: boolean;
+  environment: "test" | "production";
+  active: boolean;
+  pending: number;
+  accepted: number;
+  acceptedWithErrors: number;
+  rejected: number;
+  incidentSince: string | null;
+  lastError: string | null;
+  nextSendAt: string | null;
+  certificate: { alias: string; subject: string | null; notAfter: string | null; certificateType: string } | null;
+  /** Last 30 days: 0 % lines the salon said it does not have, sent as S1. */
+  zeroRateAssumed: number;
+}
+
+/** Public data of the software's declaración responsable (GET /verifactu/declaracion). */
+export interface VerifactuDeclaration {
+  system: { name: string; id: string; version: string; onlyVerifactu: boolean; multipleTaxpayers: boolean };
+  producer: { name: string; nif: string };
+  signedOn: string | null;
+  signedAt: string | null;
+  environment: "test" | "production";
+}
+
 export interface FiscalSettings {
   fiscalMode: "none" | "verifactu" | "ticketbai" | "sii_only";
   /** False while sending invoices to the AEAT is not available (production). */
@@ -2024,6 +2053,7 @@ export interface FiscalSettings {
     autoInvoiceAppointments?: boolean;
     defaultSeries?: string;
     defaultTaxRate?: number;
+    zeroRateTreatment?: ZeroRateTreatment;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
     taxRegime?: TaxRegime;
@@ -2571,6 +2601,8 @@ export interface ApiClientInterface {
     fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
     defaultSeries?: string;
     defaultTaxRate?: number;
+    /** What a 0 % line is for the AEAT; needed to activate Verifactu. */
+    zeroRateTreatment?: ZeroRateTreatment;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
@@ -2590,7 +2622,10 @@ export interface ApiClientInterface {
     provider: "p12";
     pkcs12Base64: string;
     passphrase: string;
-  }): Promise<{ id: string; fingerprint: string }>;
+    certificateType?: "personal" | "seal";
+  }): Promise<{ id: string; fingerprint: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }>;
+  getVerifactuStatus(): Promise<VerifactuStatus>;
+  getVerifactuDeclaration(): Promise<VerifactuDeclaration>;
   deactivateFiscalCertificate(id: string): Promise<{ count: number }>;
 
   // P2B â€” Accounting integrations
@@ -6308,6 +6343,8 @@ class ApiClient implements ApiClientInterface {
     fiscalMode?: "none" | "verifactu" | "ticketbai" | "sii_only";
     defaultSeries?: string;
     defaultTaxRate?: number;
+    /** What a 0 % line is for the AEAT; needed to activate Verifactu. */
+    zeroRateTreatment?: ZeroRateTreatment;
     autoInvoiceAppointments?: boolean;
     diputacion?: "bizkaia" | "gipuzkoa" | "alava" | null;
     /** Territory tax regime: iva (peninsula/Baleares), igic (Canarias), ipsi (Ceuta/Melilla). */
@@ -6331,11 +6368,18 @@ class ApiClient implements ApiClientInterface {
     provider: "p12";
     pkcs12Base64: string;
     passphrase: string;
-  }): Promise<{ id: string; fingerprint: string }> {
-    return this.request<{ id: string; fingerprint: string }>(`/invoices/certificates`, {
+    certificateType?: "personal" | "seal";
+  }): Promise<{ id: string; fingerprint: string; subject: string; notAfter: string; nifMatchesSalon: boolean | null }> {
+    return this.request(`/invoices/certificates`, {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+  async getVerifactuStatus(): Promise<VerifactuStatus> {
+    return this.request<VerifactuStatus>(`/verifactu/status`);
+  }
+  async getVerifactuDeclaration(): Promise<VerifactuDeclaration> {
+    return this.request<VerifactuDeclaration>(`/verifactu/declaracion`);
   }
   async deactivateFiscalCertificate(id: string): Promise<{ count: number }> {
     return this.request<{ count: number }>(
@@ -7063,7 +7107,15 @@ export interface PosSaleProduct {
 export interface PosReceipt {
   saleId: string;
   salon: { name: string; tradeName: string; taxId: string | null; address: string; phone: string | null };
-  invoice: { id: string; number: string; full: boolean; recipientName?: string | null; recipientTaxId?: string | null } | null;
+  invoice: {
+    id: string;
+    number: string;
+    full: boolean;
+    recipientName?: string | null;
+    recipientTaxId?: string | null;
+    /** VERI*FACTU: what the ticket's tax QR encodes. */
+    qrUrl?: string | null;
+  } | null;
   date: string;
   time: string;
   lines: Array<{

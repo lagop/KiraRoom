@@ -6,7 +6,8 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import apiClient, { FiscalSettings } from "@/lib/api";
+import apiClient, { FiscalSettings, VerifactuStatus, ZeroRateTreatment } from "@/lib/api";
+import { VerifactuCard } from "@/components/verifactu/verifactu-card";
 import { Loader2, Save, Upload, ShieldOff, Lock } from "lucide-react";
 import { useTranslations } from "@/lib/use-translation";
 import { pricesTaxExampleMessage } from "@/lib/prices-tax-example";
@@ -14,6 +15,9 @@ import {
   changedFiscalFields,
   fiscalChangeSummary,
   issuerFieldsFromSettings,
+  ZERO_RATE_TREATMENTS,
+  zeroRateMissing,
+  zeroRateTreatmentFrom,
   type TaxIdType,
 } from "@/lib/fiscal-settings-form";
 import { useToast } from "@/components/ui/use-toast";
@@ -59,6 +63,10 @@ export default function FiscalSettingsPage() {
     queryKey: ["invoices", "fiscal-settings"],
     queryFn: () => apiClient.getFiscalSettings(),
   });
+  const verifactu = useQuery<VerifactuStatus>({
+    queryKey: ["verifactu", "status"],
+    queryFn: () => apiClient.getVerifactuStatus(),
+  });
   const certs = useQuery({
     queryKey: ["invoices", "certificates"],
     queryFn: () => apiClient.listFiscalCertificates(),
@@ -70,6 +78,7 @@ export default function FiscalSettingsPage() {
       apiClient.updateFiscalSettings(patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["invoices", "fiscal-settings"] });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
       toast({ title: t("invoices.fiscalSettings.saved") });
     },
     onError: (err: unknown) =>
@@ -82,7 +91,10 @@ export default function FiscalSettingsPage() {
 
   const deactivateCert = useMutation({
     mutationFn: (id: string) => apiClient.deactivateFiscalCertificate(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices", "certificates"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["invoices", "certificates"] });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
+    },
     onError: (err: unknown) =>
       toast({
         title: t("invoices.fiscalSettings.certDeactivateError"),
@@ -97,6 +109,7 @@ export default function FiscalSettingsPage() {
   const [certFile, setCertFile] = useState<File | null>(null);
   const [certAlias, setCertAlias] = useState("");
   const [certPassword, setCertPassword] = useState("");
+  const [certSeal, setCertSeal] = useState(false);
   const [certInputKey, setCertInputKey] = useState(0);
   const uploadCert = useMutation({
     mutationFn: async () => {
@@ -106,15 +119,21 @@ export default function FiscalSettingsPage() {
         provider: "p12",
         pkcs12Base64: await fileToBase64(certFile),
         passphrase: certPassword,
+        certificateType: certSeal ? "seal" : "personal",
       });
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
       setCertFile(null);
       setCertAlias("");
       setCertPassword("");
+      setCertSeal(false);
       setCertInputKey((k) => k + 1);
       qc.invalidateQueries({ queryKey: ["invoices", "certificates"] });
-      toast({ title: t("invoices.fiscalSettings.certUploaded") });
+      qc.invalidateQueries({ queryKey: ["verifactu"] });
+      toast({
+        title: t("invoices.fiscalSettings.certUploaded"),
+        description: saved.nifMatchesSalon === false ? t("invoices.fiscalSettings.certOtherNif") : undefined,
+      });
     },
     onError: (err: unknown) =>
       toast({
@@ -132,6 +151,7 @@ export default function FiscalSettingsPage() {
     diputacion: "bizkaia" | "gipuzkoa" | "alava" | null;
     taxRegime: TaxRegime;
     pricesIncludeTax: boolean;
+    zeroRateTreatment: ZeroRateTreatment | undefined;
     tenantNif: string;
     taxIdType: TaxIdType;
     legalName: string;
@@ -144,6 +164,7 @@ export default function FiscalSettingsPage() {
     diputacion: null,
     taxRegime: "iva",
     pricesIncludeTax: false,
+    zeroRateTreatment: undefined,
     tenantNif: "",
     taxIdType: "nif",
     legalName: "",
@@ -171,6 +192,7 @@ export default function FiscalSettingsPage() {
         taxRegime: taxRegimeOf(fs),
         // Missing (a salon from before the setting): tax on top, as always.
         pricesIncludeTax: fs.pricesIncludeTax === true,
+        zeroRateTreatment: zeroRateTreatmentFrom(fs),
         ...issuerFieldsFromSettings(settings.data),
       };
       setDraft(next);
@@ -305,18 +327,57 @@ export default function FiscalSettingsPage() {
                 <option
                   key={m}
                   value={m}
-                  disabled={m !== "none" && settings.data?.submissionAvailable === false}
+                  disabled={m === "verifactu" ? !verifactu.data?.available : m !== "none"}
                 >
                   {t(`invoices.fiscalMode.${m}`)}
                 </option>
               ))}
             </select>
-            {settings.data?.submissionAvailable === false && (
+            {settings.data?.submissionAvailable === false && !verifactu.data?.available && (
               <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {t("invoices.fiscalSettings.submissionUnavailable")}
               </p>
             )}
+            {verifactu.data?.available && (
+              <p className="mt-2 text-xs text-gray-500">
+                {t("invoices.verifactu.otherModes")}
+              </p>
+            )}
           </div>
+
+          {draft.fiscalMode === "verifactu" && (
+            <div>
+              <label htmlFor="zero-rate" className="text-sm font-medium text-gray-900">
+                {t("invoices.fiscalSettings.zeroRateLabel")}
+              </label>
+              <select
+                id="zero-rate"
+                value={draft.zeroRateTreatment ?? ""}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    zeroRateTreatment: e.target.value as ZeroRateTreatment,
+                  }))
+                }
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="" disabled>
+                  {t("invoices.fiscalSettings.zeroRateChoose")}
+                </option>
+                {ZERO_RATE_TREATMENTS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`invoices.fiscalSettings.zeroRateOption.${option}`)}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {t("invoices.fiscalSettings.zeroRateHint")}
+              </p>
+              {zeroRateMissing(draft) && (
+                <p className="mt-1 text-xs text-red-600">{t("invoices.fiscalSettings.zeroRateMissing")}</p>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div>
@@ -467,7 +528,7 @@ export default function FiscalSettingsPage() {
           <div className="mt-6 flex justify-end">
             <button
               type="button"
-              disabled={save.isPending || !hasChanges || !rateValid}
+              disabled={save.isPending || !hasChanges || !rateValid || zeroRateMissing(draft)}
               onClick={submit}
               className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
             >
@@ -481,6 +542,8 @@ export default function FiscalSettingsPage() {
           </div>
         )}
       </div>
+
+      <VerifactuCard />
 
       {isOwner && (
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -574,6 +637,10 @@ export default function FiscalSettingsPage() {
                 />
               </div>
             </div>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={certSeal} onChange={(e) => setCertSeal(e.target.checked)} className="h-4 w-4" />
+              {t("invoices.fiscalSettings.certSeal")}
+            </label>
             <div className="flex justify-end">
               <button
                 type="submit"

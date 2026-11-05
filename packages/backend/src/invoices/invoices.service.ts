@@ -10,6 +10,9 @@ import { InvoiceCalculator } from "./invoice-calculator.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { AccountingService, cancelNeedsMirror } from "../accounting/accounting.service";
 import { FiscalMode, InvoiceSource, InvoiceStatus, Prisma } from "@prisma/client";
+import { runUnscoped } from "../common/tenancy/tenant.context";
+import { ISSUE_TRANSACTION, VerifactuRecordsService } from "./fiscal/verifactu/verifactu-records.service";
+import { VerifactuDispatcher } from "./fiscal/verifactu/verifactu-dispatcher.service";
 import { appointmentInvoiceLines } from "./appointment-invoice-pricing";
 import { pricesIncludeTaxOf } from "./salon-tax-settings";
 import { addonServices } from "../appointments/visit-sync";
@@ -75,6 +78,8 @@ interface CreateInvoiceInput {
    */
   taxIncludedFromSalon?: boolean;
   notes?: string;
+  /** Rectificativas: the invoice this one corrects. */
+  rectifiesInvoiceId?: string;
   /**
    * What the invoice is for (an appointment, an order). Unique per tenant:
    * a second invoice for the same source fails with P2002. Omitted: manual.
@@ -172,14 +177,26 @@ export class InvoiceService {
     private readonly calculator: InvoiceCalculator,
     private readonly fiscal: FiscalService,
     @Optional() private readonly accounting?: AccountingService,
+    @Optional() private readonly verifactu?: VerifactuRecordsService,
+    @Optional() private readonly verifactuDispatcher?: VerifactuDispatcher,
   ) {}
+
+  /**
+   * Whether this salon may be on the VERI*FACTU record chain; insert() also
+   * needs its chain row. It follows the activation alone: the flag only opens
+   * activating and sending, and an activated salon goes on recording, with
+   * its records queued, whatever happens to the flag.
+   */
+  private recordsVerifactu(fiscalMode: FiscalMode): boolean {
+    return fiscalMode === FiscalMode.verifactu && !!this.verifactu;
+  }
 
   async create(input: CreateInvoiceInput): Promise<{ id: string }> {
     const prepared = await this.prepare(input);
     // Number and invoice in one transaction: when the insert fails (a source
     // that already has its invoice, see fromAppointment) the number is given
     // back, so the series stays correlative with no gaps.
-    const invoice = await this.prisma.$transaction((tx) => this.insert(tx, input, prepared));
+    const invoice = await this.prisma.$transaction((tx) => this.insert(tx, input, prepared), ISSUE_TRANSACTION);
     this.afterIssue(invoice);
     return { id: invoice.id };
   }
@@ -263,6 +280,11 @@ export class InvoiceService {
     prepared: Awaited<ReturnType<InvoiceService["prepare"]>>,
   ): Promise<IssuedInvoice & { series: string; number: string }> {
     const { computation, series, issueDate, year, fiscalMode, issuer } = prepared;
+    const withRecords = this.recordsVerifactu(fiscalMode) && (await this.verifactu!.isActivated(tx, input.tenantId));
+    // The salon's chain before the number: always in this order, so two
+    // invoices (or a sale with an invoice and a rectificativa) cannot wait for
+    // each other, and the records follow the order of the numbers.
+    if (withRecords) await this.verifactu!.lockSalon(tx, input.tenantId);
     const number = await this.allocateNumber(input.tenantId, series, year, tx);
     const invoice = await tx.invoice.create({
       data: {
@@ -286,6 +308,7 @@ export class InvoiceService {
         sourceType: input.source?.type ?? InvoiceSource.manual,
         sourceId: input.source?.id,
         notes: input.notes,
+        rectifiesInvoiceId: input.rectifiesInvoiceId,
         issuerNameAtIssue: issuer.name,
         issuerTaxIdAtIssue: issuer.taxId,
         lines: {
@@ -309,6 +332,9 @@ export class InvoiceService {
         },
       },
     });
+    // VERI*FACTU: the record goes in this transaction, so an invoice that
+    // cannot be recorded is not issued and its number is not used up.
+    if (withRecords) await this.verifactu!.recordInvoice(tx, invoice.id);
     return { id: invoice.id, fiscalMode, series, number };
   }
 
@@ -319,7 +345,8 @@ export class InvoiceService {
    * this after its commit.
    */
   afterIssue(invoice: IssuedInvoice): void {
-    // Fire fiscal dispatch in the background. Failures don't roll back the
+    // Fire fiscal dispatch in the background (a no-op for VERI*FACTU: its
+    // record is already written and VerifactuDispatcher sends it). Failures don't roll back the
     // invoice — the operator can retry via /invoices/:id/resend-fiscal.
     if (invoice.fiscalMode !== FiscalMode.none) {
       void this.fiscal.dispatchInvoice(invoice.id).catch((err) => {
@@ -584,15 +611,19 @@ export class InvoiceService {
         throw new BadRequestException("La factura ya está anulada.");
       }
       await this.assertNoLiveRectifications(tx, invoice);
+      // Recorded in VERI*FACTU: cancelling it means annulling it at the AEAT
+      // too, in this same transaction. False for any other invoice.
+      const annulled = (await this.verifactu?.recordAnulacion(tx, id)) ?? false;
       return tx.invoice.update({
         where: { id },
         data: {
           status: InvoiceStatus.cancelled,
+          ...(annulled ? { fiscalStatus: "pending" as const } : {}),
           notes: [invoice.notes, `CANCELLED: ${why}`].filter(Boolean).join("\n"),
           ...this.holdedCancelMark(invoice),
         },
       });
-    });
+    }, ISSUE_TRANSACTION);
     this.mirrorCancellation(id);
     return updated;
   }
@@ -642,6 +673,29 @@ export class InvoiceService {
     await this.assertNoLiveRectifications(this.prisma, invoice);
 
     let fiscalAnulated = false;
+    const recorded = this.verifactu && (await this.prisma.verifactuRecord.count({ where: { invoiceId: id, tenantId } })) > 0;
+    if (recorded) {
+      // The anulación record and the cancellation, together; Holded is told
+      // afterwards, like any other cancellation. Under the lock a rectificativa
+      // takes on its original (rectifyIn), so none slips in while this decides.
+      const anulated = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`;
+        await this.assertNoLiveRectifications(tx, invoice);
+        await this.verifactu!.recordAnulacion(tx, id);
+        const updated = await tx.invoice.update({
+          where: { id },
+          data: {
+            status: InvoiceStatus.cancelled,
+            fiscalStatus: "pending",
+            notes: [invoice.notes, `ANULADA: ${reason}`].filter(Boolean).join("\n"),
+            ...this.holdedCancelMark(invoice),
+          },
+        });
+        return { ...updated, fiscalAnulated: true };
+      }, ISSUE_TRANSACTION);
+      this.mirrorCancellation(id);
+      return anulated;
+    }
     if (this.fiscal) {
       try {
         fiscalAnulated = await this.fiscal.anulateInvoice(id, reason);
@@ -688,6 +742,7 @@ export class InvoiceService {
       this.rectifyIn(tx, tenantId, originalInvoiceId, reason, (original, context) =>
         rectificationLines(original.lines, lines, context),
       ),
+      ISSUE_TRANSACTION,
     );
     this.afterIssue(issued);
     return { id: issued.id };
@@ -752,6 +807,7 @@ export class InvoiceService {
         freeLinesTaxIncluded: await this.salonPricesIncludeTax(tx, tenantId),
       }),
       notes: `${rectificationNotePrefix(original)} ${reason}`,
+      rectifiesInvoiceId: original.id,
     };
     const { id, fiscalMode } = await this.insert(tx, input, await this.prepare(input, tx, { rectification: true }));
     return { id, fiscalMode };
@@ -802,6 +858,24 @@ export class InvoiceService {
     if (invoice.fiscalStatus === "not_required") {
       throw new BadRequestException("Invoice has no fiscal mode configured");
     }
+    const last = await this.prisma.verifactuRecord.findFirst({ where: { invoiceId: id }, orderBy: { sequence: "desc" } });
+    if (last && this.verifactu) {
+      // A new record; the one with errors stays as it was. An anulación
+      // has no correction: rejected, it is generated again; accepted with
+      // errors, it annulled the invoice.
+      if (last.kind === "anulacion") {
+        if (last.status === "rejected") await this.verifactu.recordAnulacionAgain(tenantId, id);
+      } else if (last.status === "rejected" || last.status === "accepted_with_errors") {
+        await this.verifactu.recordSubsanacion(tenantId, id);
+      }
+      // Waiting records go with the next submission; after a failure, try now.
+      await this.prisma.verifactuChain.updateMany({
+        where: { tenantId, failedAttempts: { gt: 0 } },
+        data: { nextSendAt: new Date() },
+      });
+      this.kickDispatcher();
+      return this.findOne(tenantId, id);
+    }
     await this.prisma.invoice.update({
       where: { id },
       data: {
@@ -811,6 +885,19 @@ export class InvoiceService {
     });
     await this.fiscal.dispatchInvoice(id);
     return this.findOne(tenantId, id);
+  }
+
+  /**
+   * Sends what is due now instead of at the next interval, in the background.
+   * The dispatcher works across salons, so not inside this request's tenant:
+   * there it would only see this salon, and leave the others to wait.
+   */
+  private kickDispatcher(): void {
+    const dispatcher = this.verifactuDispatcher;
+    if (!dispatcher) return;
+    void runUnscoped(() => dispatcher.tick()).catch((err) => {
+      this.logger.warn(`VERI*FACTU submission after a resend failed: ${(err as Error).message}`);
+    });
   }
 
   /** The live (not cancelled) rectificativas of `original`, by note or line link (see creditContext). */

@@ -12,7 +12,9 @@ import type { InvoiceDocument } from "./invoice-document";
  *    embedded) with WinAnsiEncoding, so ñ, á, é, ¿ and € print as such;
  *  - the lines table flows onto as many pages as it needs, its header
  *    repeated, with "Página n de N" at the foot;
- *  - the fiscal QR, when there is one, drawn as vector squares.
+ *  - the VERI*FACTU QR, when there is one, drawn as vector squares at the
+ *    start of the first page, 35 mm wide, between its two legends (Orden
+ *    HAC/1177/2024 arts. 20-21, QR spec v0.5.0).
  *
  * Uncompressed on purpose: small anyway, and the tests read the text back.
  */
@@ -22,6 +24,8 @@ const PAGE_H = 841.89;
 const MARGIN = 42;
 const CONTENT_W = PAGE_W - 2 * MARGIN;
 const FOOTER_H = 30;
+/** 35 mm, within the 30-40 mm the QR spec asks for. */
+const QR_SIDE_PT = (35 * 72) / 25.4;
 
 const PURPLE = "0.30 0.11 0.58";
 const GREY = "0.29 0.33 0.39";
@@ -265,6 +269,16 @@ export function renderPlainInvoicePdf(doc: InvoiceDocument, qrUrl?: string | nul
     if (inLinesTable) drawLinesHeader(p, doc.taxLabel);
   });
 
+  // ---- The tax QR, before anything else ----
+  if (qrUrl) {
+    const x = MARGIN + (CONTENT_W - QR_SIDE_PT) / 2;
+    const center = (t: string, y: number) => pages.text(MARGIN + (CONTENT_W - textWidth(t, 10)) / 2, y, t, 10);
+    center("QR tributario:", pages.y - 10);
+    drawQr(pages, qrUrl, x, pages.y - 18 - QR_SIDE_PT, QR_SIDE_PT);
+    center("VERI*FACTU", pages.y - 32 - QR_SIDE_PT);
+    pages.y -= QR_SIDE_PT + 46;
+  }
+
   // ---- Header: salon, title, number, date ----
   const top = pages.y;
   wrapText(doc.issuer.name, CONTENT_W * 0.5, 14, "F2").slice(0, 2).forEach((l, i) => {
@@ -375,17 +389,15 @@ export function renderPlainInvoicePdf(doc: InvoiceDocument, qrUrl?: string | nul
   pages.right(tx.value, ty, doc.totals.total, 12, "F2", PURPLE);
   pages.y = Math.min(ty, blockTop - breakdownH) - 20;
 
-  // ---- Fiscal reference and QR ----
+  // ---- Fiscal reference ----
   const fiscal = [
     doc.fiscal.reference ? `Referencia fiscal: ${doc.fiscal.reference}` : "",
     doc.fiscal.hash ? `Huella: ${doc.fiscal.hash}` : "",
   ].filter(Boolean);
-  const qrSize = qrUrl ? 90 : 0;
-  if (fiscal.length || qrUrl) {
-    const fiscalLines = fiscal.flatMap((f) => wrapText(f, CONTENT_W - qrSize - 20, 7.5));
-    pages.ensure(Math.max(qrSize, fiscalLines.length * 10) + 6);
+  if (fiscal.length) {
+    const fiscalLines = fiscal.flatMap((f) => wrapText(f, CONTENT_W - 20, 7.5));
+    pages.ensure(fiscalLines.length * 10 + 6);
     fiscalLines.forEach((t, i) => pages.text(MARGIN, pages.y - 10 - i * 10, t, 7.5, "F1", GREY));
-    if (qrUrl) drawQr(pages, qrUrl, MARGIN + CONTENT_W - qrSize, pages.y - qrSize, qrSize);
   }
 
   return writePdf(pages.pages, doc);

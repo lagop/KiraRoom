@@ -7,7 +7,15 @@
  * The page used to load the razón social and the ID type empty and send the
  * whole form on every save, so it erased the stored razón social.
  */
-import { changedFiscalFields, fiscalChangeSummary, issuerFieldsFromSettings } from "./fiscal-settings-form";
+import {
+  changedFiscalFields,
+  fiscalChangeSummary,
+  issuerFieldsFromSettings,
+  pollVerifactuStatus,
+  VERIFACTU_IDLE_POLL_MS,
+  zeroRateMissing,
+  zeroRateTreatmentFrom,
+} from "./fiscal-settings-form";
 
 let pass = 0;
 let fail = 0;
@@ -20,6 +28,16 @@ function check(label: string, actual: unknown, expected: unknown): void {
     console.log(`  ✗ ${label}\n      expected: ${JSON.stringify(expected)}\n      actual:   ${JSON.stringify(actual)}`);
   }
 }
+
+check("verifactu with no answer for the 0 % cannot be saved", zeroRateMissing({ fiscalMode: "verifactu" }), true);
+check("«No uso el 0 %» is an answer", zeroRateMissing({ fiscalMode: "verifactu", zeroRateTreatment: "none" }), false);
+check("another fiscal mode does not ask", zeroRateMissing({ fiscalMode: "none" }), false);
+check("the stored choice loads", zeroRateTreatmentFrom({ zeroRateTreatment: "E1" }), "E1");
+check("anything else stored loads as no choice", zeroRateTreatmentFrom({ zeroRateTreatment: "E9" }), undefined);
+check("a salon with it active is polled", pollVerifactuStatus(60_000)({ state: { data: { active: true } } }), 60_000);
+check("so is one that left with records queued", pollVerifactuStatus(60_000)({ state: { data: { active: false, pending: 2 } } }), 60_000);
+check("a salon without it, slowly", pollVerifactuStatus(60_000)({ state: { data: { active: false, pending: 0 } } }), VERIFACTU_IDLE_POLL_MS);
+check("a failed first call is tried again, slowly", pollVerifactuStatus(60_000)({ state: {} }), VERIFACTU_IDLE_POLL_MS);
 
 check(
   "the razón social, the type and the NIF load from the response",
@@ -77,6 +95,22 @@ check(
 // The confirmation before risky fiscal changes (C12).
 const risk = { tenantNif: "B12345674", defaultSeries: "A", defaultTaxRate: 21, taxRegime: "iva" as const, pricesIncludeTax: true };
 check("no risky change: no dialog", fiscalChangeSummary({ ...risk }, risk), []);
+check(
+  "the 0 % changed with Verifactu on asks",
+  fiscalChangeSummary(
+    { ...risk, fiscalMode: "verifactu", zeroRateTreatment: "E1" as const },
+    { ...risk, fiscalMode: "verifactu", zeroRateTreatment: "N1" as const },
+  ).map((l) => l.key),
+  ["invoices.fiscalSettings.confirmZeroRate"],
+);
+check(
+  "choosing it while activating does not ask twice",
+  fiscalChangeSummary(
+    { ...risk, fiscalMode: "verifactu", zeroRateTreatment: "E1" as const },
+    { ...risk, fiscalMode: "none" },
+  ).map((l) => l.key),
+  ["invoices.fiscalSettings.confirmVerifactu"],
+);
 check("the rate alone does not ask", fiscalChangeSummary({ ...risk, defaultTaxRate: 10 }, risk), []);
 check(
   "a new NIF and series say what the new invoices carry",
@@ -109,4 +143,15 @@ check(
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
+{
+  const base = { tenantNif: "B1", defaultSeries: "A", defaultTaxRate: 21, taxRegime: "iva" as const, pricesIncludeTax: true };
+  const on = fiscalChangeSummary({ ...base, fiscalMode: "verifactu" }, { ...base, fiscalMode: "none" }).map((l) => l.key);
+  const same = fiscalChangeSummary({ ...base, fiscalMode: "verifactu" }, { ...base, fiscalMode: "verifactu" });
+  if (on.includes("invoices.fiscalSettings.confirmVerifactu") && same.length === 0) pass++;
+  else {
+    fail++;
+    console.error("switching VERI*FACTU on must ask for confirmation, once");
+  }
+}
+
 if (fail > 0) process.exit(1);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import apiClient, { type PosReceipt } from "@/lib/api";
 import { methodLabel } from "@/lib/payments-format";
 import { euros } from "@/lib/pos-cart";
@@ -24,6 +25,7 @@ interface SaleReceiptProps {
 export default function SaleReceipt({ saleId, clientEmail, canEmail, onClose }: SaleReceiptProps) {
   const [receipt, setReceipt] = useState<PosReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [qrSvg, setQrSvg] = useState("");
   const [email, setEmail] = useState(clientEmail ?? "");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
@@ -38,6 +40,22 @@ export default function SaleReceipt({ saleId, clientEmail, canEmail, onClose }: 
       alive = false;
     };
   }, [saleId]);
+
+  // Orden HAC/1177/2024 arts. 20-21: at the start of the invoice, 30-40 mm.
+  const qrUrl = receipt?.invoice?.qrUrl;
+  useEffect(() => {
+    let alive = true;
+    if (!qrUrl) {
+      setQrSvg("");
+      return;
+    }
+    QRCode.toString(qrUrl, { type: "svg", errorCorrectionLevel: "M", margin: 0 })
+      .then((svg) => alive && setQrSvg(svg))
+      .catch(() => alive && setQrSvg(""));
+    return () => {
+      alive = false;
+    };
+  }, [qrUrl]);
 
   const send = async () => {
     if (!receipt?.invoice) return;
@@ -70,6 +88,14 @@ export default function SaleReceipt({ saleId, clientEmail, canEmail, onClose }: 
           {!receipt && !error && <div className="py-6 text-center text-gray-500">Cargando el ticket…</div>}
           {receipt && (
             <>
+              {qrSvg && (
+                <div className="mb-2 flex flex-col items-center gap-1 text-center">
+                  <div>QR tributario:</div>
+                  {/* The SVG comes from the qrcode library, not from user input. */}
+                  <div style={{ width: "35mm", height: "35mm" }} className="[&>svg]:h-full [&>svg]:w-full" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+                  <div>VERI*FACTU</div>
+                </div>
+              )}
               <div className="text-center">
                 <div className="font-bold">{receipt.salon.name}</div>
                 {receipt.salon.tradeName && receipt.salon.tradeName !== receipt.salon.name && <div>{receipt.salon.tradeName}</div>}

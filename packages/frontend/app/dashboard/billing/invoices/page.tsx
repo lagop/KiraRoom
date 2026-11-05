@@ -362,7 +362,10 @@ function InvoiceRow({
       <td className="px-4 py-3">
         <StatusBadge kind="fiscal" value={invoice.fiscalStatus} />
         {invoice.fiscalError && (
-          <div className="mt-1 max-w-xs truncate text-xs text-red-600" title={invoice.fiscalError}>
+          <div
+            className={`mt-1 max-w-xs truncate text-xs ${invoice.fiscalStatus === "accepted" ? "text-amber-700" : "text-red-600"}`}
+            title={invoice.fiscalError}
+          >
             {invoice.fiscalError}
           </div>
         )}
@@ -378,7 +381,7 @@ function InvoiceRow({
           >
             <FileDown className="h-4 w-4" />
           </button>
-          {invoice.fiscalXml && (
+          {(invoice.fiscalXml || invoice.fiscalHash) && (
             <button
               type="button"
               onClick={() => onDownload("xml")}
@@ -400,9 +403,10 @@ function InvoiceRow({
               <Mail className="h-4 w-4" />
             </button>
           )}
+          {/* Pending, rejected, or accepted with warnings: resend (corrected). */}
           {manager &&
             invoice.fiscalStatus !== "not_required" &&
-            invoice.fiscalStatus !== "accepted" && (
+            (invoice.fiscalStatus !== "accepted" || !!invoice.fiscalError) && (
               <button
                 type="button"
                 onClick={onResend}

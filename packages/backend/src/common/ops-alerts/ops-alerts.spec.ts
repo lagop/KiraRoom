@@ -44,6 +44,15 @@ describe("OpsAlertService", () => {
     expect(opsAlertRecipient({ OPS_ALERT_EMAIL: "  " })).toBe("admin@kiraroom.net");
   });
 
+  it("a scope has its own hour: one salon's alert does not hide another's", async () => {
+    const email = { sendEmail: jest.fn().mockResolvedValue({ success: true }) };
+    const svc = new OpsAlertService(email as any, memoryRedis() as any);
+    expect(await svc.notify("fiscal_rejected", "a", "x", "salon-a")).toBe(true);
+    expect(await svc.notify("fiscal_rejected", "b", "y", "salon-b")).toBe(true);
+    expect(await svc.notify("fiscal_rejected", "a2", "x", "salon-a")).toBe(false);
+    expect(email.sendEmail).toHaveBeenCalledTimes(2);
+  });
+
   it("sends at most one email per kind per hour and mentions the ones held back", async () => {
     const email = { sendEmail: jest.fn().mockResolvedValue({ success: true }) };
     const redis = memoryRedis();

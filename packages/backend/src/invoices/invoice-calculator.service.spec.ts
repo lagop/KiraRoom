@@ -16,6 +16,14 @@ describe("InvoiceCalculator", () => {
     expect(r.totalCents).toBe(12100);
   });
 
+  it("keeps fractional rates in the breakdown (IGIC 9.5 %, IVA 7.5 %)", () => {
+    const r = calc.compute([
+      { description: "Tratamiento", quantity: 1, unitPriceCents: 10000, taxRate: 9.5 },
+      { description: "Producto", quantity: 1, unitPriceCents: 10000, taxRate: 7.5 },
+    ]);
+    expect(r.taxBreakdown.map((t) => t.rate)).toEqual([9.5, 7.5]);
+  });
+
   it("applies quantity to line totals", () => {
     const r = calc.compute([
       { description: "Producto", quantity: 3, unitPriceCents: 500, taxRate: 10 },

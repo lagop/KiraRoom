@@ -87,6 +87,7 @@ function makePrismaMock() {
     },
     order: { findUnique: async () => null },
     appointment: { findUnique: jest.fn(async () => null as any) },
+    verifactuRecord: { count: async () => 0, findFirst: async () => null },
   };
 
   // Invoice number and invoice are created in one transaction. Like Postgres,

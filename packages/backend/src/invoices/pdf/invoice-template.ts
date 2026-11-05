@@ -76,7 +76,12 @@ export function renderInvoiceHtml(doc: InvoiceDocument, qrPngDataUrl?: string): 
   </section>`
     : "";
 
-  const qrImg = qrPngDataUrl ? `<img class="qr" src="${qrPngDataUrl}" alt="QR fiscal" />` : "";
+  // VERI*FACTU (Orden HAC/1177/2024 arts. 20-21, QR spec v0.5.0): at the
+  // start of the invoice, 30-40 mm, "QR tributario:" above and the
+  // "VERI*FACTU" legend below, in type no smaller than the rest.
+  const qrBlock = qrPngDataUrl
+    ? `<div class="qr-block"><div>QR tributario:</div><img class="qr" src="${qrPngDataUrl}" alt="QR tributario" /><div>VERI*FACTU</div></div>`
+    : "";
 
   return `<!doctype html>
 <html lang="es">
@@ -130,10 +135,12 @@ export function renderInvoiceHtml(doc: InvoiceDocument, qrPngDataUrl?: string): 
     table.totals tr.total td { border-top: 2px solid #4c1d95; font-weight: 700; font-size: 12.5pt; color: #4c1d95; padding-top: 8px; }
     footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 24px; break-inside: avoid; }
     footer .fiscal { font-size: 8pt; color: #6b7280; max-width: 70%; word-break: break-all; }
-    footer .qr { width: 110px; height: 110px; }
+    .qr-block { text-align: center; margin: 0 auto 18px auto; font-size: 11pt; }
+    .qr-block .qr { width: 35mm; height: 35mm; margin: 2mm auto; display: block; }
   </style>
 </head>
 <body>
+  ${qrBlock}
   <header>
     <div class="brand">${escapeHtml(doc.issuer.name)}</div>
     <div class="meta">
@@ -186,7 +193,6 @@ export function renderInvoiceHtml(doc: InvoiceDocument, qrPngDataUrl?: string): 
       ${doc.fiscal.reference ? `<div>Referencia fiscal: <code>${escapeHtml(doc.fiscal.reference)}</code></div>` : ""}
       ${doc.fiscal.hash ? `<div>Huella: <code>${escapeHtml(doc.fiscal.hash)}</code></div>` : ""}
     </div>
-    <div>${qrImg}</div>
   </footer>
 </body>
 </html>`;

@@ -8,6 +8,7 @@ import apiClient, { decodeJwtToken, getToken, removeToken, removeRefreshToken } 
 import { ShieldAlert } from "lucide-react";
 import { OnboardingHost } from "./_components/onboarding/OnboardingHost";
 import CookieBanner from "../components/cookie-banner";
+import { VerifactuBanner } from "@/components/verifactu/verifactu-banner";
 import { ReadOnlyBanner } from "@/components/billing/ReadOnlyBanner";
 import { TrialEndingBanner } from "@/components/billing/TrialEndingBanner";
 import { EmailVerificationBanner } from "@/components/auth/email-verification-banner";
@@ -245,6 +246,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Page content */}
         <main className="flex-1 p-6 bg-white shadow-sm min-w-0 overflow-x-hidden">
+          {/* Orden HAC/1177/2024 art. 16.4: on every page, whatever the role. */}
+          <VerifactuBanner />
           {role === undefined ? null : blocked ? <ManagersOnlyNotice /> : children}
         </main>
       </div>

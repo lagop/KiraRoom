@@ -11,7 +11,7 @@
  * No React and no Next imports, so lib/fiscal-settings-form.spec.ts can run
  * them.
  */
-import type { FiscalSettings } from "./api";
+import type { FiscalSettings, ZeroRateTreatment } from "./api";
 
 export type TaxIdType = "nif" | "cif" | "nie" | "passport" | "other";
 
@@ -43,6 +43,36 @@ export function changedFiscalFields<T extends Record<string, unknown>>(draft: T,
   return patch;
 }
 
+/** The choices for the 0 %, in the order the page lists them. */
+export const ZERO_RATE_TREATMENTS: readonly ZeroRateTreatment[] = ["none", "S1", "E1", "E2", "E3", "E4", "E5", "E6", "N1", "N2"];
+
+/** The salon's stored choice, if it has made one. */
+export function zeroRateTreatmentFrom(settings: { zeroRateTreatment?: unknown } | null | undefined): ZeroRateTreatment | undefined {
+  const value = settings?.zeroRateTreatment;
+  return ZERO_RATE_TREATMENTS.find((t) => t === value);
+}
+
+/** Verifactu chosen with no answer for the 0 %: the backend would refuse the save. */
+export function zeroRateMissing(draft: { fiscalMode?: string; zeroRateTreatment?: ZeroRateTreatment }): boolean {
+  return draft.fiscalMode === "verifactu" && !draft.zeroRateTreatment;
+}
+
+/** How often the status is asked when there is nothing to follow. */
+export const VERIFACTU_IDLE_POLL_MS = 600_000;
+
+/**
+ * refetchInterval of the VERI*FACTU status: every `ms` while it is active or
+ * something is queued. Otherwise, or with no answer yet, slowly and not never:
+ * a first call that failed, or Verifactu switched on from another device, must
+ * not leave the art. 16.4 notice off until a reload.
+ */
+export function pollVerifactuStatus(ms: number) {
+  return (query: { state: { data?: { active?: boolean; pending?: number } } }): number => {
+    const data = query.state.data;
+    return data?.active || (data?.pending ?? 0) > 0 ? ms : VERIFACTU_IDLE_POLL_MS;
+  };
+}
+
 /** The settings a change of which is confirmed before saving. */
 export interface FiscalRiskFields {
   tenantNif: string;
@@ -50,6 +80,9 @@ export interface FiscalRiskFields {
   defaultTaxRate: number;
   taxRegime: "iva" | "igic" | "ipsi";
   pricesIncludeTax: boolean;
+  /** Left out by callers that do not change it. */
+  fiscalMode?: string;
+  zeroRateTreatment?: ZeroRateTreatment;
 }
 
 const TAX_LABEL: Record<FiscalRiskFields["taxRegime"], string> = { iva: "IVA", igic: "IGIC", ipsi: "IPSI" };
@@ -72,7 +105,8 @@ function clientTotal(rate: number, included: boolean): number {
 
 /**
  * The lines of the confirmation shown before saving a change to the NIF, the
- * default series, the tax regime or whether prices include the tax: what
+ * default series, the tax regime, whether prices include the tax or what a
+ * 0 % line means once Verifactu is on: what
  * changes for the invoices from now on (the ones already issued keep their
  * values, said by the dialog's intro). Empty when none of those changed, so
  * a save of anything else goes through without a dialog.
@@ -82,6 +116,12 @@ export function fiscalChangeSummary(
   loaded: FiscalRiskFields,
 ): Array<{ key: string; params: Record<string, string> }> {
   const lines: Array<{ key: string; params: Record<string, string> }> = [];
+  if (draft.fiscalMode === "verifactu" && loaded.fiscalMode !== "verifactu") {
+    lines.push({ key: "invoices.fiscalSettings.confirmVerifactu", params: {} });
+  }
+  if (loaded.fiscalMode === "verifactu" && loaded.zeroRateTreatment && draft.zeroRateTreatment !== loaded.zeroRateTreatment) {
+    lines.push({ key: "invoices.fiscalSettings.confirmZeroRate", params: {} });
+  }
   if (draft.tenantNif.trim().toUpperCase() !== loaded.tenantNif.trim().toUpperCase()) {
     lines.push({ key: "invoices.fiscalSettings.confirmTaxId", params: { taxId: draft.tenantNif.trim().toUpperCase() } });
   }

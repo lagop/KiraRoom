@@ -12,12 +12,15 @@ import { AuditLogService } from "../saas/audit-log.service";
 import { FiscalService } from "./fiscal/fiscal.service";
 import { FiscalCertificateService } from "./fiscal/fiscal-certificate.service";
 import { FiscalRetryQueue } from "./fiscal/fiscal-retry.queue";
-import { VerifactuService } from "./fiscal/verifactu.service";
 import { TicketBaiService } from "./fiscal/ticketbai.service";
 import { SiiService } from "./fiscal/sii.service";
 import { XadesService } from "./fiscal/xades.service";
 import { QrService } from "./fiscal/qr.service";
 import { TaxReportsModule } from "./tax-reports/tax-reports.module";
+import { VerifactuRecordsService } from "./fiscal/verifactu/verifactu-records.service";
+import { VerifactuDispatcher } from "./fiscal/verifactu/verifactu-dispatcher.service";
+import { VerifactuTransport } from "./fiscal/verifactu/transport";
+import { VerifactuController } from "./fiscal/verifactu/verifactu.controller";
 // Saving the fiscal identity updates the salon's Stripe customer (B1).
 import { PlatformModule } from "../platform/platform.module";
 
@@ -56,7 +59,7 @@ class InvoicesModuleInit implements OnModuleInit {
 
 @Module({
   imports: [PrismaModule, AccountingModule, NotificationsModule, TaxReportsModule, PlatformModule],
-  controllers: [InvoicesController],
+  controllers: [InvoicesController, VerifactuController],
   providers: [
     InvoiceService,
     InvoiceCalculator,
@@ -67,11 +70,13 @@ class InvoicesModuleInit implements OnModuleInit {
     FiscalService,
     FiscalCertificateService,
     FiscalRetryQueue,
-    VerifactuService,
     TicketBaiService,
     SiiService,
     XadesService,
     QrService,
+    VerifactuRecordsService,
+    VerifactuDispatcher,
+    VerifactuTransport,
     InvoicesModuleInit,
   ],
   exports: [

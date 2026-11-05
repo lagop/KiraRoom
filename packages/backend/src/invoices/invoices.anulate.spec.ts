@@ -43,6 +43,7 @@ function makePrismaMock() {
       invoiceLine: { create: async () => ({}) },
       accountingConnection: { findUnique: async () => null },
       accountingsyncLog: { create: async () => ({}) },
+      verifactuRecord: { count: async () => 0, findFirst: async () => null },
   };
   // Invoice number and invoice are created in one transaction; a
   // rectificativa locks its original first (SELECT ... FOR UPDATE).

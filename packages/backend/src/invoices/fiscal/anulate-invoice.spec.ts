@@ -1,15 +1,15 @@
 /**
- * Tests for `InvoiceService.anulate()` with a real fiscal pipeline.
+ * Tests for `FiscalService.anulateInvoice()`.
  *
- * Verifies that anulating an invoice with `fiscalMode='verifactu'` or
- * `'ticketbai'` triggers a real fiscal dispatch — sign + POST to
- * AEAT/diputación — and that the result is persisted on the invoice row.
+ * TicketBAI: the anulación is signed and dispatched to the diputación and
+ * the result is persisted on the invoice row. VERI*FACTU no longer goes
+ * through here: InvoiceService adds an anulación record to the salon's
+ * record chain (verifactu/), tested in verifactu-records.spec.ts.
  *
  * The HTTP layer is stubbed by default (FISCAL_E2E_MODE=stub) so no
  * network is involved; tests run in CI without sandbox credentials.
  */
 
-import { VerifactuService } from "./verifactu.service";
 import { TicketBaiService } from "./ticketbai.service";
 import { SiiService } from "./sii.service";
 import { FiscalService } from "./fiscal.service";
@@ -102,28 +102,9 @@ function makePrisma(): InMemoryPrisma & { prisma: any } {
  */
 function makeFiscalService(m: InMemoryPrisma & { prisma: any }): {
   fiscal: FiscalService;
-  verifactuDispatch: jest.Mock;
   ticketBaiDispatch: jest.Mock;
 } {
   const enc = makeEncryption();
-
-  const verifactu: any = new VerifactuService(
-    m.prisma,
-    enc,
-    {} as any, // xades (unused here — signWithTenantCert is overridden below)
-    { buildVerifactuUrl: (i: any) => `https://fake/q/${i.nif}` } as any,
-    { listActiveCertificates: async () => [] } as any,
-  );
-  verifactu.signWithTenantCert = async (_id: string, _xml: string) => ({
-    signedXml: "<signed xmlns=\"http://www.w3.org/2000/09/xmldsig#\"><real-signature/></signed>",
-    documentHash: "abc123def456",
-  });
-  const verifactuDispatch = jest.fn(async (input: any) => ({
-    status: "accepted",
-    reference: `CSV-FAKE-${input.invoiceId}`,
-    qrUrl: `https://fake/q/${input.invoiceId}`,
-  }));
-  verifactu.dispatch = verifactuDispatch;
 
   const ticketBai: any = new TicketBaiService(
     m.prisma,
@@ -144,13 +125,12 @@ function makeFiscalService(m: InMemoryPrisma & { prisma: any }): {
 
   const fiscal = new FiscalService(
     m.prisma,
-    verifactu,
     ticketBai,
     new SiiService({} as any),
     /* retryQueue */ undefined,
     /* invoiceServiceRef */ undefined,
   );
-  return { fiscal, verifactuDispatch, ticketBaiDispatch };
+  return { fiscal, ticketBaiDispatch };
 }
 
 function seedAnulatedInvoice(
@@ -192,23 +172,14 @@ function seedAnulatedInvoice(
   return id;
 }
 
-describe("FiscalService.anulateInvoice (real AEAT/TBAI dispatch)", () => {
-  it("Verifactu: signs and dispatches the RegistroAnulacion envelope", async () => {
+describe("FiscalService.anulateInvoice", () => {
+  it("VERI*FACTU: leaves the anulación to the record chain and dispatches nothing", async () => {
     const m = makePrisma();
-    const { fiscal, verifactuDispatch } = makeFiscalService(m);
+    const { fiscal, ticketBaiDispatch } = makeFiscalService(m);
     const id = seedAnulatedInvoice(m, { fiscalMode: "verifactu" });
-    await fiscal.anulateInvoice(id, "Cliente canceló");
-
-    expect(verifactuDispatch).toHaveBeenCalledTimes(1);
-    const [args] = verifactuDispatch.mock.calls[0] as any;
-    expect(args.invoiceId).toBe(id);
-    expect(args.xml).toContain("<signed");
-    expect(args.xml).not.toContain("<signed>"); // We didn't pad with '<signed>...'
-
-    const inv = m.invoices.get(id);
-    expect(inv.fiscalStatus).toBe("accepted");
-    expect(inv.fiscalReference).toBe(`CSV-FAKE-${id}`);
-    expect(inv.fiscalXml).toContain("<real-signature/></signed>");
+    expect(await fiscal.anulateInvoice(id, "Cliente canceló")).toBe(true);
+    expect(ticketBaiDispatch).not.toHaveBeenCalled();
+    expect(m.invoices.get(id).fiscalStatus).toBe("accepted");
   });
 
   it("TicketBAI: routes to the right diputación", async () => {
@@ -228,101 +199,37 @@ describe("FiscalService.anulateInvoice (real AEAT/TBAI dispatch)", () => {
     expect(inv.fiscalReference).toBe(`TBAI-FAKE-${id}`);
   });
 
-  it("chains the previous Huella into the new envelope", async () => {
+  it("TicketBAI: a 5xx schedules a retry rather than marking permanent", async () => {
     const m = makePrisma();
-    const { fiscal } = makeFiscalService(m);
-    // Track the *unsigned* envelope before signing — that's where the
-    // <HuellaAnterior> element lives. Our mock discards it, so we
-    // intercept signWithTenantCert.
-    const prevHash =
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    const id = seedAnulatedInvoice(m, {
-      fiscalMode: "verifactu",
-      previousHash: prevHash,
-    });
-    let captured: string | undefined;
-    (fiscal as any).verifactu.signWithTenantCert = async (
-      _id: string,
-      xml: string,
-    ) => {
-      captured = xml;
-      return {
-        signedXml: "<signed/>",
-        documentHash: "hash",
-      };
-    };
-    await fiscal.anulateInvoice(id, "x");
-    expect(captured).toContain(
-      `<veri:HuellaAnterior>${prevHash}</veri:HuellaAnterior>`,
-    );
+    const { fiscal, ticketBaiDispatch } = makeFiscalService(m);
+    ticketBaiDispatch.mockResolvedValue({ status: "error", error: "gipuzkoa 503: upstream timeout" });
+    const id = seedAnulatedInvoice(m, { fiscalMode: "ticketbai" });
+    expect(await fiscal.anulateInvoice(id, "x")).toBe(false);
+    // The retry queue is not wired here, so the status is left as it was.
+    expect(m.invoices.get(id).fiscalStatus).not.toBe("error");
   });
 
-  it("AEAT 5xx response schedules a retry rather than marking permanent", async () => {
+  it("TicketBAI: a 4xx is permanent (no retry)", async () => {
     const m = makePrisma();
-    const { fiscal, verifactuDispatch } = makeFiscalService(m);
-    verifactuDispatch.mockResolvedValue({
-      status: "error",
-      error: "AEAT 503: upstream timeout",
-      qrUrl: undefined,
-    });
-
-    const id = seedAnulatedInvoice(m, { fiscalMode: "verifactu" });
-    const result = await fiscal.anulateInvoice(id, "x");
-    expect(result).toBe(false);
-    const inv = m.invoices.get(id);
-    // 5xx-error: status stays 'pending' so the retry queue can re-attempt.
-    // The current `fiscalError` may or may not be persisted (depends on
-    // whether the retry module is wired); here it's undefined because
-    // `enqueueRetry` no-ops when the queue is absent.
-    expect(inv.fiscalStatus).toBe("pending");
-  });
-
-  it("AEAT 4xx response marks permanent (no retry)", async () => {
-    const m = makePrisma();
-    const { fiscal, verifactuDispatch } = makeFiscalService(m);
-    verifactuDispatch.mockResolvedValue({
-      status: "rejected",
-      error: "AEAT 400: bad schema",
-      qrUrl: undefined,
-    });
-
-    const id = seedAnulatedInvoice(m, { fiscalMode: "verifactu" });
-    const result = await fiscal.anulateInvoice(id, "x");
-    expect(result).toBe(true); // handled cleanly (rejected is non-error)
-
+    const { fiscal, ticketBaiDispatch } = makeFiscalService(m);
+    ticketBaiDispatch.mockResolvedValue({ status: "rejected", error: "gipuzkoa 400: bad schema" });
+    const id = seedAnulatedInvoice(m, { fiscalMode: "ticketbai" });
+    expect(await fiscal.anulateInvoice(id, "x")).toBe(true);
     const inv = m.invoices.get(id);
     expect(inv.fiscalStatus).toBe("rejected");
-    expect(inv.fiscalError).toContain("AEAT 400");
+    expect(inv.fiscalError).toContain("400");
   });
 
-  it("missing certificate writes error to fiscalError instead of crashing", async () => {
+  it("TicketBAI: a missing certificate is written to fiscalError instead of crashing", async () => {
     const m = makePrisma();
     const { fiscal } = makeFiscalService(m);
-    // Force signWithTenantCert to throw (no cert).
-    (fiscal as any).verifactu.signWithTenantCert = async () => {
+    (fiscal as any).ticketBai.signWithTenantCert = async () => {
       throw new Error("No active fiscal certificate");
     };
-
-    const id = seedAnulatedInvoice(m, { fiscalMode: "verifactu" });
-    const result = await fiscal.anulateInvoice(id, "x");
-    expect(result).toBe(false);
+    const id = seedAnulatedInvoice(m, { fiscalMode: "ticketbai" });
+    expect(await fiscal.anulateInvoice(id, "x")).toBe(false);
     const inv = m.invoices.get(id);
     expect(inv.fiscalStatus).toBe("error");
     expect(inv.fiscalError).toContain("No active fiscal certificate");
-  });
-
-  it("does not open a new entry in the chain for anulación", async () => {
-    const m = makePrisma();
-    const { fiscal, verifactuDispatch } = makeFiscalService(m);
-    const prevHash = "abc";
-    const id = seedAnulatedInvoice(m, {
-      fiscalMode: "verifactu",
-      previousHash: prevHash,
-    });
-    await fiscal.anulateInvoice(id, "x");
-    // The chain state should NOT have been mutated — anulación does not
-    // produce a new <RegistroAlta>, so no new Huella is recorded.
-    expect(m.chains.get("tenant-1|verifactu")?.lastHash).toBe(prevHash);
-    void verifactuDispatch;
   });
 });

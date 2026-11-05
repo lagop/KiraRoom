@@ -2,16 +2,13 @@
  * Whether invoices may be sent to the tax authorities (Verifactu,
  * TicketBAI, SII).
  *
- * Not yet in production. The transports are stubs that answer "accepted"
- * with references like CSV-STUB-…, so a salon that switched Verifactu on
- * saw its invoices marked as accepted by the AEAT when nothing had been
- * sent; the "real" mode posts without the mutual-TLS certificate, and the
- * hash chain does not follow the AEAT specification. Telling a salon it
- * complies when it does not is worse than not offering the feature.
+ * Not in production until FISCAL_SUBMISSION_ENABLED=1, which opens VERI*FACTU
+ * (verifactu/config.ts) once it has been tested against the AEAT's test
+ * environment and the declaración responsable is signed. TicketBAI and SII
+ * are still stubs that answer "accepted" with references like CSV-STUB-…: the
+ * settings refuse them in production whatever the flag says.
  *
- * Development and tests keep the stubs. Production needs
- * FISCAL_SUBMISSION_ENABLED=1, which should only be set once the real
- * implementation is done and certified.
+ * Development and tests keep the stubs.
  */
 export function fiscalSubmissionAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.NODE_ENV !== "production" || env.FISCAL_SUBMISSION_ENABLED === "1";

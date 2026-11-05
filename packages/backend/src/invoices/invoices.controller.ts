@@ -2,6 +2,7 @@
   BadRequestException,
   ConflictException,
   Body,
+  HttpException,
   Controller,
   Get,
   Header,
@@ -17,6 +18,10 @@
   UseGuards,
 } from "@nestjs/common";
 import { fiscalSubmissionAvailable, FISCAL_SUBMISSION_UNAVAILABLE } from "./fiscal/fiscal-availability";
+import { nif as normaliseNif } from "./fiscal/verifactu/format";
+import { NS } from "./fiscal/verifactu/xml";
+import { zeroRateTreatmentOf } from "./fiscal/verifactu/zero-rate";
+import { installationNumberFor } from "./fiscal/verifactu/verifactu-records.service";
 import type { Response } from "express";
 import { Request } from "express";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -38,7 +43,7 @@ import {
   UploadCertificateDto,
 } from "./dto/invoice.dto";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { RESERVED_SERIES } from "./invoice-numbering";
+import { RESERVED_SERIES, salonDay } from "./invoice-numbering";
 import { FISCAL_SETTINGS_SELECT, fiscalSettingsView, issuerIdentityPatch, normalizeSeries } from "./fiscal-identity";
 import { AuditLogService } from "../saas/audit-log.service";
 import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
@@ -242,6 +247,14 @@ export class InvoicesController {
     @Res() res: Response,
   ) {
     const invoice = await this.invoices.findOne(this.requireTenantId(req), id);
+    const record = await this.prisma.verifactuRecord.findFirst({ where: { invoiceId: id }, orderBy: { sequence: "desc" } });
+    if (record) {
+      res.setHeader("Content-Disposition", `attachment; filename="verifactu-${invoice.series}${invoice.number}.xml"`);
+      // The record as sent, as a document of its own.
+      return res.send(
+        `<?xml version="1.0" encoding="UTF-8"?>` + record.xml.replace(/^<sum1:(\w+)>/, `<sum1:$1 xmlns:sum1="${NS.sum1}">`),
+      );
+    }
     if (!invoice.fiscalXml) {
       throw new BadRequestException("Invoice has no fiscal XML yet");
     }
@@ -304,13 +317,11 @@ export class InvoicesController {
         `La serie "${defaultSeries}" está reservada: R es la de las rectificativas y T la de los tickets. Usa otra serie.`,
       );
     }
-    if (dto.fiscalMode && dto.fiscalMode !== FiscalMode.none && !fiscalSubmissionAvailable()) {
-      throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
-    }
     const current = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { fiscalSettings: true, taxId: true },
+      select: { fiscalSettings: true, fiscalMode: true, taxId: true, timezone: true },
     });
+    await this.checkFiscalModeChange(tenantId, current, dto, identity.taxId);
     const taxIdBefore = current?.taxId ?? null;
     const merged = {
       ...((current?.fiscalSettings as Record<string, unknown>) ?? {}),
@@ -323,6 +334,7 @@ export class InvoicesController {
       ...(identity.taxId !== undefined ? { tenantNif: identity.taxId } : {}),
       ...(dto.taxRegime !== undefined ? { taxRegime: dto.taxRegime } : {}),
       ...(typeof dto.pricesIncludeTax === "boolean" ? { pricesIncludeTax: dto.pricesIncludeTax } : {}),
+      ...(dto.zeroRateTreatment !== undefined ? { zeroRateTreatment: dto.zeroRateTreatment } : {}),
     };
 
     // Switching regime without touching the rate would leave a Canarian salon
@@ -354,6 +366,13 @@ export class InvoicesController {
     });
     if (identity.taxId !== undefined && identity.taxId !== taxIdBefore) {
       await this.auditTaxIdChange(req, tenantId, taxIdBefore, identity.taxId);
+    }
+    if (dto.fiscalMode && dto.fiscalMode !== current?.fiscalMode) {
+      await this.auditFiscalChange(req, tenantId, "tenant.fiscalMode.change", current?.fiscalMode ?? null, dto.fiscalMode);
+    }
+    const zeroRateBefore = zeroRateTreatmentOf(current?.fiscalSettings);
+    if (dto.zeroRateTreatment && dto.zeroRateTreatment !== zeroRateBefore) {
+      await this.auditFiscalChange(req, tenantId, "tenant.zeroRateTreatment.change", zeroRateBefore, dto.zeroRateTreatment);
     }
     if (Object.keys(identity).length > 0) {
       // Not awaited: Stripe's answer must not slow the save, and it never fails it.
@@ -409,6 +428,91 @@ export class InvoicesController {
     }
   }
 
+  /**
+   * Switching VERI*FACTU on binds the salon until 31 December, and what a 0 %
+   * line means changes what the AEAT is told: who and when is kept.
+   */
+  private async auditFiscalChange(req: AuthedRequest, tenantId: string, action: string, before: string | null, after: string) {
+    const user = req.user;
+    if (!this.auditLog || !user?.id || !user.role) return;
+    try {
+      await this.auditLog.record(action, {
+        actorId: user.id,
+        actorRole: user.role,
+        tenantId,
+        metadata: { before, after, ...(user.impersonatedBy ? { impersonatedBy: user.impersonatedBy } : {}) },
+      });
+    } catch (err) {
+      this.logger.warn(`Audit log ${action} of tenant ${tenantId} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * VERI*FACTU: switching it on needs the salon's NIF, its own certificate to
+   * submit with and what a 0 % line means for it; once on, it stays on until 31 December of the year
+   * (Orden HAC/1177/2024 art. 17.2). TicketBAI and SII are not available.
+   */
+  private async checkFiscalModeChange(
+    tenantId: string,
+    current: { fiscalMode: FiscalMode; fiscalSettings: unknown; taxId: string | null; timezone: string } | null,
+    dto: UpdateTenantFiscalSettingsDto,
+    newTaxId: string | undefined,
+  ) {
+    const target = dto.fiscalMode as FiscalMode | undefined;
+    if (!target || target === current?.fiscalMode) return;
+
+    if (current?.fiscalMode === FiscalMode.verifactu) {
+      const thisYear = salonDay(new Date(), current.timezone).slice(0, 4);
+      const records = await this.prisma.verifactuRecord.count({
+        where: { tenantId, fecha: { endsWith: `-${thisYear}` } },
+      });
+      if (records > 0) {
+        throw new ConflictException(
+          `Verifactu se mantiene activado hasta el 31 de diciembre de ${thisYear}: una vez que un sistema ha funcionado como VERI*FACTU, debe seguir así todo el año.`,
+        );
+      }
+    }
+
+    if (target === FiscalMode.verifactu) {
+      if (!fiscalSubmissionAvailable()) throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
+      if (!normaliseNif(newTaxId ?? current?.taxId)) {
+        throw new BadRequestException("Para activar Verifactu, indica el NIF del salón.");
+      }
+      const certificates = await this.prisma.fiscalCertificate.count({
+        where: { tenantId, isActive: true, notAfter: { gt: new Date() } },
+      });
+      if (certificates === 0) {
+        throw new BadRequestException(
+          "Para activar Verifactu, sube primero el certificado electrónico con el que se enviarán las facturas a la AEAT.",
+        );
+      }
+      const zeroRate = dto.zeroRateTreatment ?? zeroRateTreatmentOf(current?.fiscalSettings);
+      if (!zeroRate) {
+        throw new BadRequestException(
+          "Para activar Verifactu, indica qué significa el 0 % en tus facturas. Si no lo usas, elige «No uso el 0 %».",
+        );
+      }
+      const defaultRate = dto.defaultTaxRate ?? (current?.fiscalSettings as { defaultTaxRate?: number } | null)?.defaultTaxRate;
+      if (zeroRate === "none" && defaultRate === 0) {
+        throw new BadRequestException(
+          "Tu tipo por defecto es el 0 %, así que no puedes elegir «No uso el 0 %». Indica qué significa el 0 % en tus facturas, o cambia el tipo por defecto.",
+        );
+      }
+      await this.prisma.verifactuChain.upsert({
+        where: { tenantId },
+        create: { tenantId, installationNumber: installationNumberFor(tenantId) },
+        update: {},
+      });
+      return;
+    }
+
+    // TicketBAI and SII are still stubs that answer "accepted": the flag that
+    // opens VERI*FACTU in production must not open them with it.
+    if (target !== FiscalMode.none && (process.env.NODE_ENV === "production" || !fiscalSubmissionAvailable())) {
+      throw new ConflictException(FISCAL_SUBMISSION_UNAVAILABLE);
+    }
+  }
+
   // ---- Certificates ----
 
   @NotDuringSupport()
@@ -425,8 +529,11 @@ export class InvoicesController {
         provider: body.provider,
         pkcs12Base64: body.pkcs12Base64,
         passphrase: body.passphrase,
+        certificateType: body.certificateType,
       });
     } catch (err) {
+      // What openPkcs12 refuses says why (wrong password, expired, no key).
+      if (err instanceof HttpException) throw err;
       // A file that is not a PKCS#12 bundle answered a bare 500.
       this.logger.warn(`Certificate upload refused: ${(err as Error).message}`);
       throw new BadRequestException(

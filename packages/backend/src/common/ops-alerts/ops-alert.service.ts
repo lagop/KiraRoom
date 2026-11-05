@@ -13,7 +13,8 @@ import { setOpsAlertSink } from "./ops-alert-sink";
  *   - email_bounces    more permanent bounces in a day than the threshold;
  *   - email_complaints more spam complaints in a day than the threshold.
  *
- * At most one email per kind per hour, across instances (Redis SET NX; the
+ * At most one email per kind (and scope, when it has one: one salon's alert
+ * must not hide another's) per hour, across instances (Redis SET NX; the
  * in-memory fallback dedupes per instance). The ones held back are counted
  * and mentioned in the next email, so nothing floods the inbox and nothing
  * is silently lost.
@@ -61,19 +62,19 @@ export class OpsAlertService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Send one alert of this kind, unless one went out in the last hour. */
-  async notify(kind: OpsAlertKind, title: string, detail: string): Promise<boolean> {
+  async notify(kind: OpsAlertKind, title: string, detail: string, scope?: string): Promise<boolean> {
     try {
-      const claimed = this.redis
-        ? await this.redis.setIfAbsent(`ops-alert:${kind}`, new Date().toISOString(), OPS_ALERT_WINDOW_SECONDS)
-        : true;
+      const key = scope ? `ops-alert:${kind}:${scope}` : `ops-alert:${kind}`;
+      const heldKey = `${key}:held`;
+      const claimed = this.redis ? await this.redis.setIfAbsent(key, new Date().toISOString(), OPS_ALERT_WINDOW_SECONDS) : true;
       if (!claimed) {
-        await this.redis?.increment(`ops-alert:${kind}:held`, OPS_ALERT_WINDOW_SECONDS * 24);
-        this.logger.warn(`Ops alert ${kind} held back (one per hour): ${title}`);
+        await this.redis?.increment(heldKey, OPS_ALERT_WINDOW_SECONDS * 24);
+        this.logger.warn(`Ops alert ${kind} held back (one per hour): ${title}${scope ? ` [${scope}]` : ""}`);
         return false;
       }
-      const heldRaw = this.redis ? await this.redis.get(`ops-alert:${kind}:held`) : null;
+      const heldRaw = this.redis ? await this.redis.get(heldKey) : null;
       const held = Number(heldRaw ?? 0) || 0;
-      if (held > 0) await this.redis?.del(`ops-alert:${kind}:held`);
+      if (held > 0) await this.redis?.del(heldKey);
 
       const subject = `[KiraRoom] ${SUBJECTS[kind]}: ${title}`.slice(0, 200);
       const more = held > 0 ? `<p>Además, ${held} aviso(s) de este tipo en la última hora que no se enviaron para no saturar el buzón. Mira los logs o GlitchTip.</p>` : "";

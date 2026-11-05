@@ -24,6 +24,7 @@ import {
 import { Transform, Type } from "class-transformer";
 import { TAX_REGIMES, type TaxRegime } from "@kira/shared";
 import { SERIES_FORMAT, SERIES_INVALID } from "../fiscal-identity";
+import { ZERO_RATE_TREATMENTS, type ZeroRateTreatment } from "../fiscal/verifactu/zero-rate";
 
 export class CreateInvoiceLineDto {
   @ApiProperty()
@@ -268,6 +269,12 @@ export class UpdateTenantFiscalSettingsDto {
   @IsBoolean()
   pricesIncludeTax?: boolean;
 
+  /** What a 0 % line is for the AEAT (verifactu/zero-rate.ts); needed to activate Verifactu. */
+  @ApiPropertyOptional({ enum: ZERO_RATE_TREATMENTS })
+  @IsOptional()
+  @IsIn(ZERO_RATE_TREATMENTS as unknown as string[], { message: "Elige una de las opciones para el 0 %." })
+  zeroRateTreatment?: ZeroRateTreatment;
+
   /** Sent only when it changes; an empty value is refused (fiscal-identity.ts). */
   @ApiPropertyOptional({ description: "Emitter NIF/CIF/NIE — stored in Tenant.taxId and mirrored to fiscalSettings.tenantNif" })
   @IsOptional()
@@ -288,6 +295,10 @@ export class UpdateTenantFiscalSettingsDto {
   legalName?: string;
 }
 
+/**
+ * The global ValidationPipe drops fields without validators: the inline
+ * body type the route used had none.
+ */
 export class CancelInvoiceDto {
   @ApiProperty()
   @IsString({ message: "Indica el motivo de la anulación." })
@@ -392,4 +403,9 @@ export class UploadCertificateDto {
   @IsString()
   @MaxLength(500)
   passphrase!: string;
+
+  /** "seal" for a certificado de sello (VERI*FACTU goes through www10). */
+  @IsOptional()
+  @IsIn(["personal", "seal"])
+  certificateType?: "personal" | "seal";
 }

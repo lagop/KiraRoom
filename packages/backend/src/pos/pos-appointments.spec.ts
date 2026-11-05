@@ -1,3 +1,4 @@
+import { ISSUE_TRANSACTION } from '../invoices/fiscal/verifactu/verifactu-records.service';
 import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { PosService } from "./pos.service";
 import { splitTicket } from "../payments/appointment-payment";
@@ -142,6 +143,8 @@ describe("POS: charging an appointment", () => {
     } as any);
 
     expect(t.prisma.$transaction).toHaveBeenCalledTimes(1);
+    // Its invoice waits for the salon's chain like any other.
+    expect(t.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), ISSUE_TRANSACTION);
     expect(t.committed.payments).toEqual([
       expect.objectContaining({ appointmentId: "a1", amount: 4000, method: "card", status: "paid", type: "appointment" }),
     ]);

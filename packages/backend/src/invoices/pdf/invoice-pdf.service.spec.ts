@@ -151,6 +151,36 @@ describe("InvoicePdfService: the PDF served without Chromium", () => {
     expect(text).not.toMatch(/\bIVA\b/);
   });
 
+  it("draws the VERI*FACTU QR first, between its two legends, as vector squares, 35 mm wide", async () => {
+    // The old fallback embedded a PNG declared as JPEG (unreadable) at the bottom.
+    const text = (await makeService({}).generate(SAMPLE as any)).toString("latin1");
+    const qrLabel = text.indexOf("(QR tributario:) Tj");
+    const legend = text.indexOf("(VERI*FACTU) Tj");
+    const firstSquare = /[\d.]+ [\d.]+ ([\d.]+) [\d.]+ re\n/.exec(text)!;
+    const squares = /\n([\d.]+) [\d.]+ ([\d.]+) [\d.]+ re\n/.exec(text)!;
+    expect(qrLabel).toBeGreaterThan(0);
+    expect(firstSquare.index).toBeGreaterThan(qrLabel);
+    expect(legend).toBeGreaterThan(firstSquare.index);
+    expect(text.indexOf("(Factura) Tj")).toBeGreaterThan(legend);
+    expect(text).not.toContain("/Subtype /Image");
+    expect(Number(squares[2])).toBeGreaterThan(0);
+    const xs = [...text.matchAll(/^([\d.]+) [\d.]+ [\d.]+ [\d.]+ re$/gm)].map((m) => Number(m[1]));
+    const widthMm = ((Math.max(...xs) - Math.min(...xs)) * 25.4) / 72;
+    expect(widthMm).toBeGreaterThan(30);
+    expect(widthMm).toBeLessThanOrEqual(40);
+  });
+
+  it("no QR and no legend on an invoice without a record", async () => {
+    const text = pdfText(await makeService({}).generate({ ...SAMPLE, invoice: { ...SAMPLE.invoice, fiscalQrUrl: null } } as any));
+    expect(text).not.toContain("VERI*FACTU");
+    expect(text).not.toContain("QR tributario");
+  });
+
+  it("prints the issuer's NIF and the base and tax per rate", async () => {
+    const text = pdfText(await makeService({}).generate(SAMPLE as any));
+    expect(text.split("\n")).toEqual(expect.arrayContaining(["NIF: B12345678", "IVA 21 %", "100,00 €", "21,00 €", "121,00 €"]));
+  });
+
   it("flows a long invoice onto more pages, repeating the table header", async () => {
     const lines = Array.from({ length: 80 }, (_, i) => ({
       description: `Servicio número ${i + 1}`,

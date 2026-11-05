@@ -68,13 +68,16 @@ export const EXPORT_OMITTED_COLUMNS: Readonly<Record<string, readonly string[]>>
   AccountingConnection: ["encryptedAccessToken", "encryptedRefreshToken"],
   WhatsAppConnection: ["accessTokenEnc", "refreshTokenEnc"],
   SocialConnection: ["accessToken", "refreshToken"],
-  FiscalCertificate: ["encryptedPem", "passphraseCipher"],
+  FiscalCertificate: ["encryptedPem", "passphraseCipher", "encryptedKeyPair"],
   TenantInvite: ["token"],
   Review: ["reviewToken"],
   CustomDomain: ["verificationToken"],
   WidgetInstance: ["token"],
   // Signed XML sent to the tax agency: large and not human-readable.
   Invoice: ["fiscalXml"],
+  // The same record as the invoice's data, as sent to the AEAT, and its raw answers.
+  VerifactuRecord: ["xml"],
+  VerifactuSubmission: ["response"],
 };
 
 /** Columns that look like secrets but are data the export keeps, and why. */
@@ -84,6 +87,9 @@ export const EXPORT_SECRET_LOOKALIKES_KEPT: Readonly<Record<string, string>> = {
   "Tenant.stripeMode": "test or live, not a key",
   "Invoice.fiscalHash": "the invoice record's chain hash, printed on it",
   "FiscalChainState.lastHash": "the chain hash of the last invoice",
+  "VerifactuChain.lastHash": "the chain hash of the last record",
+  "VerifactuRecord.hash": "the record's fingerprint, sent to the AEAT and printed on the invoice",
+  "VerifactuRecord.previousHash": "the previous record's fingerprint",
   "Consent.signatureIpHash": "proof of the signature, already a hash",
   "PublicBookingSms.phoneHash": "already a hash",
   "SocialConnection.tokenExpiry": "a date",
@@ -171,6 +177,13 @@ export const TENANT_MODEL_ON_ERASURE: Readonly<Record<string, "deleted" | "clean
   FiscalChainState: "kept",
   TaxReport: "kept",
   AccountingSyncLog: "kept",
+  // VERI*FACTU: records cannot be changed or deleted (a database trigger
+  // refuses it) and the law keeps them as long as the invoices. Their client
+  // name and NIF are fiscal data too (RGPD art. 17.3.b). Records still
+  // pending are sent after the anonymisation, with the certificate below.
+  VerifactuChain: "kept",
+  VerifactuRecord: "kept",
+  VerifactuSubmission: "kept",
   // The salon's certificate: invoice records still pending at the tax
   // agency are sent with it. Deleting it is the owner's open question.
   FiscalCertificate: "kept",
