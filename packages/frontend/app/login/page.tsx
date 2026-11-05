@@ -273,6 +273,8 @@ function LoginPageContent() {
             <a href="/legal/privacy" className="hover:underline">Privacidad</a>
             <span>·</span>
             <a href="/legal/terms" className="hover:underline">Términos</a>
+            <span>·</span>
+            <a href="/legal/aviso-legal" className="hover:underline">Aviso legal</a>
           </p>
         </div>
       </div>

@@ -229,6 +229,9 @@ export default function LandingPage() {
             <Link href="/legal/privacy" className="hover:text-gray-900">
               {t("landing.footerLinks.privacy")}
             </Link>
+            <Link href="/legal/aviso-legal" className="hover:text-gray-900">
+              {t("landing.footerLinks.legal")}
+            </Link>
             <a href="mailto:info@kiraroom.com" className="hover:text-gray-900">
               {t("landing.footerLinks.contact")}
             </a>
