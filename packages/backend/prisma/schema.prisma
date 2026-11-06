@@ -2117,7 +2117,7 @@ model Product {
   /// Product info
   name        String
   description String?
-  sku         String? @unique
+  sku         String?
   barcode     String?
 
   /// Category
@@ -2161,6 +2161,8 @@ model Product {
   @@index([tenantId])
   @@index([tenantId, category])
   @@index([sku])
+  /// Per salon (audit 2026-11-06): it was unique across the platform, so one salon's SKU blocked another's.
+  @@unique([tenantId, sku])
   @@map("products")
 }
 

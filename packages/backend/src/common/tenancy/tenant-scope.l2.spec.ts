@@ -66,6 +66,7 @@ afterAll(async () => {
     await unscoped(async () => {
       await raw.client.deleteMany({ where: { phone: { startsWith: '7000000' } } });
       await raw.user.deleteMany({ where: { email: { startsWith: 'l2-tenancy-' } } });
+      await raw.product.deleteMany({ where: { sku: { startsWith: 'L2-SKU' } } });
       await raw.tenant.deleteMany({ where: { slug: { startsWith: 'l2-tenancy-' } } });
     });
   }
@@ -189,6 +190,14 @@ describe('tenant-scope extension', () => {
       impersonatorTv: owner.tokenVersion,
     };
     await expect(asTenant(tenantA.id, () => strategy.assertSupportSessionLive(payload))).resolves.toBeUndefined();
+  });
+
+  // Audit 2026-11-06: a SKU was unique across the platform.
+  dbTest('two salons can use the same SKU, one salon cannot repeat its own', async () => {
+    const product = (tenantId: string) => ({ tenantId, name: 'Champú', sku: 'L2-SKU-1', price: 10, quantity: 1 });
+    await unscoped(() => raw.product.create({ data: product(tenantA.id) }));
+    await unscoped(() => raw.product.create({ data: product(tenantB.id) }));
+    await expect(unscoped(() => raw.product.create({ data: product(tenantA.id) }))).rejects.toMatchObject({ code: 'P2002' });
   });
 
   dbTest('bypass still sees every tenant', async () => {

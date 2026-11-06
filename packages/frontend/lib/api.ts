@@ -177,6 +177,8 @@ export const removeToken = () => {
   if (typeof window !== "undefined") {
     authStorage().removeItem(TOKEN_KEY);
     authStorage().removeItem(REFRESH_TOKEN_KEY);
+    // The signed-in person's name, email, role and salon do not outlive the session.
+    authStorage().removeItem("user");
     if (proactiveRefreshTimer) {
       clearTimeout(proactiveRefreshTimer);
       proactiveRefreshTimer = null;

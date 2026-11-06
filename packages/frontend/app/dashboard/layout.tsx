@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { sessionChangedAcrossTabs } from "@/lib/session-tabs";
 import { DashboardSidebar } from "./components/sidebar";
 import { DashboardHeader } from "./components/header";
 import apiClient, { decodeJwtToken, getToken, removeToken, removeRefreshToken } from "@/lib/api";
@@ -126,6 +127,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "kira_auth_token" || e.key === "user") {
         setImpersonation(readImpersonationFromStorage());
+      }
+      // Another tab signed out, or in as someone else (another salon): this
+      // tab would go on showing the old salon's data with the new token.
+      if (e.key === "user" && sessionChangedAcrossTabs(e.oldValue, e.newValue)) {
+        window.location.reload();
       }
     };
     window.addEventListener("storage", onStorage);
