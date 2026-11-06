@@ -1,6 +1,7 @@
 ﻿import { Controller, Get, Query, UseGuards } from "@nestjs/common";
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpsellService } from './upsell.service';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles, SALON_TEAM } from "../auth/decorators/roles.decorator";
 
 @Controller('upsell')
@@ -16,13 +17,14 @@ export class UpsellController {
   @Get('suggest')
   @Roles(...SALON_TEAM)
   async suggest(
-    @Query('tenantId') tenantId: string,
+    @CurrentUser() user: { tenantId: string },
     @Query('clientId') clientId?: string,
     @Query('excludeServiceIds') excludeServiceIds?: string,
   ) {
     const exclude = excludeServiceIds
       ? excludeServiceIds.split(',').filter(Boolean)
       : undefined;
-    return this.svc.suggest(tenantId, { clientId, excludeServiceIds: exclude });
+    // The salon is the caller's: a ?tenantId= from the URL is no longer read.
+    return this.svc.suggest(user.tenantId, { clientId, excludeServiceIds: exclude });
   }
 }

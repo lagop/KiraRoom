@@ -498,6 +498,23 @@ export class InvoiceService {
         throw new BadRequestException(`La cantidad de la línea "${line.description}" tiene que ser mayor que cero.`);
       }
     }
+    // What the invoice points at is this salon's: a client, products and
+    // services of another salon would otherwise be linked from here.
+    const clientIds = [input.recipientId].filter((x): x is string => !!x);
+    const productIds = [...new Set((input.lines ?? []).map((l) => l.productId).filter((x): x is string => !!x))];
+    const serviceIds = [...new Set((input.lines ?? []).map((l) => l.serviceId).filter((x): x is string => !!x))];
+    const own = async (rows: Promise<number>, expected: number, what: string) => {
+      if ((await rows) !== expected) throw new BadRequestException(`${what} no es de este salón.`);
+    };
+    if (clientIds.length) {
+      await own(this.prisma.client.count({ where: { id: { in: clientIds }, tenantId: input.tenantId } }), clientIds.length, "La clienta");
+    }
+    if (productIds.length) {
+      await own(this.prisma.product.count({ where: { id: { in: productIds }, tenantId: input.tenantId } }), productIds.length, "Un producto");
+    }
+    if (serviceIds.length) {
+      await own(this.prisma.service.count({ where: { id: { in: serviceIds }, tenantId: input.tenantId } }), serviceIds.length, "Un servicio");
+    }
     assertRegimeRates(tenant.fiscalSettings, input.lines ?? []);
     // Always today, the salon's.
     return this.create({ ...input, series, issueDate: undefined });

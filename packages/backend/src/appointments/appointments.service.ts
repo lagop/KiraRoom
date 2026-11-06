@@ -2751,6 +2751,16 @@ export class AppointmentsService {
         throw new ForbiddenException("Solo puedes mover tus citas dentro de tu agenda.");
       }
     }
+    // A professional of this salon: a row that only waits (a colour setting) is
+    // not checked against anyone's agenda, so nothing else would notice another
+    // salon's id here.
+    if (input.professionalId) {
+      const target = await this.prisma.professional.findFirst({
+        where: { id: input.professionalId, tenantId: user.tenantId },
+        select: { id: true },
+      });
+      if (!target) throw new NotFoundException("Profesional no encontrado");
+    }
     const dragged = visit.services.find((s) => s.id === serviceRowId);
     if (!dragged) throw new NotFoundException("Servicio no encontrado en esta cita");
     const newStart = new Date(dragged.start.getTime() + input.minutesDelta * 60_000);

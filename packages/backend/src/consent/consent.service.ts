@@ -74,8 +74,17 @@ export class ConsentService {
     });
   }
 
+  /** The services a form is tied to are this salon's (ids from another salon are refused). */
+  private async assertOwnServices(tenantId: string, serviceIds?: string[]) {
+    const ids = [...new Set(serviceIds ?? [])];
+    if (ids.length === 0) return;
+    const found = await this.prisma.service.count({ where: { id: { in: ids }, tenantId } });
+    if (found !== ids.length) throw new BadRequestException("Algún servicio no es de este salón.");
+  }
+
   async createForm(tenantId: string, input: CreateConsentFormInput) {
     if (!input.name) throw new BadRequestException("name required");
+    await this.assertOwnServices(tenantId, input.serviceIds);
     if (!Array.isArray(input.fields) || input.fields.length === 0) {
       throw new BadRequestException("fields must be a non-empty array");
     }
@@ -108,6 +117,7 @@ export class ConsentService {
     if (SYSTEM_CONSENT_PURPOSES.includes(existing.purpose)) {
       throw new BadRequestException("The marketing consent form is managed by the system");
     }
+    await this.assertOwnServices(tenantId, input.serviceIds);
     if (!existing.isActive) {
       throw new BadRequestException(
         "Cannot edit a previous version — create a new form instead",

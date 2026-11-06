@@ -162,6 +162,13 @@ export class GiftCardsService {
     input: Omit<SellInTxInput, "paymentId"> & { paymentId?: string | null; note: string },
   ): Promise<GiftCardMovementResult> {
     this.checkAmount(input.amountCents);
+    // The buyer and the recipient are this salon's clients (an id from another
+    // salon would hang a foreign client on the card).
+    for (const clientId of [input.purchasedById, input.recipientId]) {
+      if (clientId && !(await tx.client.findFirst({ where: { id: clientId, tenantId: input.tenantId }, select: { id: true } }))) {
+        throw new NotFoundException("Clienta no encontrada");
+      }
+    }
     const timeZone = await this.timeZoneOf(tx, input.tenantId);
     const expiresAt = this.expiryFor(input.expiresOn, timeZone);
     const card = await tx.giftCard.create({
@@ -545,16 +552,20 @@ export class GiftCardsService {
 
   /** The panel's redeem (`POST /gift-cards/redeem`). */
   async redeem(tenantId: string, dto: RedeemGiftCardDto, userId?: string | null) {
-    const { card } = await this.prisma.$transaction((tx) =>
-      this.redeemInTx(tx, {
+    const { card } = await this.prisma.$transaction(async (tx) => {
+      // A payment of this salon, if one is given.
+      if (dto.paymentId && !(await tx.payment.findFirst({ where: { id: dto.paymentId, tenantId }, select: { id: true } }))) {
+        throw new NotFoundException("Pago no encontrado");
+      }
+      return this.redeemInTx(tx, {
         tenantId,
         giftCardId: dto.giftCardId,
         amountCents: dto.amount,
         paymentId: dto.paymentId,
         userId,
         note: dto.note,
-      }),
-    );
+      });
+    });
     const timeZone = await this.timeZoneOf(this.prisma, tenantId);
     return this.present(card, timeZone);
   }
