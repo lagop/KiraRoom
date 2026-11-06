@@ -431,6 +431,26 @@ describe("EmailCampaignSender: the dispatcher", () => {
     expect(tos).toEqual(["x0@example.test", "x1@example.test", "x4@example.test", "x5@example.test"]);
   });
 
+  it("splits the pace between salons first: two campaigns of one salon do not outweigh another's one", async () => {
+    const t = setup({ perMinute: 4 });
+    t.db.campaigns.push({ ...t.campaign(), id: "c1b", totalRecipients: 0, emailsSent: 0 });
+    t.db.campaigns.push({ ...t.campaign(), id: "c2", tenantId: "t2", totalRecipients: 0, emailsSent: 0 });
+    for (const [i, c] of ["c1", "c1", "c1b", "c1b", "c2", "c2", "c2", "c2"].entries()) {
+      const tenantId = c === "c2" ? "t2" : "t1";
+      t.db.clients.push({ id: `k${i}`, tenantId, status: "active", lastVisit: new Date("2026-09-01") });
+      t.db.recipients.push({
+        id: `r${i}`, campaignId: c, clientId: `k${i}`, email: `x${i}@example.test`,
+        status: "pending", attempts: 0, nextAttemptAt: null, createdAt: new Date(i),
+      });
+    }
+
+    await t.sender.sendBatches(NOW);
+
+    // 4 a minute: 2 for salon t1 (1 per campaign) and 2 for salon t2.
+    const tos = t.email.sendEmail.mock.calls.map((c: any[]) => c[0].to);
+    expect(tos).toEqual(["x0@example.test", "x2@example.test", "x4@example.test", "x5@example.test"]);
+  });
+
   it("starts a scheduled campaign whose time has come, and sends a scheduled one with nobody back to draft", async () => {
     const t = setup();
     t.campaign().status = "scheduled";

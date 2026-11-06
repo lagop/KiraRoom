@@ -508,8 +508,13 @@ export class AppointmentsService {
     if (locationId && professionalId) {
       await assertProfessionalsAt(this.prisma as any, tenantId, locationId, [professionalId]);
     }
+    // Whether this booking made the client. Anyone can type an email or phone
+    // that is already on file, so only a client created here may be opted in
+    // by what the form ticks (audit 2026-11-06).
+    let clientCreatedHere = false;
     const appointment = await this.prisma.$transaction(
       async (tx) => {
+        clientCreatedHere = false;
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${tenantId}:${scheduledDay}`}))`;
 
         let assigned: string;
@@ -528,7 +533,12 @@ export class AppointmentsService {
         // transaction ends and releases the lock, so the next request's check
         // sees it. `online`: an existing client's contact details are left
         // as they are (findOrCreateClient).
-        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId, { online: true });
+        return this.insertAppointment({ ...dto, professionalId: assigned }, tenantId, {
+          online: true,
+          onClientCreated: () => {
+            clientCreatedHere = true;
+          },
+        });
       },
       { timeout: 15_000 },
     );
@@ -545,8 +555,10 @@ export class AppointmentsService {
           ip: meta.ip,
           typedPhone: dto.clientInfo?.phone,
           refusesMarketingEmail: dto.refusesMarketingEmail,
-          wantsWhatsAppNotices: dto.wantsWhatsAppNotices,
-          wantsWhatsAppPromotions: dto.wantsWhatsAppPromotions,
+          // Turning something ON is for her own new file only; saying no is
+          // always safe, so the refusal above applies to an existing client too.
+          wantsWhatsAppNotices: clientCreatedHere ? dto.wantsWhatsAppNotices : false,
+          wantsWhatsAppPromotions: clientCreatedHere ? dto.wantsWhatsAppPromotions : false,
         })
         .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
     }
@@ -781,7 +793,7 @@ export class AppointmentsService {
     tenantId: string,
     info: { firstName: string; lastName: string; email?: string; phone?: string },
     db: any = this.prisma,
-    { fillMissing }: { fillMissing: boolean } = { fillMissing: true },
+    { fillMissing, onCreated }: { fillMissing: boolean; onCreated?: () => void } = { fillMissing: true },
   ): Promise<string> {
     // Emails are stored in lower case and matched whatever their case (see
     // clients/client-contact.ts): "Ana@Mail.com" is the client "ana@mail.com".
@@ -827,6 +839,7 @@ export class AppointmentsService {
         status: "active",
       },
     });
+    onCreated?.();
     return created.id;
   }
 
@@ -858,6 +871,8 @@ export class AppointmentsService {
         scheduledEnd: Date;
       }>;
       online?: boolean;
+      /** Called when the booking created the client (rather than finding hers). */
+      onClientCreated?: () => void;
       /** A deposit the salon asked for (owner/admin only), in cents. */
       deposit?: { amountCents: number };
     } = {},
@@ -904,6 +919,7 @@ export class AppointmentsService {
     if (!clientId && createAppointmentDto.clientInfo) {
       clientId = await this.findOrCreateClient(tenantId, createAppointmentDto.clientInfo, db, {
         fillMissing: !visit.online,
+        onCreated: visit.onClientCreated,
       });
     }
 

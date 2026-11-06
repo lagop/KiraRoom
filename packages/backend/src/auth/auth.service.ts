@@ -72,6 +72,13 @@ const TWO_FACTOR_AUDIENCE = "kira-2fa-login";
 const TWO_FACTOR_CHALLENGE_SECONDS = 5 * 60;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MS = 30 * 60 * 1000;
+/**
+ * Wrong passwords lock the address they come from after 5 (the account's
+ * owner still gets in elsewhere). The account itself locks only at this many,
+ * which is guessing spread over many addresses: a stranger who knows the email
+ * cannot shut the owner out with 5 bad passwords (audit 2026-11-06).
+ */
+const ACCOUNT_LOCK_ATTEMPTS = 20;
 
 /** The password was right and the account asks for a code next. */
 export interface TwoFactorChallenge {
@@ -202,6 +209,7 @@ export function lockedMessage(lockedUntil: Date, now: number = Date.now()): stri
 export function failedAttemptUpdate(
   user: { loginAttempts: number; lockedUntil: Date | null },
   now: number = Date.now(),
+  maxAttempts: number = MAX_LOGIN_ATTEMPTS,
 ): { loginAttempts: number | { increment: number }; lockedUntil: Date | null } {
   const lockExpired = Boolean(user.lockedUntil && user.lockedUntil.getTime() <= now);
   const before = lockExpired ? 0 : user.loginAttempts;
@@ -209,7 +217,7 @@ export function failedAttemptUpdate(
     // An increment, so two wrong passwords at once both count; after an
     // expired lock the count starts again at this one.
     loginAttempts: lockExpired ? 1 : { increment: 1 },
-    lockedUntil: before >= MAX_LOGIN_ATTEMPTS - 1 ? new Date(now + LOCKOUT_MS) : null,
+    lockedUntil: before >= maxAttempts - 1 ? new Date(now + LOCKOUT_MS) : null,
   };
 }
 
@@ -611,17 +619,27 @@ export class AuthService {
       // SEC-8: the lockout is honoured (it used to be written and never
       // read). A lock still running stops even the right password, below.
       const accountLocked = Boolean(user.lockedUntil && user.lockedUntil > now);
-      // C12: the platform owner's wrong passwords lock the address they come
-      // from, not the account, so a stranger who knows the email cannot keep
-      // the console shut. (Wrong 2FA codes, which need the password, still
-      // count towards the account's lock.)
-      const perAddress = user.role === UserRole.saas_owner && Boolean(this.limits);
+      // C12: wrong passwords lock the address they come from, not the account
+      // (audit 2026-11-06: for every role, not only the platform owner), so a
+      // stranger who knows the email cannot shut the owner out. (Wrong 2FA
+      // codes, which need the password, still count towards the account's lock.)
+      const perAddress = Boolean(this.limits);
       const addressLocked = perAddress ? await this.limits!.platformOwnerLockedFrom(user.id, context.ip) : false;
       const lockRunning = accountLocked || addressLocked;
 
       if (!isPasswordValid) {
         if (perAddress) {
-          if (!addressLocked && user.isActive) await this.limits!.platformOwnerFailedFrom(user.id, context.ip);
+          if (!addressLocked && user.isActive) {
+            await this.limits!.platformOwnerFailedFrom(user.id, context.ip);
+            // Salons also count towards a high account-wide cap: guessing
+            // from many addresses at once. The console's owner has none.
+            if (user.role !== UserRole.saas_owner && !accountLocked) {
+              await this.prisma.user.update({
+                where: { id: user.id },
+                data: failedAttemptUpdate(user, now.getTime(), ACCOUNT_LOCK_ATTEMPTS),
+              });
+            }
+          }
           throw new UnauthorizedException(INVALID_CREDENTIALS);
         }
         // A locked or deactivated account does not count more failures: a

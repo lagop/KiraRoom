@@ -9,7 +9,7 @@ import { OnlineBookingDto } from "./dto/book-appointment.dto";
  * confirmation goes out (so WhatsApp notices already apply to it). The
  * recording itself is ConsentService's (consent/booking-choices.spec.ts).
  */
-function setup() {
+function setup({ created = true } = {}) {
   const order: string[] = [];
   const prisma: any = {
     $transaction: async (fn: any) => fn({ $executeRaw: jest.fn() }),
@@ -26,7 +26,10 @@ function setup() {
   s.onlineBookingWindow = jest.fn(async () => ({ minHours: 0, maxHours: 24 * 60 }));
   s.fitsOnlineWindow = jest.fn(() => "ok");
   s.isSlotFree = jest.fn(async () => true);
-  s.insertAppointment = jest.fn(async () => ({ id: "apt-1", clientId: "client-1" }));
+  s.insertAppointment = jest.fn(async (_dto: any, _tenant: string, visit: any) => {
+    if (created) visit.onClientCreated?.();
+    return { id: "apt-1", clientId: "client-1" };
+  });
   s.afterAppointmentCreated = jest.fn(async () => {
     order.push("confirmation");
     return { emailSent: true };
@@ -43,6 +46,21 @@ const BOOKING = {
 };
 
 describe("online booking: what the client ticked", () => {
+  it("an existing client is never opted in by what the form ticks; saying no still counts", async () => {
+    const { service, consent } = setup({ created: false });
+
+    await service.bookOnline(
+      "tenant-1",
+      { ...BOOKING, source: "widget", refusesMarketingEmail: true, wantsWhatsAppNotices: true, wantsWhatsAppPromotions: true } as any,
+      [],
+      { ip: "1.2.3.4" },
+    );
+
+    expect(consent.recordBookingChoices).toHaveBeenCalledWith(
+      expect.objectContaining({ refusesMarketingEmail: true, wantsWhatsAppNotices: false, wantsWhatsAppPromotions: false }),
+    );
+  });
+
   it("records both boxes for the client the booking found, before the confirmation", async () => {
     const { service, consent, order } = setup();
 

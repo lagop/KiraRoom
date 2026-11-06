@@ -180,9 +180,15 @@ export class EmailCampaignSender {
     if (sending.length === 0) return;
 
     let budget = this.pacer.perMinute;
-    const share = Math.max(1, Math.ceil(budget / sending.length));
+    // The pace is split between salons first, then between each salon's own
+    // campaigns: a salon with several big campaigns does not take more of the
+    // minute than one with a single small one (audit 2026-11-06).
+    const perTenant = new Map<string, number>();
+    for (const c of sending) perTenant.set(c.tenantId, (perTenant.get(c.tenantId) ?? 0) + 1);
+    const tenantShare = Math.max(1, Math.ceil(budget / perTenant.size));
     for (const campaign of sending) {
       if (budget <= 0) break;
+      const share = Math.max(1, Math.ceil(tenantShare / (perTenant.get(campaign.tenantId) ?? 1)));
       try {
         const result = await this.sendBatch(campaign, Math.min(share, budget), now);
         budget -= result.attempted;

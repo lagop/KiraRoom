@@ -1,6 +1,6 @@
 import { UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcryptjs";
-import { AuthService, INVALID_CREDENTIALS } from "./auth.service";
+import { AuthService, INVALID_CREDENTIALS, failedAttemptUpdate } from "./auth.service";
 
 /**
  * SEC-8: the failed-login lockout was written and never read.
@@ -306,11 +306,23 @@ describe("audit 8 C12: the platform owner is locked per address, not account-wid
     ).resolves.toHaveProperty("tokens");
   });
 
-  it("a salon owner keeps the account-wide lock", async () => {
+  it("a salon owner is locked per address too, and the account only at a high count", async () => {
     const limits = memoryLimits();
     const { auth, prisma } = buildAuth(activeUser({ role: "owner" }), limits);
-    await expect(auth.login({ email: "owner@salon.test", password: "wrong" }, { ip: "203.0.113.9" })).rejects.toThrow();
-    expect(prisma.user.update).toHaveBeenCalled();
-    expect(limits.platformOwnerFailedFrom).not.toHaveBeenCalled();
+    for (let i = 0; i < 5; i++) {
+      await expect(auth.login({ email: "owner@salon.test", password: "wrong" }, { ip: "203.0.113.9" })).rejects.toThrow();
+    }
+    // That address is locked; the account is not (5 bad passwords never lock it).
+    expect(limits.platformOwnerFailedFrom).toHaveBeenCalledTimes(5);
+    for (const call of prisma.user.update.mock.calls) expect(call[0].data.lockedUntil).toBeNull();
+    await expect(
+      auth.login({ email: "owner@salon.test", password: "correct-horse-battery" }, { ip: "198.51.100.4" }),
+    ).resolves.toHaveProperty("tokens");
+  });
+
+  it("guessing from many addresses still locks the account, at 20", () => {
+    const user = { loginAttempts: 19, lockedUntil: null };
+    expect(failedAttemptUpdate(user, Date.now(), 20).lockedUntil).toBeInstanceOf(Date);
+    expect(failedAttemptUpdate({ loginAttempts: 18, lockedUntil: null }, Date.now(), 20).lockedUntil).toBeNull();
   });
 });
