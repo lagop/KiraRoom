@@ -98,6 +98,18 @@ describe("the notifications socket", () => {
     expect(disconnected).toEqual([]);
   });
 
+  it("a salon blocked from the console loses its sockets, and cannot open new ones", async () => {
+    const users: any[] = [{ id: "u1", tenantId: "t1", isActive: true, tokenVersion: 0, tenant: { blockedAt: null, deletedAt: null } }];
+    const { gw, connect, disconnected } = gateway({ users });
+    await connect("s1", { sub: "u1", role: "owner", tv: 0 });
+    users[0].tenant.blockedAt = new Date();
+
+    expect(await gw.recheckSockets()).toBe(1);
+    expect(disconnected).toEqual(["s1"]);
+    await connect("s2", { sub: "u1", role: "owner", tv: 0 });
+    expect(disconnected).toContain("s2");
+  });
+
   it("the periodic re-check closes what ended without a word: deactivated, new session version, expired", async () => {
     const users = [
       { id: "u-ok", tenantId: "t1", isActive: true, tokenVersion: 2 },

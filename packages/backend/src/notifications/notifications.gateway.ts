@@ -104,7 +104,7 @@ export class NotificationsGateway
     const users = userIds.length
       ? await this.prisma.user.findMany({
           where: { id: { in: userIds } },
-          select: { id: true, isActive: true, tokenVersion: true },
+          select: { id: true, isActive: true, tokenVersion: true, tenant: { select: { blockedAt: true, deletedAt: true } } },
         })
       : [];
     const userById = new Map(users.map((u) => [u.id, u]));
@@ -115,7 +115,8 @@ export class NotificationsGateway
       let valid = false;
       if (data.userId) {
         const u = userById.get(data.userId);
-        valid = !!u && u.isActive && u.tokenVersion === version;
+        // A salon blocked or deleted from the console loses its sockets too.
+        valid = !!u && u.isActive && u.tokenVersion === version && !u.tenant?.blockedAt && !u.tenant?.deletedAt;
       }
       if (valid && data.expiresAt && now >= data.expiresAt * 1000) valid = false;
       if (!valid) {
@@ -180,9 +181,10 @@ export class NotificationsGateway
     if (payload.role === 'client') return null;
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, tenantId: true, isActive: true, tokenVersion: true },
+      select: { id: true, tenantId: true, isActive: true, tokenVersion: true, tenant: { select: { blockedAt: true, deletedAt: true } } },
     });
     if (!user || !user.isActive || !user.tenantId) return null;
+    if (user.tenant?.blockedAt || user.tenant?.deletedAt) return null;
     // Same rule as JwtStrategy: a logged-out session gets no socket.
     if ((payload.tv ?? 0) !== user.tokenVersion) return null;
     return { userId: user.id, tenantId: user.tenantId, tokenVersion: user.tokenVersion, expiresAt: payload.exp };

@@ -10,6 +10,7 @@ import {
   MarkAllReadDto,
   BulkNotificationDto,
 } from './dto';
+import { UserRole } from '@prisma/client';
 import { Roles, SALON_TEAM, SALON_MANAGERS } from "../auth/decorators/roles.decorator";
 import { AllowWhenReadOnly } from "../common/decorators/allow-when-read-only.decorator";
 import { VerifiedOwnerEmailGuard } from "../auth/email-verified/verified-owner-email.guard";
@@ -132,7 +133,8 @@ export class NotificationsController {
 
   @Get('queue/stats')
   @ApiOperation({ summary: 'Get notification queue statistics' })
-  @Roles(...SALON_MANAGERS)
+  // The queue is shared by every salon: its counters are the platform's, not a salon's.
+  @Roles(UserRole.saas_owner)
   async getQueueStats() {
     return this.notificationQueue.getQueueStats();
   }

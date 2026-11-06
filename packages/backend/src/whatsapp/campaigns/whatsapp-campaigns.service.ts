@@ -331,6 +331,7 @@ export class WhatsAppCampaignsService {
     const waiting = await this.prisma.whatsAppCampaign.findMany({
       where: { status: WhatsAppCampaignStatus.scheduled, templateStatus: { not: "APPROVED" } },
       select: { id: true, tenantId: true, templateId: true },
+      orderBy: { createdAt: "asc" },
       take: 50,
     });
     for (const c of waiting) {
@@ -370,6 +371,7 @@ export class WhatsAppCampaignsService {
         tenant: MARKETING_SENDS_TENANT_WHERE,
       },
       include: { tenant: { select: { timezone: true } } },
+      orderBy: { createdAt: "asc" },
       take: 20,
     });
     const plans = new Map<string, boolean>();
@@ -420,6 +422,9 @@ export class WhatsAppCampaignsService {
     const sending = await this.prisma.whatsAppCampaign.findMany({
       where: { status: WhatsAppCampaignStatus.sending, tenant: MARKETING_SENDS_TENANT_WHERE },
       include: { tenant: { select: { country: true, timezone: true } } },
+      // The one that was served longest ago goes first (its counters bump
+      // updatedAt), so a salon with many campaigns cannot keep the others waiting.
+      orderBy: { updatedAt: "asc" },
       take: 20,
     });
     const plans = new Map<string, boolean>();
