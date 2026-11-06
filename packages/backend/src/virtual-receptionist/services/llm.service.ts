@@ -1,5 +1,6 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { publicProfessionals } from '../../public-site/public-professional';
 import { LLMProviderFactory } from '../factories/llm-provider.factory';
 import { salonOpenShifts } from '../../appointments/working-hours';
 import { salonClock } from '../prompts/clock';
@@ -529,7 +530,12 @@ export class LLMService {
         },
         professionals: {
           where: { isActive: true },
+          // The order of the salon's page: hidden ones are numbered like there.
+          orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
           select: {
+            id: true,
+            webNameDisplay: true,
+            webShowPhoto: true,
             firstName: true,
             lastName: true,
             position: true,
@@ -594,11 +600,13 @@ export class LLMService {
           price: publicPrice(s.price, publicPriceSettings(tenant.fiscalSettings)),
           category: s.category,
         })),
-        professionals: tenant.professionals.map(p => ({
+        // As the salon's page shows them: the real name, position and
+        // specialties of someone hidden from the web never go into the prompt.
+        professionals: publicProfessionals(tenant.professionals as any).map(p => ({
           firstName: p.firstName,
           lastName: p.lastName,
-          position: p.position || undefined,
-          specialties: p.specialties as string[],
+          position: (p as any).position || undefined,
+          specialties: ((p as any).specialties ?? []) as string[],
         })),
         // The salon's real week: its own opening hours when the owner set
         // them (settings), else derived from its professionals' schedules.

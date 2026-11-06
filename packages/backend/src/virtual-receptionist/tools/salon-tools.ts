@@ -7,6 +7,7 @@ import { locationOption, resolveLocation, salonPlaces } from './receptionist-loc
 import { MultiLocationGate, professionalLocationsOf } from '../../multi-location/client-locations';
 import { clientPrices, clientPriceText, priceNote } from './client-prices';
 import { taxIncludedNote } from '../../common/public-price';
+import { publicProfessionalNames } from '../../public-site/public-professional';
 import { dayBlocks, salonClosedOn } from '../../time-off/time-off-rules';
 import { timeOffBetween } from '../../time-off/time-off-query';
 import { salonOpenShifts } from '../../appointments/working-hours';
@@ -441,7 +442,7 @@ export class SalonToolsService {
     }>;
     totalMatching: number;
   }> {
-    const professionals = await ctx.prisma.professional.findMany({
+    const rawProfessionals = await ctx.prisma.professional.findMany({
       where: { tenantId: ctx.tenantId, isActive: true },
       orderBy: [{ isOwner: 'desc' }, { firstName: 'asc' }],
       select: {
@@ -457,6 +458,21 @@ export class SalonToolsService {
         isOwner: true,
         services: { select: { service: { select: { name: true, isActive: true } } } },
       },
+    });
+    // Named, and described, only as the salon's page shows them ("Mostrar en
+    // la web"): someone hidden has no real name, bio, position or languages
+    // here, so neither the answer nor the search below can give her away.
+    const publicNames = await publicProfessionalNames(ctx.prisma as any, ctx.tenantId);
+    const professionals = rawProfessionals.map((p) => {
+      const n = publicNames.get(p.id) ?? { firstName: 'Profesional', lastName: '', hidden: true };
+      return {
+        ...p,
+        firstName: n.firstName,
+        lastName: n.lastName,
+        ...(n.hidden
+          ? { position: null, bio: null, specialties: [], yearsExperience: null, languages: [] }
+          : {}),
+      };
     });
 
     // "masajes" must find "Masaje Relajante": compare without a plural ending.

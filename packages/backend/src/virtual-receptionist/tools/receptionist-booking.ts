@@ -6,6 +6,7 @@ import type { SalonToolContext } from './salon-tools';
 import { clientPrices, clientPriceText } from './client-prices';
 import { taxIncludedNote } from '../../common/public-price';
 import { samePhone } from '../../common/phone';
+import { publicFullName, publicNameOf, publicProfessionalNames } from '../../public-site/public-professional';
 import { locationLabel } from './receptionist-locations';
 
 /**
@@ -356,7 +357,7 @@ export async function proposeAppointment(
     }),
     ctx.prisma.professional.findFirst({
       where: { id: details.professionalId, tenantId: ctx.tenantId },
-      select: { firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, webNameDisplay: true },
     }),
   ]);
   if (!service || !professional) {
@@ -387,7 +388,10 @@ export async function proposeAppointment(
       service: service.name,
       durationMinutes: service.duration,
       price: `${clientPriceText(service.price, prices)} ${service.currency} (${taxIncludedNote(prices)})`,
-      professional: `${professional.firstName} ${professional.lastName}`.trim(),
+      // As the salon's page names her ("Mostrar en la web").
+      professional: publicFullName(
+        (await publicProfessionalNames(ctx.prisma as any, ctx.tenantId)).get(professional.id) ?? publicNameOf(professional as any),
+      ),
       ...(location ? { location } : {}),
       date: details.date,
       time: details.time,
@@ -489,9 +493,12 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
       // pendiente de que el salón la confirme", never "confirmada".
       confirmed: appointment.status === 'confirmed',
       service: appointment.service?.name,
-      professional: [appointment.professional?.firstName, appointment.professional?.lastName]
-        .filter(Boolean)
-        .join(' '),
+      professional: appointment.professional
+        ? publicFullName(
+            (await publicProfessionalNames(ctx.prisma as any, ctx.tenantId)).get(appointment.professional.id) ??
+              publicNameOf(appointment.professional),
+          )
+        : '',
       // Where, when the salon has several locations.
       ...(pending.locationId ? { location: await locationLabel(ctx, pending.locationId) } : {}),
       date: pending.date,
