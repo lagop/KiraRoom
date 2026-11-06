@@ -45,6 +45,7 @@ import { NotificationType } from "../notifications/dto";
 import { salonTeamRecipients } from "./salon-team-recipients";
 import { TranslationsService } from "../translations/translations.service";
 import { ConsentService } from "../consent/consent.service";
+import { publicNameOf } from "../public-site/public-professional";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonInstant } from "./salon-time";
 import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
@@ -2086,7 +2087,7 @@ export class AppointmentsService {
       where: { id },
       include: {
         service: { select: { name: true } },
-        professional: { select: { firstName: true } },
+        professional: { select: { firstName: true, lastName: true, webNameDisplay: true } },
         tenant: { select: { name: true, phone: true, timezone: true, minCancelHours: true, deletedAt: true } },
       },
     });
@@ -2116,7 +2117,8 @@ export class AppointmentsService {
       salonName: appointment.tenant?.name || "el salón",
       salonPhone: (appointment.tenant?.phone ?? "").trim() || null,
       serviceName: appointment.serviceName || appointment.service?.name || null,
-      professionalName: appointment.professional?.firstName || null,
+      // Her first name as the salon's page shows it (hidden: "Profesional").
+      professionalName: appointment.professional ? publicNameOf(appointment.professional).firstName || null : null,
       date: day,
       time,
       minCancelHours,

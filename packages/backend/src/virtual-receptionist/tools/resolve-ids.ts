@@ -1,4 +1,5 @@
 import type { SalonToolContext } from './salon-tools';
+import { publicFullName, publicProfessionalNames } from '../../public-site/public-professional';
 
 /**
  * Turns what the model passes as serviceId / professionalId into a real id.
@@ -71,15 +72,21 @@ export async function resolveIds(
   }
 
   if (typeof args.professionalId === 'string' && args.professionalId.trim()) {
-    const professionals = await ctx.prisma.professional.findMany({
+    const rows = await ctx.prisma.professional.findMany({
       where: { tenantId: ctx.tenantId, isActive: true },
-      select: { id: true, firstName: true, lastName: true, services: { select: { serviceId: true } } },
+      select: { id: true, services: { select: { serviceId: true } } },
+    });
+    // Named as the public page names them; a hidden one is never called by her real name.
+    const publicNames = await publicProfessionalNames(ctx.prisma as any, ctx.tenantId);
+    const professionals = rows.map((r) => {
+      const n = publicNames.get(r.id) ?? { firstName: 'Profesional', lastName: '' };
+      return { ...r, firstName: n.firstName, lastName: n.lastName };
     });
     const match = pick(
       args.professionalId.trim(),
       professionals.map((p) => ({
         id: p.id,
-        names: [`${p.firstName} ${p.lastName}`, p.firstName],
+        names: [publicFullName(p), p.firstName],
       })),
     );
     if (!match) {

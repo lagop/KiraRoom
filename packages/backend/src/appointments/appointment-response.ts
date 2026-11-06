@@ -1,4 +1,5 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from "@nestjs/common";
+import { publicNameOf } from "../public-site/public-professional";
 import { Observable, map } from "rxjs";
 import { formatLocationAddress } from "../multi-location/client-locations";
 
@@ -118,8 +119,9 @@ export function publicBooking(appointment: any) {
     professional: appointment.professional
       ? {
           id: appointment.professional.id,
-          firstName: appointment.professional.firstName,
-          lastName: appointment.professional.lastName,
+          // As the salon's page names her ("Mostrar en la web"): a hidden
+          // professional is "Profesional" here too.
+          ...publicNameOf(appointment.professional),
         }
       : null,
     // Where, at a salon with several locations: the confirmation shows it.
