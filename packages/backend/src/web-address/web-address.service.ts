@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import type { UserRole } from "@prisma/client";
+import { runUnscoped } from "../common/tenancy/tenant.context";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { AuditLogService } from "../saas/audit-log.service";
 import {
@@ -26,10 +27,14 @@ type SlugLookupClient = RedirectLookup & { tenant: { findUnique: (args: any) => 
 /** The salon an old address still redirects to, or null (none, or past its 12 months). */
 export async function redirectedTenantId(prisma: RedirectLookup, slug: string, now: Date = new Date()): Promise<string | null> {
   if (!prisma.tenantSlugRedirect || !slug) return null;
-  const row = (await prisma.tenantSlugRedirect.findFirst({
-    where: { oldSlug: slug, expiresAt: { gt: now } },
-    select: { tenantId: true },
-  })) as { tenantId: string } | null;
+  // Outside the salon filter: an old address belongs to another salon, and a
+  // salon asking "is it free?" has to see it (audit 2026-11-06).
+  const row = (await runUnscoped(async () =>
+    prisma.tenantSlugRedirect!.findFirst({
+      where: { oldSlug: slug, expiresAt: { gt: now } },
+      select: { tenantId: true },
+    }),
+  )) as { tenantId: string } | null;
   return row?.tenantId ?? null;
 }
 
@@ -39,7 +44,9 @@ export async function redirectedTenantId(prisma: RedirectLookup, slug: string, n
  * salon asking: its own current address is not "taken" for it.
  */
 export async function webAddressTaken(prisma: SlugLookupClient, slug: string, exceptTenantId?: string): Promise<boolean> {
-  const tenant = (await prisma.tenant.findUnique({ where: { slug }, select: { id: true } })) as { id: string } | null;
+  const tenant = (await runUnscoped(async () =>
+    prisma.tenant.findUnique({ where: { slug }, select: { id: true } }),
+  )) as { id: string } | null;
   if (tenant && tenant.id !== exceptTenantId) return true;
   return (await redirectedTenantId(prisma, slug)) !== null;
 }
@@ -63,8 +70,14 @@ export async function moveTenantSlug(
   args: { tenantId: string; from: string; to: string; now: Date; ownerChange: boolean },
 ): Promise<Date | null> {
   const expiresAt = redirectExpiry(args.now);
-  await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: args.to, expiresAt: { lte: args.now } } });
-  await tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: args.from } });
+  // Unscoped: the expired row holding `to` is another salon's, and the filter
+  // would hide it and leave it to collide with a later move.
+  await runUnscoped(async () => tx.tenantSlugRedirect.deleteMany({ where: { oldSlug: args.to, expiresAt: { lte: args.now } } }));
+  await runUnscoped(async () =>
+    tx.tenantSlugRedirect.deleteMany({
+      where: { oldSlug: args.from, OR: [{ tenantId: args.tenantId }, { expiresAt: { lte: args.now } }] },
+    }),
+  );
   if (args.ownerChange) {
     const claimed = await tx.tenant.updateMany({
       where: { id: args.tenantId, slugChangedAt: null },

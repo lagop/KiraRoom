@@ -1,4 +1,6 @@
 import { PrismaClient } from '@prisma/client';
+import { JwtStrategy } from '../../auth/strategies/jwt.strategy';
+import { webAddressTaken } from '../../web-address/web-address.service';
 import { tenantScopeExtension } from './tenant-scope.extension';
 import { tenantStorage, runUnscoped } from './tenant.context';
 
@@ -63,6 +65,7 @@ afterAll(async () => {
   if (reachable) {
     await unscoped(async () => {
       await raw.client.deleteMany({ where: { phone: { startsWith: '7000000' } } });
+      await raw.user.deleteMany({ where: { email: { startsWith: 'l2-tenancy-' } } });
       await raw.tenant.deleteMany({ where: { slug: { startsWith: 'l2-tenancy-' } } });
     });
   }
@@ -136,6 +139,56 @@ describe('tenant-scope extension', () => {
       db.timeOff.create({ data: { kind: 'closure', startDate: day, endDate: day } }),
     );
     expect(created.tenantId).toBe(tenantA.id);
+  });
+
+  // runUnscoped(() => prisma.x.y()) used to hand back a lazy query that ran
+  // after the context was left, and so was filtered by the salon again.
+  dbTest('runUnscoped with a sync arrow still crosses tenants', async () => {
+    const rows = await asTenant(tenantA.id, () =>
+      runUnscoped(() => db.client.findMany({ where: { phone: { startsWith: '7000000' } } })),
+    );
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Audit 2026-11-06: a salon asking whether an address is free could not see
+  // another salon's old address, which still redirects for 12 months.
+  dbTest("a salon sees another salon's old address as taken", async () => {
+    await unscoped(() =>
+      raw.tenantSlugRedirect.create({
+        data: { oldSlug: 'l2-tenancy-old', tenantId: tenantB.id, expiresAt: new Date(Date.now() + 864e5) },
+      }),
+    );
+    const taken = await asTenant(tenantA.id, () => webAddressTaken(db, 'l2-tenancy-old', tenantA.id));
+    expect(taken).toBe(true);
+    expect(await asTenant(tenantA.id, () => webAddressTaken(db, 'l2-tenancy-free', tenantA.id))).toBe(false);
+  });
+
+  // Audit 2026-11-06: the platform owner is in another tenant, so inside a
+  // support session the check that they are still active found nobody and
+  // every request of the session answered 401.
+  dbTest('a support session finds the platform owner outside the salon', async () => {
+    const owner = await unscoped(() =>
+      raw.user.create({
+        data: {
+          tenantId: tenantB.id,
+          email: 'l2-tenancy-owner@example.com',
+          firstName: 'Soporte',
+          lastName: 'Plataforma',
+          role: 'saas_owner',
+          passwordHash: 'x',
+        },
+      }),
+    );
+    const strategy: any = Object.create(JwtStrategy.prototype);
+    strategy.prisma = db;
+    const payload = {
+      impersonatedBy: owner.id,
+      impersonationId: 'imp-1',
+      impersonatedTenantId: tenantA.id,
+      impersonationEndsAt: Math.floor(Date.now() / 1000) + 600,
+      impersonatorTv: owner.tokenVersion,
+    };
+    await expect(asTenant(tenantA.id, () => strategy.assertSupportSessionLive(payload))).resolves.toBeUndefined();
   });
 
   dbTest('bypass still sees every tenant', async () => {

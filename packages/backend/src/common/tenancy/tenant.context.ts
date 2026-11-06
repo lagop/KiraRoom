@@ -79,7 +79,18 @@ export const currentRequestActor = (): RequestActor | undefined => tenantStorage
  */
 export function runUnscoped<T>(fn: () => T): T {
   // The request's actor goes along: an audit row written inside still names them.
-  return tenantStorage.run({ tenantId: null, bypass: true, actor: tenantStorage.getStore()?.actor }, fn);
+  return tenantStorage.run({ tenantId: null, bypass: true, actor: tenantStorage.getStore()?.actor }, () => {
+    const result = fn();
+    // A Prisma query is lazy: `() => prisma.x.findMany()` returns it without
+    // running it, and it would run later, after this context is left and so
+    // filtered by the salon again. Starting it here, inside the context, makes
+    // the sync form as safe as the async one.
+    if (result !== null && typeof result === "object" && typeof (result as { then?: unknown }).then === "function") {
+      const thenable = result as unknown as PromiseLike<unknown>;
+      return new Promise((resolve, reject) => thenable.then(resolve, reject)) as unknown as T;
+    }
+    return result;
+  });
 }
 
 /** Run `fn` scoped to `tenantId`, for schedulers that loop over tenants. */
