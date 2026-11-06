@@ -156,6 +156,9 @@ export function professionalFeedVersion(tenantFeatures: unknown, professionalVer
   return icsFeedVersion(tenantFeatures) + own;
 }
 
+/** Salon feed tokens sign the salon's id from this date; before it they signed its address. */
+const ICS_ID_TOKENS_SINCE = new Date("2026-11-07T00:00:00.000Z");
+
 @ApiTags("ics-feeds")
 @Controller("ics")
 export class IcsController {
@@ -196,7 +199,9 @@ export class IcsController {
     return {
       version,
       rotatedAt: version > 0 ? rotatedAt : null,
-      salon: { slug: tenant.slug, token: IcsController.signToken(`salon:${tenant.slug}`, secret, version) },
+      // Signed with the salon's id, which never changes hands: a token that signed
+      // the address would open whoever holds that address later (audit 2026-11-06).
+      salon: { slug: tenant.slug, token: IcsController.signToken(`salon:${tenantId}`, secret, version) },
       professionals: professionals.map((p) => ({
         id: p.id,
         name: `${p.firstName} ${p.lastName}`.trim(),
@@ -311,10 +316,24 @@ export class IcsController {
   ) {
     this.requireToken(token);
     // D4: a feed link from before the salon changed its address still works
-    // for 12 months (the token signs the address it was made with).
+    // for 12 months.
     const movedTo = await redirectedTenantId(this.prisma, slug);
     const tenant = await this.prisma.tenant.findUnique({ where: movedTo ? { id: movedTo } : { slug } });
-    this.verifyToken(`salon:${slug}`, token, tenant ? icsFeedVersion(tenant.features) : null);
+    const version = tenant ? icsFeedVersion(tenant.features) : null;
+    try {
+      this.verifyToken(`salon:${tenant?.id ?? slug}`, token, version);
+    } catch (e) {
+      // Links made before tokens signed the id signed the address. They still
+      // open the salon that held that address then: through its redirect, or
+      // as its original address. A salon created after the change, or one
+      // that moved to this address, never accepts them (an earlier holder of
+      // the address could have made one).
+      const legacyOk =
+        tenant !== null &&
+        (movedTo !== null || (tenant.slugChangedAt === null && tenant.createdAt < ICS_ID_TOKENS_SINCE));
+      if (!legacyOk) throw e;
+      this.verifyToken(`salon:${slug}`, token, version);
+    }
     if (!tenant) throw new NotFoundException("Salon not found");
     const appointments = await this.prisma.appointment.findMany({
       where: {

@@ -140,7 +140,7 @@ describe("ICS feed endpoints", () => {
 
   it("the salon feed asks for the window and the statuses, not a row cap from the past", async () => {
     const { c, findMany, res } = build([appt()]);
-    await c.salonFeed("salon-ana", IcsController.signToken("salon:salon-ana", SECRET), res);
+    await c.salonFeed("salon-ana", IcsController.signToken("salon:t1", SECRET), res);
     const args = (findMany.mock.calls[0] as any[])[0];
     expect(args.where).toMatchObject({
       tenantId: "t1",
@@ -156,7 +156,7 @@ describe("ICS feed endpoints", () => {
 
   it("is sent as private, never stored by shared caches", async () => {
     const { c, res } = build([]);
-    await c.salonFeed("salon-ana", IcsController.signToken("salon:salon-ana", SECRET), res);
+    await c.salonFeed("salon-ana", IcsController.signToken("salon:t1", SECRET), res);
     expect(res.headers["Cache-Control"]).toBe("private, no-store");
   });
 

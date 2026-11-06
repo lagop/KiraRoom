@@ -15,7 +15,7 @@ import { IcsController, icsFeedVersion, professionalFeedVersion } from "./ics.co
 const SECRET = "ics-secret";
 
 function build(features: any = {}, { professionalActive = true, professionalVersion = 0 } = {}) {
-  const tenant = { id: "t1", slug: "salon-ana", name: "Salón Ana", features };
+  const tenant: any = { id: "t1", slug: "salon-ana", name: "Salón Ana", features, createdAt: new Date("2026-01-01"), slugChangedAt: null };
   // Professional.icsFeedVersion: "Quitar acceso" bumps it (see professionals.service.ts).
   const pro = { icsFeedVersion: professionalVersion };
   const raw: Array<{ sql: string; values: unknown[] }> = [];
@@ -64,7 +64,7 @@ describe("GET /ics/tokens", () => {
     expect(out.rotatedAt).toBeNull();
     expect(out.salon).toEqual({
       slug: "salon-ana",
-      token: IcsController.signToken("salon:salon-ana", SECRET),
+      token: IcsController.signToken("salon:t1", SECRET),
     });
     expect(out.professionals).toEqual([
       { id: "pro-1", name: "Ana López", token: IcsController.signToken("professional:pro-1", SECRET) },
@@ -217,5 +217,28 @@ describe("one professional's feed, cut when their access is removed (D21)", () =
     expect(professionalFeedVersion(undefined, null)).toBe(0);
     expect(professionalFeedVersion({ icsFeed: { version: 2 } }, 1)).toBe(3);
     expect(professionalFeedVersion({}, -4)).toBe(0);
+  });
+});
+
+describe("the salon feed token is bound to the salon, not to its address (audit 2026-11-06)", () => {
+  const byId = IcsController.signToken("salon:t1", SECRET);
+  const byAddress = IcsController.signToken("salon:salon-ana", SECRET);
+
+  it("the link made now signs the salon's id and opens its feed", async () => {
+    const { controller } = build();
+    expect((await controller.salonFeed("salon-ana", byId, res() as any)).statusCode).toBe(200);
+  });
+
+  it("an address-signed link no longer opens a salon created after the change", async () => {
+    const { controller, tenant } = build();
+    tenant.createdAt = new Date("2027-01-01");
+    await expect(controller.salonFeed("salon-ana", byAddress, res() as any)).rejects.toThrow("Invalid token");
+    expect((await controller.salonFeed("salon-ana", byId, res() as any)).statusCode).toBe(200);
+  });
+
+  it("nor one that moved to this address: an earlier holder could have made the link", async () => {
+    const { controller, tenant } = build();
+    tenant.slugChangedAt = new Date("2026-12-01");
+    await expect(controller.salonFeed("salon-ana", byAddress, res() as any)).rejects.toThrow("Invalid token");
   });
 });
