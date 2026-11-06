@@ -27,3 +27,20 @@ describe('runUnscoped', () => {
     await expect(runUnscoped(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
   });
 });
+
+describe("EmailCampaignSender.kick (audit 2026-11-06)", () => {
+  it("runs the dispatch outside the salon whose request kicked it", async () => {
+    const { EmailCampaignSender } = await import("../../email-campaigns/email-campaign-sender.service");
+    const seen: Array<boolean | undefined> = [];
+    const sender: any = Object.create(EmailCampaignSender.prototype);
+    sender.dispatch = async () => {
+      seen.push(tenantStorage.getStore()?.bypass);
+    };
+    await tenantStorage.run({ tenantId: "salon-a", bypass: false }, async () => {
+      sender.kick();
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    });
+    expect(seen).toEqual([true]);
+  });
+});

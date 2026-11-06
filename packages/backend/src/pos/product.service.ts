@@ -40,6 +40,14 @@ export interface InventoryAdjustmentDto {
  * euros, "Stripe payment would be handled here", stock taken outside any
  * transaction) and its unused stats were removed: nothing called them.
  */
+/** The salon already has a product with this SKU (unique per salon). */
+function skuTaken(err: unknown): never {
+  if ((err as { code?: string })?.code === 'P2002') {
+    throw new ConflictException('Ya tienes un producto con ese código (SKU).');
+  }
+  throw err;
+}
+
 @Injectable()
 export class ProductService {
   constructor(private readonly prisma: PrismaService) {}
@@ -49,7 +57,8 @@ export class ProductService {
   // ============================================
 
   async createProduct(tenantId: string, dto: CreateProductDto) {
-    return this.prisma.product.create({
+    return this.prisma.product
+      .create({
       data: {
         tenantId,
         name: dto.name,
@@ -74,7 +83,8 @@ export class ProductService {
         earnPoints: dto.earnPoints ?? false,
         pointsEarned: dto.pointsEarned ?? 0,
       },
-    });
+    })
+      .catch(skuTaken);
   }
 
   async getProducts(tenantId: string, params?: {
@@ -147,10 +157,12 @@ export class ProductService {
       });
     }
     if (Object.keys(data).length === 0) return this.getProduct(tenantId, id);
-    return this.prisma.product.update({
-      where: { id: product.id },
-      data,
-    });
+    return this.prisma.product
+      .update({
+        where: { id: product.id },
+        data,
+      })
+      .catch(skuTaken);
   }
 
   /**

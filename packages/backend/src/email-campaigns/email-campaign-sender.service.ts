@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { runUnscoped } from "../common/tenancy/tenant.context";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { clientsWhoRefusedMarketing } from "../consent/marketing-consent";
@@ -103,7 +104,11 @@ export class EmailCampaignSender {
   /** Starts a run now, without waiting for it (after "Enviar"). */
   kick(): void {
     setImmediate(() => {
-      void this.dispatch();
+      // Called inside a salon's request, setImmediate keeps that salon's
+      // filter: the run would only see its campaigns, and the one-minute cron
+      // (which sees them all) would find it running and leave, chain after
+      // chain (audit 2026-11-06). The sender works across salons.
+      void runUnscoped(async () => this.dispatch());
     });
   }
 

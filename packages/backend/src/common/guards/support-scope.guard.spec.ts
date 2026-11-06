@@ -190,3 +190,46 @@ describe("SupportScopeGuard: what a support session may not do (audit 8 D1)", ()
     }
   });
 });
+
+describe("SupportScopeGuard: writes in a support session leave a trace (audit 2026-11-06)", () => {
+  class Controller {
+    handler() {}
+  }
+  const ctx = (method: string, user: any) =>
+    ({
+      getType: () => "http",
+      getHandler: () => Controller.prototype.handler,
+      getClass: () => Controller,
+      switchToHttp: () => ({ getRequest: () => ({ method, route: { path: "/payments/refund/:id" }, url: "/payments/refund/9?x=1", user }) }),
+    }) as any;
+  const support = { id: "owner-1", role: "owner", tenantId: "t1", impersonatedBy: "saas-1" };
+
+  function setup() {
+    const record = jest.fn(async () => ({ id: "a1" }));
+    return { record, guard: new SupportScopeGuard(new Reflector(), { record } as any) };
+  }
+
+  it("records a write with the route, never the body", () => {
+    const { guard, record } = setup();
+    expect(guard.canActivate(ctx("POST", support))).toBe(true);
+    expect(record).toHaveBeenCalledWith("support.request", {
+      actorId: "owner-1",
+      actorRole: "owner",
+      tenantId: "t1",
+      metadata: { method: "POST", route: "/payments/refund/:id" },
+    });
+  });
+
+  it("records no reads, and nothing for the salon's own team", () => {
+    const { guard, record } = setup();
+    guard.canActivate(ctx("GET", support));
+    guard.canActivate(ctx("POST", { id: "owner-1", role: "owner", tenantId: "t1" }));
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("a failing audit write never fails the request", async () => {
+    const guard = new SupportScopeGuard(new Reflector(), { record: jest.fn(async () => Promise.reject(new Error("db down"))) } as any);
+    expect(guard.canActivate(ctx("DELETE", support))).toBe(true);
+    await new Promise((r) => setImmediate(r));
+  });
+});
