@@ -51,7 +51,7 @@ describe("hidden professionals are named as the page names them", () => {
   });
 
   it("list_professionals says nothing about who they are", async () => {
-    const out: any = await new SalonToolsService().listProfessionals({ prisma: prisma(), tenantId: TENANT } as any, {});
+    const out: any = await new SalonToolsService({} as any, {} as any).listProfessionals({ prisma: prisma(), tenantId: TENANT } as any, {});
     const hidden = out.professionals.filter((p: any) => p.fullName.startsWith("Profesional"));
     expect(hidden).toHaveLength(2);
     expect(hidden[0]).toMatchObject({ position: null, bio: null, specialties: [], yearsExperience: null, languages: [] });
