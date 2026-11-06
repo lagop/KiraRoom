@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { bindActor, bindTenant } from '../../common/tenancy/tenant.context';
+import { bindActor, bindTenant, runUnscoped } from '../../common/tenancy/tenant.context';
 import { isAccessTokenPayload, supportClaims } from '../session-token';
 import { SALON_BLOCKED_MESSAGE, SALON_DELETED_MESSAGE } from '../salon-deleted';
 import { supportAccessAllowed } from '../support-access/support-access';
@@ -155,10 +155,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!claims || claims.impersonationEndsAt * 1000 <= Date.now()) {
       throw new UnauthorizedException('La sesión de soporte ha terminado.');
     }
-    const impersonator = await this.prisma.user.findUnique({
-      where: { id: claims.impersonatedBy },
-      select: { role: true, isActive: true, tokenVersion: true },
-    });
+    // The platform owner belongs to no salon, and this request is already
+    // bound to the salon being supported: look them up outside that filter.
+    const impersonator = await runUnscoped(async () =>
+      this.prisma.user.findUnique({
+        where: { id: claims.impersonatedBy },
+        select: { role: true, isActive: true, tokenVersion: true },
+      }),
+    );
     if (
       !impersonator ||
       !impersonator.isActive ||
