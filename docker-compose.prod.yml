@@ -225,6 +225,11 @@ services:
       VERIFACTU_DECLARATION_PLACE: ${VERIFACTU_DECLARATION_PLACE:-}
       VERIFACTU_EXTRA_CA_PEM: ${VERIFACTU_EXTRA_CA_PEM:-}
 
+      # Platform console: with "true", a platform owner without 2FA can only set it
+      # up (audit 8 D15). Empty = off. Was not passed through before, so setting it
+      # in the deploy environment changed nothing.
+      SAAS_OWNER_2FA_REQUIRED: ${SAAS_OWNER_2FA_REQUIRED:-}
+
       # Invoices without the salon's issuer data: refused from this day (empty = warn only)
       INVOICE_ISSUER_BLOCK_FROM: ${INVOICE_ISSUER_BLOCK_FROM:-}
 
