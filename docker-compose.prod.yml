@@ -345,7 +345,7 @@ services:
     container_name: kiraroom-uptime-kuma
     restart: unless-stopped
     ports:
-      - "3002:3001"
+      - "127.0.0.1:3002:3001"
     volumes:
       - uptime_kuma_data:/app/data
     networks:
