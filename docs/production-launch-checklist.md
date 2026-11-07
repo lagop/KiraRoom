@@ -135,7 +135,7 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
 
 **Goal:** You can detect + recover from failures without panic.
 
-- [ ] Set up Uptime Kuma at `http://<vps-ip>:3002`:
+- [ ] Set up Uptime Kuma (listens on 127.0.0.1:3002 only; open it through an SSH tunnel: `ssh -L 3002:127.0.0.1:3002 root@<vps-ip>`, then `http://localhost:3002`):
   - [ ] Probe 1: `GET https://api.kiraroom.net/api/v1/ping` every 60s → alert Telegram
   - [ ] Probe 2: `POST https://api.kiraroom.net/api/v1/auth/login` with a test tenant every 5 min
   - [ ] Probe 3: `GET https://app.kiraroom.net` every 5 min → warn on 5xx
