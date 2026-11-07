@@ -1519,7 +1519,8 @@
       "unblock_ok": "Salón desbloqueado",
       "unblock_failed": "No se ha desbloqueado el salón",
       "pending_deletion_notice": "La dueña pidió borrar este salón el {date}. Para anularlo, dale «Cortesía» y marca «Anular también el borrado pendiente».",
-      "status_buttons_hint": "Para dar de baja un salón usa «Suspender»; para que funcione sin pagar, «Cortesía». «Pago pendiente» y «Suspendido por impago» los pone Stripe; si paga en Stripe, su plan se cambia allí.",
+      "status_buttons_hint": "Aquí solo se elige entre el estado actual y «En prueba» (para alargar la prueba). Para dar de baja un salón usa «Suspender»; para que funcione sin pagar, «Cortesía»: son botones de la ficha del salón y del listado, no opciones de este selector. «Pago pendiente» y «Suspendido por impago» los pone Stripe; si paga en Stripe, su plan se cambia allí.",
+      "status_buttons_link": "Ir a la ficha del salón",
       "web_address_change_hint": "La dirección anterior ({old}) seguirá llevando aquí durante 12 meses. No gasta el cambio único de la dueña.",
       "platform_address": "Dirección de la plataforma",
       "platform_address_hint": "Solo para salones de la propia plataforma: permite palabras como «kiraroom» o «demo». Queda en el registro de actividad."
