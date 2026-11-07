@@ -300,6 +300,7 @@ model Tenant {
   @@index([deletedAt, plan])
   @@index([deletedAt, country])
   @@map("tenants")
+  subscriptionInvoices SubscriptionInvoice[]
 }
 
 model AddOn {
@@ -4326,6 +4327,51 @@ model CashMovement {
 /// Stripe webhook events already handled, by Stripe's event id. Stripe
 /// delivers an event at least once and retries it for days: a replayed
 /// event is acknowledged and skipped instead of being applied twice.
+/// One KiraRoom plan invoice as Stripe reported it (invoice.paid,
+/// invoice.payment_failed, charge.refunded), kept so the console can list a
+/// salon's invoices and the monthly takings without asking Stripe on every
+/// view. It is a copy: Stripe issues the invoice and stays its source. The
+/// row outlives the salon (tenantId goes null) because it is KiraRoom's own
+/// accounting record.
+model SubscriptionInvoice {
+  id                  String   @id @default(uuid())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  /// Stripe's invoice id (in_...).
+  stripeInvoiceId     String   @unique
+  tenantId            String?
+  /// The salon's name when the invoice was recorded.
+  tenantName          String
+  stripeCustomerId    String
+  /// The charge that paid it, to match a later refund.
+  stripeChargeId      String?
+  /// Stripe mode of the keys that issued it: test invoices never count as takings.
+  livemode            Boolean
+  /// paid | failed | refunded | partially_refunded
+  status              String
+  number              String?
+  currency            String
+  amountDueCents      Int
+  amountPaidCents     Int
+  amountRefundedCents Int      @default(0)
+  /// The first line: the plan or add-on billed.
+  description         String?
+  periodStart         DateTime?
+  periodEnd           DateTime?
+  invoiceCreatedAt    DateTime
+  paidAt              DateTime?
+  failedAt            DateTime?
+  attemptCount        Int?
+  hostedInvoiceUrl    String?
+  invoicePdfUrl       String?
+  tenant              Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, invoiceCreatedAt])
+  @@index([livemode, invoiceCreatedAt])
+  @@index([stripeChargeId])
+  @@map("subscription_invoices")
+}
+
 model StripeWebhookEvent {
   /// Stripe's event id (evt_...).
   id         String   @id

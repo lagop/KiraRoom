@@ -176,6 +176,8 @@ export const TENANT_MODEL_ON_ERASURE: Readonly<Record<string, "deleted" | "clean
   FiscalSequence: "kept",
   FiscalChainState: "kept",
   TaxReport: "kept",
+  // KiraRoom's own record of what the salon paid it for its plan: an accounting record that stays.
+  SubscriptionInvoice: "kept",
   AccountingSyncLog: "kept",
   // VERI*FACTU: records cannot be changed or deleted (a database trigger
   // refuses it) and the law keeps them as long as the invoices. Their client

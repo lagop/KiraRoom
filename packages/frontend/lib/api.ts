@@ -5653,6 +5653,38 @@ class ApiClient implements ApiClientInterface {
     return this.request("/saas/weekly");
   }
 
+  /** KiraRoom's plan invoices to the salons (a copy of Stripe's), newest first. */
+  async getSaasBillingInvoices(params?: {
+    tenantId?: string;
+    status?: string;
+    month?: string;
+    mode?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<any> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params ?? {})) {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    }
+    const qs = q.toString();
+    return this.request(`/saas/billing/invoices${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Takings, refunds and failed payments per month. */
+  async getSaasBillingSummary(params?: { mode?: string; months?: number }): Promise<any> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params ?? {})) {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    }
+    const qs = q.toString();
+    return this.request(`/saas/billing/summary${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Fills the invoice copy from Stripe's latest invoices. */
+  async syncSaasBilling(): Promise<{ mode: string; recorded: number; skipped: number; hasMore: boolean }> {
+    return this.request("/saas/billing/sync", { method: "POST" });
+  }
+
   async getSaasUsers(filter?: {
     page?: number;
     limit?: number;
