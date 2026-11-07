@@ -1519,7 +1519,8 @@
       "unblock_ok": "Salon unblocked",
       "unblock_failed": "The salon was not unblocked",
       "pending_deletion_notice": "The owner asked to delete this salon on {date}. To cancel that, give it a “Courtesy” and tick “Also cancel the pending deletion”.",
-      "status_buttons_hint": "To end a salon's subscription use “Suspend”; to let it work without paying, “Courtesy”. “Payment pending” and “Suspended for non-payment” are set by Stripe; if it pays in Stripe, its plan is changed there.",
+      "status_buttons_hint": "This selector only offers the current status and “Trial” (to extend the trial). To end a salon's subscription use “Suspend”; to let it work without paying, “Courtesy”: those are buttons on the salon's page and on the list, not options here. “Payment pending” and “Suspended for non-payment” are set by Stripe; if it pays in Stripe, its plan is changed there.",
+      "status_buttons_link": "Go to the salon's page",
       "web_address_change_hint": "The previous address ({old}) keeps leading here for 12 months. It does not use up the owner's one-time change.",
       "platform_address": "Platform address",
       "platform_address_hint": "Only for the platform's own salons: allows words such as “kiraroom” or “demo”. It is recorded in the activity log."

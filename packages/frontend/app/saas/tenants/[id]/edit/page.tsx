@@ -324,6 +324,9 @@ export default function EditTenantPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">{t("saas.console.status_buttons_hint")}</p>
+              <Link href={`/saas/tenants/${tenantId}`} className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+                {t("saas.console.status_buttons_link")}
+              </Link>
             </div>
             {(formData.subscriptionStatus === "trialing" || original.subscriptionStatus === "trialing") && (
               <div>
