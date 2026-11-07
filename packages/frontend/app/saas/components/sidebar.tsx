@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   CalendarCheck,
   History,
+  Receipt,
 } from "lucide-react";
 import apiClient from "@/lib/api";
 import { removeToken } from "@/lib/api";
@@ -68,6 +69,7 @@ export function SaasSidebar({
     { href: "/saas", icon: Home, labelKey: "saas.nav.overview", exact: true },
     { href: "/saas/weekly", icon: CalendarCheck, labelKey: "saas.nav.weekly" },
     { href: "/saas/tenants", icon: Building2, labelKey: "saas.nav.salons" },
+    { href: "/saas/cobros", icon: Receipt, labelKey: "saas.nav.billing" },
     { href: "/saas/users", icon: Users, labelKey: "saas.nav.users" },
     { href: "/saas/analytics", icon: BarChart2, labelKey: "saas.nav.analytics" },
     { href: "/saas/bug-reports", icon: Bug, labelKey: "saas.nav.bugReports" },

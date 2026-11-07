@@ -75,7 +75,7 @@ const toLive = previewWarning({
 check("going live says it plainly", !!toLive && /modo REAL/.test(toLive.lines[0]) && toLive.destructive);
 check("…with the salons of the other mode", !!toLive && /2 salón/.test(toLive.lines[1]) && /Salón Lucía \(pro\)/.test(toLive.lines[2]));
 check("same mode: no warning", previewWarning({ modeBefore: "test", modeAfter: "test", problem: null, impact: null }) === null);
-check("the six webhook events", STRIPE_WEBHOOK_EVENTS.length === 6 && STRIPE_WEBHOOK_EVENTS.includes("invoice.payment_failed"));
+check("the seven webhook events", STRIPE_WEBHOOK_EVENTS.length === 7 && STRIPE_WEBHOOK_EVENTS.includes("invoice.payment_failed") && STRIPE_WEBHOOK_EVENTS.includes("charge.refunded"));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

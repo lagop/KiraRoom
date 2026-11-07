@@ -29,6 +29,7 @@ import { InternalSalonCard } from "../../components/internal-salon-card";
 import type { SharedIdentityWarning } from "@/lib/shared-identity";
 import { saveBlob } from "@/lib/share-download";
 import type { TenantAction } from "@/lib/saas-tenant";
+import { TenantInvoices } from "../../components/tenant-invoices";
 import { TenantStatusButtons, TenantStatusDialog, TenantStatusExtraBadges } from "../../components/tenant-status-actions";
 import {
   anonymizeNeedsForce,
@@ -456,6 +457,8 @@ export default function TenantDetailPage() {
           {row(t("saas.console.next_step"), nextStepLabel)}
         </dl>
       </div>
+
+      <TenantInvoices tenantId={tenantId} />
 
       {/* Datos y RGPD (audit 8 T12 / D14) */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">

@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { SubscriptionBillingController } from "./subscription-billing.controller";
+import { SubscriptionBillingService } from "./subscription-billing.service";
 import { JwtModule } from "@nestjs/jwt";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { SaasController } from "./saas.controller";
@@ -39,6 +41,7 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
   providers: [
     SaasService,
     SaasAnalyticsService,
+    SubscriptionBillingService,
     AuditLogService,
     SaaSRetentionScheduler,
     WeeklyDigestService,
@@ -46,7 +49,7 @@ import { AuthRateLimitsService } from "../auth/abuse/auth-rate-limits.service";
     PasswordResetService,
     AuthRateLimitsService,
   ],
-  controllers: [SaasController, BugReportAdminController, AuditLogAdminController, WeeklyDigestController, TenantInternalController],
+  controllers: [SaasController, SubscriptionBillingController, BugReportAdminController, AuditLogAdminController, WeeklyDigestController, TenantInternalController],
   exports: [SaasService, AuditLogService],
 })
 export class SaasModule {}

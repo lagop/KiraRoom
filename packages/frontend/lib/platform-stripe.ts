@@ -4,7 +4,7 @@
  */
 import type { PlatformStripeConfig, PlatformStripePreview, PlatformStripeUpdate, StripeMode } from "./api";
 
-/** The six events KiraRoom handles on its own account's webhook. */
+/** The seven events KiraRoom handles on its own account's webhook (charge.refunded only to note refunds in Cobros). */
 export const STRIPE_WEBHOOK_EVENTS = [
   "checkout.session.completed",
   "customer.subscription.created",
@@ -12,6 +12,7 @@ export const STRIPE_WEBHOOK_EVENTS = [
   "customer.subscription.deleted",
   "invoice.paid",
   "invoice.payment_failed",
+  "charge.refunded",
 ];
 
 export function modeName(mode: StripeMode): string {

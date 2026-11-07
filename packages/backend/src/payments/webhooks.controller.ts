@@ -1,4 +1,5 @@
 import { BadRequestException, Controller, Post, Body, Headers, RawBodyRequest, Req, HttpCode, HttpException, HttpStatus, Logger } from "@nestjs/common";
+import { recordChargeRefund, recordSubscriptionInvoice } from './subscription-invoices';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
@@ -220,7 +221,8 @@ export class WebhooksController {
         break;
       }
       // payment_intent.succeeded / payment_failed and charge.refunded used to
-      // mark a salon payment paid or failed by its Stripe id. These are
+      // mark a salon payment paid or failed by its Stripe id (charge.refunded
+      // is handled again below, but only for the console's invoice copies). These are
       // KiraRoom's own account's events (plan billing), never a salon's
       // client payments, and no salon payment has a PaymentIntent: they are
       // left unhandled (default) until online client payments exist.
@@ -251,6 +253,11 @@ export class WebhooksController {
 
       case 'invoice.payment_failed':
         await this.handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+        break;
+
+      // Only to note a refund on the console's copy of the invoice it paid.
+      case 'charge.refunded':
+        await this.handleChargeRefunded(event.data.object as Stripe.Charge);
         break;
 
       default:
@@ -568,6 +575,32 @@ export class WebhooksController {
   // Database errors in the two invoice handlers are not caught: they fail
   // the event, processStripeEvent releases it and Stripe retries it (B4).
   // Only the email to the owner is allowed to fail quietly.
+  /**
+   * The console's copy of the invoice (subscription-invoices.ts). It never
+   * holds up the event: the salon's state matters more than the report, and a
+   * gap is filled from the console's sync.
+   */
+  private async keepInvoiceCopy(
+    invoice: Stripe.Invoice,
+    outcome: 'paid' | 'failed',
+    tenant: { id: string; name: string } | null,
+  ) {
+    try {
+      await recordSubscriptionInvoice(this.prisma as any, invoice, outcome, tenant);
+    } catch (err) {
+      this.logger.error(`Could not keep the copy of invoice ${invoice?.id}: ${(err as Error).message}`);
+    }
+  }
+
+  private async handleChargeRefunded(charge: Stripe.Charge) {
+    try {
+      const n = await recordChargeRefund(this.prisma as any, charge);
+      if (n > 0) this.logger.log(`Refund of charge ${charge.id} noted on ${n} invoice(s)`);
+    } catch (err) {
+      this.logger.error(`Could not note the refund of charge ${charge?.id}: ${(err as Error).message}`);
+    }
+  }
+
   private async handleInvoicePaid(invoice: Stripe.Invoice) {
     console.log(`[WebhooksController] Invoice paid: ${invoice.id}`);
 
@@ -585,6 +618,7 @@ export class WebhooksController {
     const tenant = await this.prisma.tenant.findFirst({
       where: { stripeCustomerId: customerId },
       select: { id: true, name: true, subscriptionStatus: true } });
+    await this.keepInvoiceCopy(invoice, 'paid', tenant);
     if (!tenant) {
       this.logger.warn(
         `No Tenant found for Stripe customer ${customerId}; skipping recovery.`,
@@ -669,6 +703,7 @@ export class WebhooksController {
         name: true,
         subscriptionStatus: true,
         paymentFailedAt: true } });
+    await this.keepInvoiceCopy(invoice, 'failed', tenant);
     if (!tenant) {
       this.logger.warn(
         `No Tenant found for Stripe customer ${customerId}; skipping payment-failed handling.`,
