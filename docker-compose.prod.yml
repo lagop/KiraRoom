@@ -341,7 +341,7 @@ services:
 
   # Uptime Kuma
   uptime-kuma:
-    image: louislam/uptime-kuma:latest
+    image: louislam/uptime-kuma:2
     container_name: kiraroom-uptime-kuma
     restart: unless-stopped
     ports:
