@@ -6791,6 +6791,15 @@ export interface PlatformStripeConfig {
   webhookSecret: { source: EmailSettingSource; lastFour: string | null };
   /** The other mode's webhook secret: its events are verified and ignored. */
   otherWebhookSecret: { source: EmailSettingSource; lastFour: string | null; mode: StripeMode };
+  /** The other mode's key pair, saved unused beside the one in force: "Pasar a modo X" swaps the two sets. */
+  other: {
+    mode: StripeMode;
+    secretKey: { lastFour: string | null };
+    publishableKey: { value: string | null };
+    webhookSecret: { source: EmailSettingSource; lastFour: string | null };
+    canSwitch: boolean;
+    switchProblem: string | null;
+  };
   /** What the server's .env holds, for "Volver a lo del servidor". */
   server: { mode: StripeMode; hasWebhookSecret: boolean };
   /** Why the settings in force cannot take payments safely; null when they can. */
@@ -6807,6 +6816,10 @@ export interface PlatformStripeUpdate {
   publishableKey?: string | null;
   webhookSecret?: string | null;
   otherWebhookSecret?: string | null;
+  otherSecretKey?: string | null;
+  otherPublishableKey?: string | null;
+  /** Swap the set in force with the saved one of the other mode; takes no other field. */
+  switchMode?: boolean;
 }
 
 /** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */

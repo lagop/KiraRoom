@@ -3690,6 +3690,10 @@ model PlatformStripeConfig {
   /// The other mode's webhook secret (test or live, whichever the secret
   /// key is not): its events are verified and acknowledged, not applied.
   otherWebhookSecretEncrypted String? @db.Text
+  /// The other mode's key pair, kept unused beside the one in force so that
+  /// "Pasar a modo X" swaps the two sets without pasting anything again.
+  otherSecretKeyEncrypted String? @db.Text
+  otherPublishableKey     String?
   /// Ignored: KiraRoom charges no VAT (D6). Kept for the column.
   taxEnabled             Boolean?
   updatedAt              DateTime @updatedAt

@@ -2,16 +2,18 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, Check, CreditCard, FlaskConical, PlugZap, RotateCcw, Save } from "lucide-react";
+import { AlertCircle, ArrowRightLeft, Check, CreditCard, FlaskConical, PlugZap, RotateCcw, Save, Trash2 } from "lucide-react";
 import apiClient, { PlatformStripeConfig, PlatformStripeTestModePlans, PlatformStripeUpdate } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   BACK_TO_SERVER,
   STRIPE_WEBHOOK_EVENTS,
+  SWITCH_MODE,
   StripeForm,
   hasConsoleKeys,
   modeName,
+  otherModeChecklist,
   previewWarning,
   stripeStatus,
   stripeUpdate,
@@ -27,7 +29,17 @@ const TONE = {
   off: "border-red-200 bg-red-50 text-red-800",
 };
 
-const EMPTY_FORM: StripeForm = { secretKey: "", publishableKey: "", webhookSecret: "", otherWebhookSecret: "" };
+const EMPTY_FORM: StripeForm = {
+  secretKey: "",
+  publishableKey: "",
+  webhookSecret: "",
+  otherWebhookSecret: "",
+  otherSecretKey: "",
+  otherPublishableKey: "",
+};
+
+/** "Borrar lo guardado del otro modo": the three saved fields cleared at once. */
+const CLEAR_OTHER = { otherSecretKey: null, otherPublishableKey: null, otherWebhookSecret: null };
 
 /** A save waiting for the admin to confirm what it does. */
 interface PendingSave {
@@ -65,7 +77,7 @@ export default function PlatformStripePage() {
 
   function show(next: PlatformStripeConfig) {
     setCfg(next);
-    setForm({ ...EMPTY_FORM, publishableKey: next.publishableKey.value ?? "" });
+    setForm({ ...EMPTY_FORM, publishableKey: next.publishableKey.value ?? "", otherPublishableKey: next.other.publishableKey.value ?? "" });
   }
 
   useEffect(() => {
@@ -149,7 +161,9 @@ export default function PlatformStripePage() {
 
   const status = stripeStatus(cfg);
   const pending = stripeUpdate(form, cfg);
-  const otherMode = modeName(cfg.otherWebhookSecret.mode);
+  const otherChecklist = otherModeChecklist(cfg);
+  const otherName = modeName(cfg.other.mode);
+  const hasOtherSaved = otherChecklist.some((c) => c.saved);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -171,6 +185,58 @@ export default function PlatformStripePage() {
         )}
         <span>{status.text}</span>
       </div>
+
+      {cfg.mode !== "none" && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(["test", "live"] as const).map((m) => {
+            const active = cfg.mode === m;
+            const saved = !active && otherChecklist.every((c) => c.saved);
+            return (
+              <div
+                key={m}
+                className={`rounded-xl border-2 p-4 ${
+                  active ? (m === "live" ? "border-green-500 bg-green-50" : "border-amber-400 bg-amber-50") : "border-gray-200 bg-white"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-base font-bold text-gray-900">{m === "live" ? "Modo real" : "Modo de pruebas"}</span>
+                  <span
+                    className={`text-xs font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+                      active ? "bg-gray-900 text-white" : saved ? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-400"
+                    }`}
+                  >
+                    {active ? "En uso" : saved ? "Guardado" : "Sin guardar"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-600 mt-1">
+                  {active
+                    ? m === "live"
+                      ? "Los salones pagan de verdad."
+                      : "Los pagos son simulados."
+                    : saved
+                      ? `Sus tres claves están guardadas (…${cfg.other.secretKey.lastFour}).`
+                      : "Faltan claves por guardar abajo."}
+                </p>
+                {!active && (
+                  <button
+                    type="button"
+                    onClick={() => saveChecked(SWITCH_MODE)}
+                    disabled={!cfg.other.canSwitch || saving || !!pending}
+                    title={cfg.other.switchProblem ?? (pending ? "Guarda o descarta los cambios del formulario primero." : undefined)}
+                    className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-40"
+                  >
+                    <ArrowRightLeft className="w-4 h-4" />
+                    Pasar a modo {modeName(m)}
+                  </button>
+                )}
+                {!active && !cfg.other.canSwitch && cfg.other.switchProblem && (
+                  <p className="text-xs text-gray-500 mt-2">{cfg.other.switchProblem}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {testPlans && (testPlans.total > 0 || cfg.mode === "test") && (
         <div
@@ -212,6 +278,9 @@ export default function PlatformStripePage() {
       )}
 
       <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-6">
+        {cfg.mode !== "none" && (
+          <p className="text-sm font-semibold text-gray-900">Claves en uso (modo {modeName(cfg.mode)})</p>
+        )}
         <Field
           label="Clave secreta"
           source={cfg.secretKey.source}
@@ -274,33 +343,92 @@ export default function PlatformStripePage() {
         </Field>
 
         {cfg.mode !== "none" && (
-          <Field
-            label={`Secreto del webhook de modo ${otherMode} (opcional)`}
-            source={cfg.otherWebhookSecret.source}
-            current={cfg.otherWebhookSecret.lastFour ? `whsec_…${cfg.otherWebhookSecret.lastFour}` : null}
-            hint={`Con él, los avisos de Stripe del modo ${otherMode} (reintentos tras cambiar de modo, renovaciones de suscripciones antiguas) se reciben y se descartan, en vez de fallar hasta que Stripe desactive el webhook. Nunca activan un plan. Al cambiar de modo, el secreto anterior pasa aquí solo.`}
-            onClear={
-              cfg.otherWebhookSecret.source === "console" || cfg.otherWebhookSecret.source === "unreadable"
-                ? () =>
-                    setPendingSave({
-                      input: { otherWebhookSecret: null },
-                      title: `¿Quitar el secreto del webhook de modo ${otherMode}?`,
-                      lines: [`Los avisos que aún lleguen del modo ${otherMode} fallarán. Quítalo cuando hayas borrado ese webhook en Stripe.`],
-                      confirmLabel: "Quitar",
-                      destructive: true,
-                    })
-                : undefined
-            }
-          >
-            <input
-              type="password"
-              autoComplete="off"
-              value={form.otherWebhookSecret}
-              onChange={(e) => setForm({ ...form, otherWebhookSecret: e.target.value })}
-              placeholder="whsec_…"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
-            />
-          </Field>
+          <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 space-y-5">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Claves del modo {otherName}, guardadas sin usar</p>
+              <p className="text-xs text-gray-600 mt-1">
+                Guarda aquí el juego completo del otro modo para poder pasar de uno a otro con un botón, sin volver a pegar nada. No se
+                usa para cobrar hasta que pulses «Pasar a modo {otherName}», y al hacerlo el juego en uso queda guardado en su lugar.
+              </p>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {otherChecklist.map((c) => (
+                  <li key={c.label} className={c.saved ? "text-green-700" : "text-gray-500"}>
+                    {c.saved ? "✓" : "○"} {c.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <Field
+              label={`Clave secreta de modo ${otherName}`}
+              source={cfg.other.secretKey.lastFour ? "console" : "none"}
+              current={cfg.other.secretKey.lastFour ? `…${cfg.other.secretKey.lastFour}` : null}
+              hint={`Stripe (en modo ${otherName}) → Desarrolladores → Claves de API. Se guarda cifrada y no se vuelve a mostrar.`}
+            >
+              <input
+                type="password"
+                autoComplete="off"
+                value={form.otherSecretKey}
+                onChange={(e) => setForm({ ...form, otherSecretKey: e.target.value })}
+                placeholder={cfg.other.secretKey.lastFour ? "Escribe una clave nueva para sustituirla" : "sk_live_… o sk_test_…"}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+              />
+            </Field>
+
+            <Field
+              label={`Clave publicable de modo ${otherName}`}
+              source={cfg.other.publishableKey.value ? "console" : "none"}
+              current={null}
+              hint="Del mismo modo que la secreta de arriba."
+            >
+              <input
+                type="text"
+                autoComplete="off"
+                value={form.otherPublishableKey}
+                onChange={(e) => setForm({ ...form, otherPublishableKey: e.target.value })}
+                placeholder="pk_live_… o pk_test_…"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+              />
+            </Field>
+
+            <Field
+              label={`Secreto del webhook de modo ${otherName}`}
+              source={cfg.otherWebhookSecret.source}
+              current={cfg.otherWebhookSecret.lastFour ? `whsec_…${cfg.otherWebhookSecret.lastFour}` : null}
+              hint={`Cada modo tiene su propio webhook en Stripe, con los mismos eventos y la misma dirección. Mientras no esté en uso, los avisos de Stripe del modo ${otherName} (reintentos, renovaciones de suscripciones antiguas) se reciben y se descartan, y nunca activan un plan.`}
+            >
+              <input
+                type="password"
+                autoComplete="off"
+                value={form.otherWebhookSecret}
+                onChange={(e) => setForm({ ...form, otherWebhookSecret: e.target.value })}
+                placeholder="whsec_…"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+              />
+            </Field>
+
+            {(hasOtherSaved || cfg.otherWebhookSecret.source === "console" || cfg.otherWebhookSecret.source === "unreadable") && (
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingSave({
+                    input: CLEAR_OTHER,
+                    title: `¿Borrar lo guardado del modo ${otherName}?`,
+                    lines: [
+                      `Se borran la clave secreta, la publicable y el secreto del webhook guardados del modo ${otherName}. No cambia el modo en uso. Los avisos que aún lleguen de ese modo fallarán hasta que borres su webhook en Stripe.`,
+                    ],
+                    confirmLabel: "Borrar",
+                    destructive: true,
+                  })
+                }
+                disabled={saving}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-red-700 disabled:opacity-40"
+              >
+                <Trash2 className="w-4 h-4" />
+                Borrar lo guardado del modo {otherName}
+              </button>
+            )}
+          </div>
         )}
 
         <div className="text-xs text-gray-500">
@@ -383,9 +511,9 @@ export default function PlatformStripePage() {
         <CreditCard className="w-4 h-4 mt-0.5 shrink-0" />
         <span>
           Para cambiar esta configuración hace falta la verificación en dos pasos. Lo que se ponga aquí tiene prioridad sobre
-          el servidor. Para pasar a modo real: crea en Stripe (modo real) el webhook con los eventos de arriba, pega aquí a la vez
-          la clave secreta, la publicable y el secreto de ese webhook, y guarda; antes de guardar verás los salones que tienen
-          datos del modo de pruebas. Los avisos del modo que no está en uso nunca activan un plan.
+          el servidor. Para pasar a modo real: crea en Stripe (modo real) el webhook con los eventos de arriba, guarda arriba, en
+          «Claves del modo real», la clave secreta, la publicable y el secreto de ese webhook, y pulsa «Pasar a modo real»; antes
+          de cambiar verás los salones que tienen datos del otro modo. Los avisos del modo que no está en uso nunca activan un plan.
           {cfg.updatedAt && (
             <>
               {" "}

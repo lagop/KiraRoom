@@ -22,6 +22,9 @@ function updateOf(body: UpdatePlatformStripeConfigDto): PlatformStripeConfigUpda
     publishableKey: body.publishableKey,
     webhookSecret: body.webhookSecret,
     otherWebhookSecret: body.otherWebhookSecret,
+    otherSecretKey: body.otherSecretKey,
+    otherPublishableKey: body.otherPublishableKey,
+    switchMode: body.switchMode,
   };
 }
 

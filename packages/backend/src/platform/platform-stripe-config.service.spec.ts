@@ -182,6 +182,100 @@ describe("PlatformStripeConfigService", () => {
     await expect(service.update({ secretKey: skLive, publishableKey: pkLive }, admin)).rejects.toThrow(/modo real, pega también/);
   });
 
+  describe("the other mode's saved set and «Pasar a modo X»", () => {
+    const saveTestThenStashLive = async () => {
+      const t = build();
+      await t.service.update({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest }, admin);
+      await t.service.update({ otherSecretKey: skLive, otherPublishableKey: pkLive, otherWebhookSecret: whsecLive }, admin);
+      return t;
+    };
+
+    it("saves the other mode's keys without using them, encrypted, and says whether it can switch", async () => {
+      const { service, getRow } = build();
+      await service.update({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest }, admin);
+      expect(service.getConfig().other).toMatchObject({ canSwitch: false, switchProblem: expect.stringMatching(/Falta guardar/) });
+
+      await service.update({ otherSecretKey: skLive, otherPublishableKey: pkLive }, admin);
+      expect(service.getConfig().other).toMatchObject({
+        mode: "live",
+        canSwitch: false,
+        switchProblem: expect.stringMatching(/secreto del webhook/),
+      });
+      const shown = await service.update({ otherWebhookSecret: whsecLive }, admin);
+      expect(shown.other).toMatchObject({ mode: "live", canSwitch: true, switchProblem: null, publishableKey: { value: pkLive } });
+      // Still in test mode: the saved set is not used, and the secret is never returned.
+      expect(service.current()).toMatchObject({ secretKey: skTest, webhookSecret: whsecTest });
+      expect(JSON.stringify(shown)).not.toContain(skLive);
+      expect(getRow()).toMatchObject({ otherSecretKeyEncrypted: `enc(${skLive})`, otherPublishableKey: pkLive });
+    });
+
+    it("refuses a saved set of the same mode as the one in force, or with mixed modes", async () => {
+      const { service } = build();
+      await service.update({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest }, admin);
+      await expect(service.update({ otherSecretKey: skTest2 }, admin)).rejects.toThrow(/igual que la que está en uso/);
+      await expect(service.update({ otherSecretKey: skLive, otherPublishableKey: pkTest }, admin)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.update({ otherPublishableKey: pkTest }, admin)).rejects.toThrow(/igual que la que está en uso/);
+      await expect(service.update({ otherSecretKey: pkLive }, admin)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("switches to the saved set in one step and saves the old one in its place; switching again undoes it", async () => {
+      const { service, getRow, auditLog } = await saveTestThenStashLive();
+      const preview = await service.preview({ switchMode: true });
+      expect(preview).toMatchObject({ modeBefore: "test", modeAfter: "live", problem: null });
+
+      const shown = await service.update({ switchMode: true }, admin);
+      expect(shown).toMatchObject({ mode: "live", other: { mode: "test", canSwitch: true } });
+      expect(service.current()).toMatchObject({ secretKey: skLive, publishableKey: pkLive, webhookSecret: whsecLive, otherWebhookSecret: whsecTest });
+      expect(getRow()).toMatchObject({
+        secretKeyEncrypted: `enc(${skLive})`,
+        webhookSecretEncrypted: `enc(${whsecLive})`,
+        otherSecretKeyEncrypted: `enc(${skTest})`,
+        otherPublishableKey: pkTest,
+        otherWebhookSecretEncrypted: `enc(${whsecTest})`,
+      });
+      const last = auditLog.record.mock.calls.at(-1)![1].metadata;
+      expect(last).toMatchObject({ mode: "live", modeBefore: "test", switched: true });
+      expect(JSON.stringify(auditLog.record.mock.calls)).not.toContain(skLive);
+
+      await service.update({ switchMode: true }, admin);
+      expect(service.current()).toMatchObject({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest, otherWebhookSecret: whsecLive });
+    });
+
+    it("refuses to switch with nothing saved, or together with other changes, or without two-step sign-in", async () => {
+      const bare = build();
+      await bare.service.update({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest }, admin);
+      await expect(bare.service.update({ switchMode: true }, admin)).rejects.toThrow(/hay que tener guardadas/);
+      expect(bare.service.current().secretKey).toBe(skTest);
+
+      const { service } = await saveTestThenStashLive();
+      await expect(service.update({ switchMode: true, webhookSecret: whsec }, admin)).rejects.toThrow(/no se combina/);
+      expect(service.current().secretKey).toBe(skTest);
+
+      const noTwoFactor = build({ twoFactor: false });
+      await expect(noTwoFactor.service.update({ switchMode: true }, admin)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("«Volver a lo del servidor» leaves the saved set alone", async () => {
+      const { service, getRow } = await saveTestThenStashLive();
+      await service.update({ secretKey: null, publishableKey: null, webhookSecret: null }, admin).catch(() => undefined);
+      // Without a .env there is nothing to go back to, so it is refused or a no-op; either way the saved set stays.
+      expect(getRow().otherSecretKeyEncrypted).toBe(`enc(${skLive})`);
+    });
+
+    it("an undecryptable saved key leaves the switch unavailable, not the payments", async () => {
+      const row = {
+        ...testConsoleRow(),
+        otherSecretKeyEncrypted: "garbage",
+        otherPublishableKey: pkLive,
+        otherWebhookSecretEncrypted: `enc(${whsecLive})`,
+      };
+      const { service } = build({ row });
+      await service.onModuleInit();
+      expect(service.current().secretKey).toBe(skTest);
+      expect(service.getConfig().other.canSwitch).toBe(false);
+    });
+  });
+
   it("a stored value that cannot be decrypted leaves Stripe unconfigured, not on the .env's keys (P4)", async () => {
     const row = { ...testConsoleRow(), secretKeyEncrypted: "v2.garbage.from.another-key" };
     const { service } = build({ env: liveEnv, row });
