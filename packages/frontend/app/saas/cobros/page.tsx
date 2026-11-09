@@ -16,7 +16,8 @@ import {
   invoiceAmountCents,
   invoiceStatusClass,
   invoiceStatusKey,
-  monthTitle,
+  conceptLabel,
+  monthLabel,
   safeStripeUrl,
 } from "@/lib/saas-billing";
 
@@ -176,7 +177,7 @@ function BillingContent() {
             <tbody>
               {summary.months.map((m) => (
                 <tr key={m.month} className="border-b border-gray-100">
-                  <td className="py-2 pr-4 capitalize">{monthTitle(m.month)}</td>
+                  <td className="py-2 pr-4">{monthLabel(m.month)}</td>
                   <td className="py-2 pr-4 text-right">{formatCents(m.collectedCents)}</td>
                   <td className="py-2 pr-4 text-right">{formatCents(m.refundedCents)}</td>
                   <td className="py-2 pr-4 text-right font-medium">{formatCents(m.netCents)}</td>
@@ -244,7 +245,7 @@ function BillingContent() {
               <option value="">{t("saas.billing.all_months")}</option>
               {summary.months.map((m) => (
                 <option key={m.month} value={m.month}>
-                  {monthTitle(m.month)}
+                  {monthLabel(m.month)}
                 </option>
               ))}
             </select>
@@ -252,7 +253,9 @@ function BillingContent() {
         </div>
 
         {list.items.length === 0 ? (
-          <p className="text-sm text-gray-500 py-6">{t("saas.billing.empty")}</p>
+          <p className="text-sm text-gray-500 py-6">
+            {t(status || month || tenantId ? "saas.billing.empty_filtered" : "saas.billing.empty")}
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -285,7 +288,7 @@ function BillingContent() {
                         )}
                       </td>
                       <td className="py-2 pr-4">{inv.number ?? "—"}</td>
-                      <td className="py-2 pr-4">{inv.description ?? "—"}</td>
+                      <td className="py-2 pr-4">{conceptLabel(inv.description, t) ?? "—"}</td>
                       <td className="py-2 pr-4 text-right whitespace-nowrap">
                         {formatCents(invoiceAmountCents(inv))}
                         {inv.amountRefundedCents > 0 && (

@@ -12,7 +12,10 @@ import {
   invoiceAmountCents,
   invoiceStatusClass,
   invoiceStatusKey,
+  conceptLabel,
+  monthLabel,
   monthTitle,
+  parseInvoiceConcept,
   safeStripeUrl,
 } from "./saas-billing";
 
@@ -42,6 +45,40 @@ check("failed is red", invoiceStatusClass("failed").includes("red"));
 
 console.log("\n[months]");
 check("2026-11 reads as noviembre de 2026", monthTitle("2026-11") === "noviembre de 2026", monthTitle("2026-11"));
+
+check("the month starts with a capital and only that one", monthLabel("2026-11") === "Noviembre de 2026", monthLabel("2026-11"));
+
+console.log("\n[invoice lines]");
+const tr = (key: string, p: Record<string, any> = {}) =>
+  `${key}|${Object.entries(p)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(",")}`;
+check(
+  "a trial line is recognised",
+  JSON.stringify(parseInvoiceConcept("Trial period for KiraRoom - Esencial Plan")) ===
+    JSON.stringify({ kind: "trial", plan: "KiraRoom - Esencial Plan" }),
+);
+const charge = parseInvoiceConcept("1 × KiraRoom - Esencial Plan (at €49.00 / month)");
+check(
+  "a monthly charge line is recognised",
+  charge?.kind === "charge" &&
+    charge.qty === "1" &&
+    charge.plan === "KiraRoom - Esencial Plan" &&
+    charge.interval === "month" &&
+    plain(charge.price) === "49,00 €",
+  charge,
+);
+check("a yearly line is recognised", (parseInvoiceConcept("1 × Pro (at €490.00 / year)") as any)?.interval === "year");
+check("the trial line is said through the translator", conceptLabel("Trial period for Pro", tr) === "saas.billing.concept_trial|plan=Pro");
+check(
+  "a charge line is said through the translator",
+  (conceptLabel("2 × Pro (at €49.00 / month)", tr) ?? "").startsWith("saas.billing.concept_month|qty=2,plan=Pro"),
+);
+check(
+  "a line it does not know stays as Stripe wrote it",
+  conceptLabel("Unused time on Pro after 03 Nov 2026", tr) === "Unused time on Pro after 03 Nov 2026",
+);
+check("no line is nothing", conceptLabel(null, tr) === null && parseInvoiceConcept("") === null);
 
 console.log("\n[links]");
 check("Stripe's invoice page opens", safeStripeUrl("https://invoice.stripe.com/i/acct_1/test_x") !== null);

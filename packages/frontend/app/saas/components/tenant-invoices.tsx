@@ -11,6 +11,7 @@ import {
   formatCents,
   invoiceAmountCents,
   invoiceStatusClass,
+  conceptLabel,
   invoiceStatusKey,
   safeStripeUrl,
 } from "@/lib/saas-billing";
@@ -53,7 +54,7 @@ export function TenantInvoices({ tenantId }: { tenantId: string }) {
                 return (
                   <tr key={inv.id} className="border-b border-gray-100">
                     <td className="py-2 pr-4 whitespace-nowrap">{formatDateEs(inv.paidAt ?? inv.failedAt ?? inv.invoiceCreatedAt)}</td>
-                    <td className="py-2 pr-4">{inv.description ?? inv.number ?? "—"}</td>
+                    <td className="py-2 pr-4">{conceptLabel(inv.description, t) ?? inv.number ?? "—"}</td>
                     <td className="py-2 pr-4 text-right whitespace-nowrap">{formatCents(invoiceAmountCents(inv))}</td>
                     <td className="py-2 pr-4">
                       <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${invoiceStatusClass(inv.status)}`}>
