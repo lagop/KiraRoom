@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsBoolean, IsOptional, IsString, MaxLength } from "class-validator";
 
 /**
  * Each field: a value sets it, null clears it (the server's .env applies
@@ -31,6 +31,23 @@ export class UpdatePlatformStripeConfigDto {
   @IsString()
   @MaxLength(300)
   otherWebhookSecret?: string | null;
+
+  @ApiPropertyOptional({ description: "Secret key of the other mode (saved unused, for switching). Write-only." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  otherSecretKey?: string | null;
+
+  @ApiPropertyOptional({ description: "Publishable key of the other mode (saved unused, for switching)." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  otherPublishableKey?: string | null;
+
+  @ApiPropertyOptional({ description: "true swaps the set in force with the saved one of the other mode; takes no other field." })
+  @IsOptional()
+  @IsBoolean()
+  switchMode?: boolean;
 }
 
 /** Body of POST /platform/stripe-config/test: a typed key to test without saving it. */

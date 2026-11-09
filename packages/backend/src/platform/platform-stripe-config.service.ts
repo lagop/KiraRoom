@@ -21,6 +21,7 @@ import {
   resolveStripeSettings,
   secretKeyProblem,
   stripeConsistencyProblem,
+  stashProblem,
   stripeWebhookSecretProblem,
 } from "./stripe-settings";
 
@@ -34,6 +35,21 @@ export interface PlatformStripeConfigPublic {
   webhookSecret: { source: SettingSource; lastFour: string | null };
   /** The other mode's webhook secret: its events are verified and ignored. */
   otherWebhookSecret: { source: SettingSource; lastFour: string | null; mode: StripeMode };
+  /**
+   * The other mode's key pair, saved unused beside the one in force: the
+   * console's "Pasar a modo X" swaps the two sets. Never the values.
+   */
+  other: {
+    mode: StripeMode;
+    secretKey: { lastFour: string | null };
+    publishableKey: { value: string | null };
+    /** The same secret as `otherWebhookSecret` above, repeated so this block is complete. */
+    webhookSecret: { source: SettingSource; lastFour: string | null };
+    /** All three saved in the console, of the other mode, and nothing wrong with the ones in force. */
+    canSwitch: boolean;
+    /** Why it cannot switch, in Spanish; null when it can. */
+    switchProblem: string | null;
+  };
   /** What the server's .env holds, for "Volver a lo del servidor". */
   server: { mode: StripeMode; hasWebhookSecret: boolean };
   /** Why the settings in force cannot take payments safely, in Spanish; null when they can. */
@@ -50,7 +66,15 @@ export interface PlatformStripeConfigUpdate {
   publishableKey?: string | null;
   webhookSecret?: string | null;
   otherWebhookSecret?: string | null;
+  /** The other mode's key pair, saved without using it. */
+  otherSecretKey?: string | null;
+  otherPublishableKey?: string | null;
+  /** Swap the set in force with the saved one (alone: it takes no other field). */
+  switchMode?: boolean;
 }
+
+/** A field of the stored row: the four in force or ready, and the other mode's key pair. */
+type StoredField = StripeField | "otherSecretKey" | "otherPublishableKey";
 
 /** Salons whose Stripe customer or plan subscription belong to another mode than `mode`. */
 export interface StripeModeImpact {
@@ -94,7 +118,7 @@ interface PlannedChange {
   next: StoredState;
   problem: string | null;
   /** Fields whose stored value changes (set, cleared or moved). */
-  changed: StripeField[];
+  changed: StoredField[];
 }
 
 const ACTIVE_PLAN_STATUSES = ["active", "trialing", "past_due"];
@@ -124,6 +148,12 @@ export class PlatformStripeConfigService implements OnModuleInit {
   private settings: StripeSettingsWithSources;
   private stored: { updatedAt: Date; updatedBy: string | null } | null = null;
   private problem: string | null = null;
+  /** The other mode's saved set (decrypted, in memory only), for `other` in the public config. */
+  private stash: { secretKey: string | null; publishableKey: string | null; webhookSecret: string | null } = {
+    secretKey: null,
+    publishableKey: null,
+    webhookSecret: null,
+  };
   private stripe: Stripe | null = null;
   /** The key `stripe` was built with: a new one builds a new client. */
   private stripeKey: string | null = null;
@@ -184,11 +214,37 @@ export class PlatformStripeConfigService implements OnModuleInit {
         lastFour: lastFour(otherWebhookSecret),
         mode: otherMode(keyMode(secretKey)),
       },
+      other: this.otherConfig(),
       server: { mode: keyMode(server.secretKey?.trim()), hasWebhookSecret: !!server.webhookSecret?.trim() },
       problem: this.problem,
       taxIgnored,
       updatedAt: this.stored?.updatedAt.toISOString() ?? null,
       updatedBy: this.stored?.updatedBy ?? null,
+    };
+  }
+
+  /** The `other` block of the public config: what is saved for the unused mode and whether it can be switched to. */
+  private otherConfig(): PlatformStripeConfigPublic["other"] {
+    const active = keyMode(this.settings.secretKey);
+    const { secretKey, publishableKey, webhookSecret } = this.stash;
+    const savedMode = keyMode(secretKey);
+    const missing: string[] = [];
+    if (!secretKey) missing.push("la clave secreta");
+    if (!publishableKey) missing.push("la clave publicable");
+    if (!webhookSecret) missing.push("el secreto del webhook");
+    let switchProblem: string | null = null;
+    if (this.problem) switchProblem = `Primero hay que arreglar lo que está en uso: ${this.problem}`;
+    else if (missing.length > 0) {
+      switchProblem = `Falta guardar ${missing.join(", ")} del otro modo.`;
+    } else switchProblem = stashProblem(this.settings.secretKey, { secretKey, publishableKey, webhookSecret }, this.settings.webhookSecret);
+    if (!switchProblem && active === savedMode) switchProblem = "Las claves guardadas son del mismo modo que las que están en uso.";
+    return {
+      mode: savedMode !== "none" ? savedMode : otherMode(active),
+      secretKey: { lastFour: lastFour(secretKey) },
+      publishableKey: { value: publishableKey },
+      webhookSecret: { source: this.settings.sources.otherWebhookSecret, lastFour: lastFour(this.settings.otherWebhookSecret) },
+      canSwitch: switchProblem === null,
+      switchProblem,
     };
   }
 
@@ -226,6 +282,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
     if (format) throw new BadRequestException(format);
 
     const change = await this.plan(input);
+    // A switch that cannot be done changes nothing, but must say why.
+    if (input.switchMode && change.problem) throw new BadRequestException(change.problem);
     if (change.changed.length === 0) return this.getConfig();
     // Refuse a change that would leave payments half-configured.
     if (change.problem) throw new BadRequestException(change.problem);
@@ -238,6 +296,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       if (field === "publishableKey") data.publishableKey = value;
       if (field === "webhookSecret") data.webhookSecretEncrypted = seal(value);
       if (field === "otherWebhookSecret") data.otherWebhookSecretEncrypted = seal(value);
+      if (field === "otherSecretKey") data.otherSecretKeyEncrypted = seal(value);
+      if (field === "otherPublishableKey") data.otherPublishableKey = value;
     }
     // Stripe Tax stays off (D6): a value stored before is dropped.
     data.taxEnabled = null;
@@ -260,6 +320,7 @@ export class PlatformStripeConfigService implements OnModuleInit {
         cleared: change.changed.filter((f) => !change.next.values[f]),
         mode: modeAfter,
         ...(modeBefore !== modeAfter ? { modeBefore } : {}),
+        ...(input.switchMode ? { switched: true } : {}),
       },
     });
     await this.reload();
@@ -389,6 +450,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       (typeof input.publishableKey === "string" && publishableKeyProblem(input.publishableKey)) ||
       (typeof input.webhookSecret === "string" && stripeWebhookSecretProblem(input.webhookSecret)) ||
       (typeof input.otherWebhookSecret === "string" && stripeWebhookSecretProblem(input.otherWebhookSecret)) ||
+      (typeof input.otherSecretKey === "string" && secretKeyProblem(input.otherSecretKey)) ||
+      (typeof input.otherPublishableKey === "string" && publishableKeyProblem(input.otherPublishableKey)) ||
       null
     );
   }
@@ -410,19 +473,25 @@ export class PlatformStripeConfigService implements OnModuleInit {
     const before = resolveStripeSettings(current.values, server, current.unreadable);
 
     const next: StoredState = { values: { ...current.values }, unreadable: { ...current.unreadable } };
-    const fields: StripeField[] = ["secretKey", "publishableKey", "webhookSecret", "otherWebhookSecret"];
-    for (const field of fields) {
-      const value = input[field];
-      if (value === undefined) continue;
-      next.values[field] = value === null ? null : value.trim();
-      next.unreadable[field] = false;
+    const core: StripeField[] = ["secretKey", "publishableKey", "webhookSecret", "otherWebhookSecret"];
+    const fields: StoredField[] = [...core, "otherSecretKey", "otherPublishableKey"];
+    let problem: string | null = null;
+    if (input.switchMode) {
+      problem = this.applySwitch(input, current, next);
+    } else {
+      for (const field of fields) {
+        const value = input[field];
+        if (value === undefined) continue;
+        next.values[field] = value === null ? null : value.trim();
+        if ((core as string[]).includes(field)) next.unreadable[field as StripeField] = false;
+      }
     }
 
     let after = resolveStripeSettings(next.values, server, next.unreadable);
     const modeBefore = keyMode(before.secretKey);
     const modeAfter = keyMode(after.secretKey);
-    let problem: string | null = null;
-    if (modeBefore !== "none" && modeAfter !== "none" && modeBefore !== modeAfter) {
+    // A switch sets all three pairs itself, so the webhook-secret bookkeeping below does not apply.
+    if (!input.switchMode && modeBefore !== "none" && modeAfter !== "none" && modeBefore !== modeAfter) {
       const newSecret = input.webhookSecret !== undefined || after.sources.webhookSecret !== before.sources.webhookSecret;
       const oldConsoleSecret = before.sources.webhookSecret === "console" ? before.webhookSecret : null;
       if (newSecret) {
@@ -436,13 +505,50 @@ export class PlatformStripeConfigService implements OnModuleInit {
       after = resolveStripeSettings(next.values, server, next.unreadable);
     }
     problem = problem ?? stripeConsistencyProblem(after, after.sources);
+    problem =
+      problem ??
+      stashProblem(
+        after.secretKey,
+        {
+          secretKey: next.values.otherSecretKey,
+          publishableKey: next.values.otherPublishableKey,
+          webhookSecret: next.values.otherWebhookSecret,
+        },
+        after.webhookSecret,
+      );
 
     const changed = fields.filter(
       (f) =>
         (next.values[f] ?? null) !== (current.values[f] ?? null) ||
-        !!next.unreadable[f] !== !!current.unreadable[f],
+        (!!(core as string[]).includes(f) && !!next.unreadable[f as StripeField] !== !!current.unreadable[f as StripeField]),
     );
     return { before, after, next, problem, changed };
+  }
+
+  /**
+   * "Pasar a modo X": the saved set becomes the one in force and the one in
+   * force (what the console holds of it) is saved in its place, so switching
+   * again undoes it. Takes no other field. Returns why it cannot be done.
+   */
+  private applySwitch(input: PlatformStripeConfigUpdate, current: StoredState, next: StoredState): string | null {
+    const others = (Object.keys(input) as Array<keyof PlatformStripeConfigUpdate>).filter(
+      (k) => k !== "switchMode" && input[k] !== undefined,
+    );
+    if (others.length > 0) return "Pasar de modo no se combina con otros cambios: guárdalos antes.";
+    const stash = current.values;
+    if (!stash.otherSecretKey || !stash.otherPublishableKey || !stash.otherWebhookSecret) {
+      return "Para pasar al otro modo hay que tener guardadas en la consola su clave secreta, su clave publicable y el secreto de su webhook.";
+    }
+    if (Object.values(current.unreadable).some(Boolean)) {
+      return "Hay valores guardados que no se pueden descifrar: vuelve a escribirlos antes de cambiar de modo.";
+    }
+    next.values.secretKey = stash.otherSecretKey;
+    next.values.publishableKey = stash.otherPublishableKey;
+    next.values.webhookSecret = stash.otherWebhookSecret;
+    next.values.otherSecretKey = current.values.secretKey ?? null;
+    next.values.otherPublishableKey = current.values.publishableKey ?? null;
+    next.values.otherWebhookSecret = current.values.webhookSecret ?? null;
+    return null;
   }
 
   private readRow(
@@ -451,6 +557,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       publishableKey: string | null;
       webhookSecretEncrypted: string | null;
       otherWebhookSecretEncrypted: string | null;
+      otherSecretKeyEncrypted: string | null;
+      otherPublishableKey: string | null;
     } | null,
   ): StoredState {
     const state: StoredState = { values: {}, unreadable: {} };
@@ -470,6 +578,15 @@ export class PlatformStripeConfigService implements OnModuleInit {
     state.values.publishableKey = row.publishableKey;
     open("webhookSecret", row.webhookSecretEncrypted, "webhook secret");
     open("otherWebhookSecret", row.otherWebhookSecretEncrypted, "other mode's webhook secret");
+    state.values.otherPublishableKey = row.otherPublishableKey;
+    if (row.otherSecretKeyEncrypted) {
+      try {
+        state.values.otherSecretKey = this.encryption.decrypt(row.otherSecretKeyEncrypted);
+      } catch (err) {
+        // Not in force, so nothing is silently wrong: the switch just stays unavailable until it is re-entered.
+        this.logger.error(`Stored other-mode Stripe secret key cannot be decrypted; re-enter it in the console: ${(err as Error).message}`);
+      }
+    }
     return state;
   }
 
@@ -477,6 +594,11 @@ export class PlatformStripeConfigService implements OnModuleInit {
     const row = await this.prisma.platformStripeConfig.findUnique({ where: { id: "global" } });
     this.stored = row ? { updatedAt: row.updatedAt, updatedBy: row.updatedBy } : null;
     const state = this.readRow(row);
+    this.stash = {
+      secretKey: state.values.otherSecretKey ?? null,
+      publishableKey: state.values.otherPublishableKey ?? null,
+      webhookSecret: state.values.otherWebhookSecret ?? null,
+    };
     this.settings = resolveStripeSettings({ ...state.values, taxEnabled: row?.taxEnabled }, this.serverSettings(), state.unreadable);
     // The same checks as on saving: a mix the console would refuse (a key
     // that cannot be decrypted, a .env changed under the console's values)

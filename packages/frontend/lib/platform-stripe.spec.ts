@@ -5,7 +5,16 @@
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/platform-stripe.spec.ts
  */
 import type { PlatformStripeConfig } from "./api";
-import { BACK_TO_SERVER, STRIPE_WEBHOOK_EVENTS, hasConsoleKeys, previewWarning, stripeStatus, stripeUpdate } from "./platform-stripe";
+import {
+  BACK_TO_SERVER,
+  STRIPE_WEBHOOK_EVENTS,
+  SWITCH_MODE,
+  hasConsoleKeys,
+  otherModeChecklist,
+  previewWarning,
+  stripeStatus,
+  stripeUpdate,
+} from "./platform-stripe";
 
 let pass = 0;
 let fail = 0;
@@ -25,6 +34,14 @@ const off: PlatformStripeConfig = {
   publishableKey: { source: "none", value: null },
   webhookSecret: { source: "none", lastFour: null },
   otherWebhookSecret: { source: "none", lastFour: null, mode: "none" },
+  other: {
+    mode: "none",
+    secretKey: { lastFour: null },
+    publishableKey: { value: null },
+    webhookSecret: { source: "none", lastFour: null },
+    canSwitch: false,
+    switchProblem: "Falta guardar la clave secreta, la clave publicable, el secreto del webhook del otro modo.",
+  },
   server: { mode: "none", hasWebhookSecret: false },
   problem: null,
   taxIgnored: false,
@@ -51,7 +68,14 @@ check(
   stripeStatus({ ...testMode, problem: "No se puede descifrar" }).tone === "off",
 );
 
-const form = { secretKey: "", publishableKey: testMode.publishableKey.value!, webhookSecret: "", otherWebhookSecret: "" };
+const form = {
+  secretKey: "",
+  publishableKey: testMode.publishableKey.value!,
+  webhookSecret: "",
+  otherWebhookSecret: "",
+  otherSecretKey: "",
+  otherPublishableKey: "",
+};
 check("nothing changed: nothing to save", stripeUpdate(form, testMode) === null);
 const typed = ["sk", "live", "fictitious0123"].join("_");
 check("a typed secret key is sent", stripeUpdate({ ...form, secretKey: ` ${typed} ` }, testMode)?.secretKey === typed);
@@ -61,6 +85,34 @@ check(
   JSON.stringify(BACK_TO_SERVER) === JSON.stringify({ secretKey: null, publishableKey: null, webhookSecret: null }),
 );
 check("…offered only with something in the console", hasConsoleKeys(testMode) && !hasConsoleKeys(off));
+
+const typedLivePk = ["pk", "live", "fictitious0123"].join("_");
+const savedOther = stripeUpdate({ ...form, otherSecretKey: ` ${typed} `, otherPublishableKey: typedLivePk, otherWebhookSecret: "whsec_x" }, testMode);
+check(
+  "the other mode's keys are sent as typed, apart from the ones in force",
+  savedOther?.otherSecretKey === typed && savedOther?.otherPublishableKey === typedLivePk && !("secretKey" in savedOther),
+);
+check(
+  "a saved publishable key that was not touched is not sent again",
+  stripeUpdate(
+    { ...form, otherPublishableKey: typedLivePk },
+    { ...testMode, other: { ...testMode.other, publishableKey: { value: typedLivePk } } },
+  ) === null,
+);
+check("«Pasar a modo X» sends only the switch", JSON.stringify(SWITCH_MODE) === JSON.stringify({ switchMode: true }));
+const checklist = otherModeChecklist({
+  ...testMode,
+  other: {
+    ...testMode.other,
+    secretKey: { lastFour: "6789" },
+    publishableKey: { value: typedLivePk },
+    webhookSecret: { source: "server", lastFour: "abcd" },
+  },
+});
+check(
+  "the checklist shows what is still missing for the other mode (a webhook secret only in the .env does not count)",
+  JSON.stringify(checklist.map((c) => c.saved)) === JSON.stringify([true, true, false]),
+);
 
 const toLive = previewWarning({
   modeBefore: "test",

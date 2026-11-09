@@ -469,21 +469,31 @@ console (Ajustes > Stripe) over the `.env`. The secret key and its
 webhook secret always come from the same place (console or `.env`),
 and the console refuses a mix.
 
+The console keeps two key sets side by side: the one in force and the
+saved one of the other mode (secret key, publishable key and webhook
+secret). A big card per mode shows which is "En uso", and "Pasar a modo
+real" / "Pasar a modo de pruebas" swaps the two sets in one step (and
+saves the old one in the other's place, so pressing it again undoes it).
+
 1. In Stripe (live mode) create the webhook to
-   `https://api.kiraroom.net/api/v1/webhooks/stripe` with the six
+   `https://api.kiraroom.net/api/v1/webhooks/stripe` with the seven
    events the console lists, and copy its signing secret.
-2. In the console, either paste the live secret key, publishable key
-   and that webhook secret together and press "Guardar", or press
-   "Volver a lo del servidor (.env)" if the `.env` already holds the
-   live trio. Before saving, the console shows how many salons have a
-   test-mode customer or subscription and which active plans were paid
-   in test mode: review them (those salons must contract again; their
-   test plans stay active in the database until you change them).
-3. The old test webhook secret is kept as "the other mode's": test
-   events still arriving (retries, renewals of test subscriptions) are
-   acknowledged with 200 and ignored, instead of failing until Stripe
-   disables the endpoint. Once no test events arrive, delete the test
-   webhook in Stripe and press "Quitar" on that field.
+2. In the console, under "Claves del modo real, guardadas sin usar",
+   paste the live secret key, the publishable key and that webhook
+   secret, and press "Guardar" (nothing is used yet; the mode stays).
+3. Press "Pasar a modo real". Before switching, the console shows how
+   many salons have a test-mode customer or subscription and which
+   active plans were paid in test mode: review them (those salons must
+   contract again; their test plans stay active in the database until
+   you change them). Alternative if the `.env` already holds the live
+   trio: "Volver a lo del servidor (.env)".
+4. The test set is now the saved one, and its webhook secret is "the
+   other mode's": test events still arriving (retries, renewals of test
+   subscriptions) are acknowledged with 200 and ignored, instead of
+   failing until Stripe disables the endpoint. To go back to test (for
+   example to try a flow), press "Pasar a modo de pruebas". Once no test
+   events arrive and test mode is not needed, delete the test webhook in
+   Stripe and use "Borrar lo guardado del modo de pruebas".
 
 Events of the other mode than the key in force are never applied (a
 test payment cannot activate a plan while live keys are in force).

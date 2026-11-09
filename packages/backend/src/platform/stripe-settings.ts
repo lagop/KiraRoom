@@ -49,6 +49,9 @@ export interface StoredStripeSettings {
   publishableKey?: string | null;
   webhookSecret?: string | null;
   otherWebhookSecret?: string | null;
+  /** The other mode's key pair, kept unused for "Pasar a modo X". Never in force by itself. */
+  otherSecretKey?: string | null;
+  otherPublishableKey?: string | null;
   taxEnabled?: boolean | null;
 }
 
@@ -210,6 +213,42 @@ export function stripeWebhookSecretProblem(secret: string): string | null {
   return /^whsec_[A-Za-z0-9]{10,}$/.test(secret.trim())
     ? null
     : "El secreto del webhook de Stripe empieza por «whsec_». Está en Stripe → Desarrolladores → Webhooks, en el de KiraRoom.";
+}
+
+/** The mode shown for a mode, in Spanish, for messages. */
+function modeLabel(mode: StripeMode): string {
+  return mode === "live" ? "real" : "de pruebas";
+}
+
+/**
+ * Whether the other mode's saved keys make sense next to the ones in force:
+ * they must be of the OTHER mode, and both of the same mode. Null when they do
+ * (or when there is nothing saved).
+ */
+export function stashProblem(
+  activeSecretKey: string | null | undefined,
+  stash: { secretKey?: string | null; publishableKey?: string | null; webhookSecret?: string | null },
+  activeWebhookSecret?: string | null,
+): string | null {
+  const active = keyMode(activeSecretKey);
+  const secret = keyMode(stash.secretKey);
+  const publishable = keyMode(stash.publishableKey);
+  if (active !== "none") {
+    const wanted = otherMode(active);
+    if (secret !== "none" && secret !== wanted) {
+      return `La clave secreta guardada para el otro modo es ${modeLabel(secret)}, igual que la que está en uso. Aquí va la del modo ${modeLabel(wanted)}.`;
+    }
+    if (publishable !== "none" && publishable !== wanted) {
+      return `La clave publicable guardada para el otro modo es ${modeLabel(publishable)}, igual que la que está en uso. Aquí va la del modo ${modeLabel(wanted)}.`;
+    }
+  }
+  if (secret !== "none" && publishable !== "none" && secret !== publishable) {
+    return "La clave secreta y la publicable del otro modo tienen que ser del mismo modo: las dos de pruebas o las dos reales.";
+  }
+  if (stash.webhookSecret && activeWebhookSecret && stash.webhookSecret === activeWebhookSecret) {
+    return "El secreto del webhook del otro modo no puede ser el mismo que el del modo en uso: cada webhook de Stripe tiene el suyo.";
+  }
+  return null;
 }
 
 const FIELD_NAMES: Record<StripeField, string> = {

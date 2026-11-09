@@ -41,7 +41,12 @@ export interface StripeForm {
   publishableKey: string;
   webhookSecret: string;
   otherWebhookSecret: string;
+  otherSecretKey: string;
+  otherPublishableKey: string;
 }
+
+/** "Pasar a modo X": swaps the set in force with the saved one of the other mode. */
+export const SWITCH_MODE: PlatformStripeUpdate = { switchMode: true };
 
 /**
  * The request for "Guardar": typed secrets replace the stored ones (blank
@@ -53,13 +58,25 @@ export function stripeUpdate(form: StripeForm, cfg: PlatformStripeConfig): Platf
   if (form.secretKey.trim()) out.secretKey = form.secretKey.trim();
   if (form.webhookSecret.trim()) out.webhookSecret = form.webhookSecret.trim();
   if (form.otherWebhookSecret.trim()) out.otherWebhookSecret = form.otherWebhookSecret.trim();
+  if (form.otherSecretKey.trim()) out.otherSecretKey = form.otherSecretKey.trim();
   const pk = form.publishableKey.trim();
   if (pk && pk !== (cfg.publishableKey.value ?? "")) out.publishableKey = pk;
+  const otherPk = form.otherPublishableKey.trim();
+  if (otherPk && otherPk !== (cfg.other.publishableKey.value ?? "")) out.otherPublishableKey = otherPk;
   return Object.keys(out).length > 0 ? out : null;
 }
 
 /** "Volver a lo del servidor (.env)": the three console fields cleared at once. */
 export const BACK_TO_SERVER: PlatformStripeUpdate = { secretKey: null, publishableKey: null, webhookSecret: null };
+
+/** The three the other mode needs before "Pasar a modo X" can work, with what is saved of each. */
+export function otherModeChecklist(cfg: PlatformStripeConfig): Array<{ label: string; saved: boolean }> {
+  return [
+    { label: "Clave secreta", saved: !!cfg.other.secretKey.lastFour },
+    { label: "Clave publicable", saved: !!cfg.other.publishableKey.value },
+    { label: "Secreto del webhook", saved: cfg.other.webhookSecret.source === "console" },
+  ];
+}
 
 /** Whether anything of the three is set in the console (else the button has nothing to do). */
 export function hasConsoleKeys(cfg: PlatformStripeConfig): boolean {
