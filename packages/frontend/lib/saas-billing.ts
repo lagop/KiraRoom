@@ -92,6 +92,54 @@ export function monthTitle(month: string): string {
   });
 }
 
+/** "2026-11" -> "Noviembre de 2026": only the first letter is a capital. */
+export function monthLabel(month: string): string {
+  const title = monthTitle(month);
+  return title ? title.charAt(0).toUpperCase() + title.slice(1) : title;
+}
+
+/**
+ * What Stripe writes in an invoice line, split so the console can say it in its
+ * own language. Anything it does not recognise stays as Stripe wrote it.
+ */
+export type InvoiceConcept =
+  | { kind: "trial"; plan: string }
+  | { kind: "charge"; qty: string; plan: string; price: string; interval: "month" | "year" };
+
+export function parseInvoiceConcept(description: string | null | undefined): InvoiceConcept | null {
+  if (!description) return null;
+  const trial = /^Trial period for (.+)$/.exec(description);
+  if (trial) return { kind: "trial", plan: trial[1] };
+  const charge = /^(\d+) × (.+) \(at €([\d.,]+) \/ (month|year)\)$/.exec(description);
+  if (charge) {
+    const amount = Number.parseFloat(charge[3].replace(/,/g, ""));
+    if (!Number.isFinite(amount)) return null;
+    return {
+      kind: "charge",
+      qty: charge[1],
+      plan: charge[2],
+      price: formatCents(Math.round(amount * 100)),
+      interval: charge[4] as "month" | "year",
+    };
+  }
+  return null;
+}
+
+/** The invoice line in the console's language (t = its translator); unknown lines are shown as they came. */
+export function conceptLabel(
+  description: string | null | undefined,
+  t: (key: string, params?: Record<string, any>) => string,
+): string | null {
+  const c = parseInvoiceConcept(description);
+  if (!c) return description ?? null;
+  if (c.kind === "trial") return t("saas.billing.concept_trial", { plan: c.plan });
+  return t(c.interval === "year" ? "saas.billing.concept_year" : "saas.billing.concept_month", {
+    qty: c.qty,
+    plan: c.plan,
+    price: c.price,
+  });
+}
+
 /** Only Stripe's own addresses may be opened from the console. */
 export function safeStripeUrl(url: string | null | undefined): string | null {
   if (!url) return null;
