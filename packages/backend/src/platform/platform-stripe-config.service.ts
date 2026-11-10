@@ -21,6 +21,7 @@ import {
   resolveStripeSettings,
   secretKeyProblem,
   stripeConsistencyProblem,
+  connectWebhookSecretsFor,
   stashProblem,
   stripeWebhookSecretProblem,
 } from "./stripe-settings";
@@ -50,6 +51,8 @@ export interface PlatformStripeConfigPublic {
     /** Why it cannot switch, in Spanish; null when it can. */
     switchProblem: string | null;
   };
+  /** The webhook for connected accounts (online payments of the salons): one secret per mode. */
+  connectWebhook: { test: { lastFour: string | null }; live: { lastFour: string | null } };
   /** What the server's .env holds, for "Volver a lo del servidor". */
   server: { mode: StripeMode; hasWebhookSecret: boolean };
   /** Why the settings in force cannot take payments safely, in Spanish; null when they can. */
@@ -71,10 +74,18 @@ export interface PlatformStripeConfigUpdate {
   otherPublishableKey?: string | null;
   /** Swap the set in force with the saved one (alone: it takes no other field). */
   switchMode?: boolean;
+  /** Webhook secrets for connected accounts, per mode. Independent of the rest. */
+  connectWebhookSecretTest?: string | null;
+  connectWebhookSecretLive?: string | null;
 }
 
 /** A field of the stored row: the four in force or ready, and the other mode's key pair. */
-type StoredField = StripeField | "otherSecretKey" | "otherPublishableKey";
+type StoredField =
+  | StripeField
+  | "otherSecretKey"
+  | "otherPublishableKey"
+  | "connectWebhookSecretTest"
+  | "connectWebhookSecretLive";
 
 /** Salons whose Stripe customer or plan subscription belong to another mode than `mode`. */
 export interface StripeModeImpact {
@@ -154,6 +165,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
     publishableKey: null,
     webhookSecret: null,
   };
+  /** The connected-accounts webhook secrets (decrypted, in memory only). */
+  private connectSecrets: { test: string | null; live: string | null } = { test: null, live: null };
   private stripe: Stripe | null = null;
   /** The key `stripe` was built with: a new one builds a new client. */
   private stripeKey: string | null = null;
@@ -190,6 +203,11 @@ export class PlatformStripeConfigService implements OnModuleInit {
     return keyMode(this.settings.secretKey);
   }
 
+  /** The secrets that may sign a connected-accounts event, the event's mode first. */
+  connectWebhookSecrets(livemode: boolean | null): string[] {
+    return connectWebhookSecretsFor(this.connectSecrets, livemode);
+  }
+
   /** The Stripe client for the platform account, or null when there is no key. */
   client(): Stripe | null {
     const key = this.settings.secretKey;
@@ -215,6 +233,10 @@ export class PlatformStripeConfigService implements OnModuleInit {
         mode: otherMode(keyMode(secretKey)),
       },
       other: this.otherConfig(),
+      connectWebhook: {
+        test: { lastFour: lastFour(this.connectSecrets.test) },
+        live: { lastFour: lastFour(this.connectSecrets.live) },
+      },
       server: { mode: keyMode(server.secretKey?.trim()), hasWebhookSecret: !!server.webhookSecret?.trim() },
       problem: this.problem,
       taxIgnored,
@@ -298,6 +320,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       if (field === "otherWebhookSecret") data.otherWebhookSecretEncrypted = seal(value);
       if (field === "otherSecretKey") data.otherSecretKeyEncrypted = seal(value);
       if (field === "otherPublishableKey") data.otherPublishableKey = value;
+      if (field === "connectWebhookSecretTest") data.connectWebhookSecretTestEncrypted = seal(value);
+      if (field === "connectWebhookSecretLive") data.connectWebhookSecretLiveEncrypted = seal(value);
     }
     // Stripe Tax stays off (D6): a value stored before is dropped.
     data.taxEnabled = null;
@@ -452,6 +476,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       (typeof input.otherWebhookSecret === "string" && stripeWebhookSecretProblem(input.otherWebhookSecret)) ||
       (typeof input.otherSecretKey === "string" && secretKeyProblem(input.otherSecretKey)) ||
       (typeof input.otherPublishableKey === "string" && publishableKeyProblem(input.otherPublishableKey)) ||
+      (typeof input.connectWebhookSecretTest === "string" && stripeWebhookSecretProblem(input.connectWebhookSecretTest)) ||
+      (typeof input.connectWebhookSecretLive === "string" && stripeWebhookSecretProblem(input.connectWebhookSecretLive)) ||
       null
     );
   }
@@ -474,7 +500,13 @@ export class PlatformStripeConfigService implements OnModuleInit {
 
     const next: StoredState = { values: { ...current.values }, unreadable: { ...current.unreadable } };
     const core: StripeField[] = ["secretKey", "publishableKey", "webhookSecret", "otherWebhookSecret"];
-    const fields: StoredField[] = [...core, "otherSecretKey", "otherPublishableKey"];
+    const fields: StoredField[] = [
+      ...core,
+      "otherSecretKey",
+      "otherPublishableKey",
+      "connectWebhookSecretTest",
+      "connectWebhookSecretLive",
+    ];
     let problem: string | null = null;
     if (input.switchMode) {
       problem = this.applySwitch(input, current, next);
@@ -559,6 +591,8 @@ export class PlatformStripeConfigService implements OnModuleInit {
       otherWebhookSecretEncrypted: string | null;
       otherSecretKeyEncrypted: string | null;
       otherPublishableKey: string | null;
+      connectWebhookSecretTestEncrypted?: string | null;
+      connectWebhookSecretLiveEncrypted?: string | null;
     } | null,
   ): StoredState {
     const state: StoredState = { values: {}, unreadable: {} };
@@ -587,6 +621,17 @@ export class PlatformStripeConfigService implements OnModuleInit {
         this.logger.error(`Stored other-mode Stripe secret key cannot be decrypted; re-enter it in the console: ${(err as Error).message}`);
       }
     }
+    for (const [field, value] of [
+      ["connectWebhookSecretTest", row.connectWebhookSecretTestEncrypted],
+      ["connectWebhookSecretLive", row.connectWebhookSecretLiveEncrypted],
+    ] as const) {
+      if (!value) continue;
+      try {
+        state.values[field] = this.encryption.decrypt(value);
+      } catch (err) {
+        this.logger.error(`Stored ${field} cannot be decrypted; re-enter it in the console: ${(err as Error).message}`);
+      }
+    }
     return state;
   }
 
@@ -598,6 +643,10 @@ export class PlatformStripeConfigService implements OnModuleInit {
       secretKey: state.values.otherSecretKey ?? null,
       publishableKey: state.values.otherPublishableKey ?? null,
       webhookSecret: state.values.otherWebhookSecret ?? null,
+    };
+    this.connectSecrets = {
+      test: state.values.connectWebhookSecretTest ?? null,
+      live: state.values.connectWebhookSecretLive ?? null,
     };
     this.settings = resolveStripeSettings({ ...state.values, taxEnabled: row?.taxEnabled }, this.serverSettings(), state.unreadable);
     // The same checks as on saving: a mix the console would refuse (a key

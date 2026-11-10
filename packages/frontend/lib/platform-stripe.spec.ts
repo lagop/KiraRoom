@@ -34,6 +34,7 @@ const off: PlatformStripeConfig = {
   publishableKey: { source: "none", value: null },
   webhookSecret: { source: "none", lastFour: null },
   otherWebhookSecret: { source: "none", lastFour: null, mode: "none" },
+  connectWebhook: { test: { lastFour: null }, live: { lastFour: null } },
   other: {
     mode: "none",
     secretKey: { lastFour: null },
@@ -75,6 +76,8 @@ const form = {
   otherWebhookSecret: "",
   otherSecretKey: "",
   otherPublishableKey: "",
+  connectWebhookSecretTest: "",
+  connectWebhookSecretLive: "",
 };
 check("nothing changed: nothing to save", stripeUpdate(form, testMode) === null);
 const typed = ["sk", "live", "fictitious0123"].join("_");
@@ -98,6 +101,14 @@ check(
     { ...form, otherPublishableKey: typedLivePk },
     { ...testMode, other: { ...testMode.other, publishableKey: { value: typedLivePk } } },
   ) === null,
+);
+const typedWh = ["whsec", "fictitious0123"].join("_");
+check(
+  "the connected-accounts webhook secrets are sent as typed, apart from the rest",
+  (() => {
+    const u = stripeUpdate({ ...form, connectWebhookSecretTest: ` ${typedWh} `, connectWebhookSecretLive: typedWh }, testMode);
+    return u?.connectWebhookSecretTest === typedWh && u?.connectWebhookSecretLive === typedWh && !("webhookSecret" in u);
+  })(),
 );
 check("«Pasar a modo X» sends only the switch", JSON.stringify(SWITCH_MODE) === JSON.stringify({ switchMode: true }));
 const checklist = otherModeChecklist({

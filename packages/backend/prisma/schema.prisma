@@ -3709,6 +3709,11 @@ model PlatformStripeConfig {
   /// "Pasar a modo X" swaps the two sets without pasting anything again.
   otherSecretKeyEncrypted String? @db.Text
   otherPublishableKey     String?
+  /// Signing secrets of the Stripe webhook for CONNECTED accounts (a separate
+  /// endpoint from the platform's own), one per Stripe mode, kept apart by
+  /// mode because they never swap when the mode switches.
+  connectWebhookSecretTestEncrypted String? @db.Text
+  connectWebhookSecretLiveEncrypted String? @db.Text
   /// Ignored: KiraRoom charges no VAT (D6). Kept for the column.
   taxEnabled             Boolean?
   updatedAt              DateTime @updatedAt

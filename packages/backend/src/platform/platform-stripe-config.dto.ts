@@ -48,6 +48,18 @@ export class UpdatePlatformStripeConfigDto {
   @IsOptional()
   @IsBoolean()
   switchMode?: boolean;
+
+  @ApiPropertyOptional({ description: "Signing secret of the Stripe webhook for connected accounts, test mode (whsec_...). Write-only." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  connectWebhookSecretTest?: string | null;
+
+  @ApiPropertyOptional({ description: "Signing secret of the Stripe webhook for connected accounts, live mode (whsec_...). Write-only." })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  connectWebhookSecretLive?: string | null;
 }
 
 /** Body of POST /platform/stripe-config/test: a typed key to test without saving it. */

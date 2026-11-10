@@ -276,6 +276,47 @@ describe("PlatformStripeConfigService", () => {
     });
   });
 
+  describe("the signing secrets of the webhook for connected accounts", () => {
+    const whsecConnTest = k("whsec", "fictitiousConnectTest1");
+    const whsecConnLive = k("whsec", "fictitiousConnectLive1");
+
+    it("are saved encrypted per mode, never returned, and tried with the event's mode first", async () => {
+      const { service, getRow } = build();
+      const shown = await service.update({ connectWebhookSecretTest: whsecConnTest, connectWebhookSecretLive: whsecConnLive }, admin);
+      expect(shown.connectWebhook).toEqual({
+        test: { lastFour: whsecConnTest.slice(-4) },
+        live: { lastFour: whsecConnLive.slice(-4) },
+      });
+      expect(JSON.stringify(shown)).not.toContain(whsecConnTest);
+      expect(getRow()).toMatchObject({
+        connectWebhookSecretTestEncrypted: `enc(${whsecConnTest})`,
+        connectWebhookSecretLiveEncrypted: `enc(${whsecConnLive})`,
+      });
+      expect(service.connectWebhookSecrets(false)).toEqual([whsecConnTest, whsecConnLive]);
+      expect(service.connectWebhookSecrets(true)).toEqual([whsecConnLive, whsecConnTest]);
+      expect(service.connectWebhookSecrets(null)).toEqual([whsecConnLive, whsecConnTest]);
+    });
+
+    it("do not move when the mode is switched", async () => {
+      const t = build();
+      await t.service.update({ secretKey: skTest, publishableKey: pkTest, webhookSecret: whsecTest }, admin);
+      await t.service.update({ otherSecretKey: skLive, otherPublishableKey: pkLive, otherWebhookSecret: whsecLive }, admin);
+      await t.service.update({ connectWebhookSecretLive: whsecConnLive }, admin);
+      await t.service.update({ switchMode: true }, admin);
+      expect(t.service.connectWebhookSecrets(true)).toEqual([whsecConnLive]);
+    });
+
+    it("must look like a Stripe signing secret, can be cleared, and need two-step sign-in", async () => {
+      const { service } = build();
+      await expect(service.update({ connectWebhookSecretTest: skTest }, admin)).rejects.toThrow(/whsec_/);
+      await service.update({ connectWebhookSecretTest: whsecConnTest }, admin);
+      await service.update({ connectWebhookSecretTest: null }, admin);
+      expect(service.connectWebhookSecrets(false)).toEqual([]);
+      const noTwoFactor = build({ twoFactor: false });
+      await expect(noTwoFactor.service.update({ connectWebhookSecretLive: whsecConnLive }, admin)).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
   it("a stored value that cannot be decrypted leaves Stripe unconfigured, not on the .env's keys (P4)", async () => {
     const row = { ...testConsoleRow(), secretKeyEncrypted: "v2.garbage.from.another-key" };
     const { service } = build({ env: liveEnv, row });

@@ -6827,6 +6827,8 @@ export interface PlatformStripeConfig {
     canSwitch: boolean;
     switchProblem: string | null;
   };
+  /** The webhook for connected accounts (online payments of the salons): one signing secret per mode. */
+  connectWebhook: { test: { lastFour: string | null }; live: { lastFour: string | null } };
   /** What the server's .env holds, for "Volver a lo del servidor". */
   server: { mode: StripeMode; hasWebhookSecret: boolean };
   /** Why the settings in force cannot take payments safely; null when they can. */
@@ -6847,6 +6849,9 @@ export interface PlatformStripeUpdate {
   otherPublishableKey?: string | null;
   /** Swap the set in force with the saved one of the other mode; takes no other field. */
   switchMode?: boolean;
+  /** Signing secrets of the webhook for connected accounts, per mode. */
+  connectWebhookSecretTest?: string | null;
+  connectWebhookSecretLive?: string | null;
 }
 
 /** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */

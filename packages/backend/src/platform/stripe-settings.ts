@@ -52,6 +52,9 @@ export interface StoredStripeSettings {
   /** The other mode's key pair, kept unused for "Pasar a modo X". Never in force by itself. */
   otherSecretKey?: string | null;
   otherPublishableKey?: string | null;
+  /** Webhook secrets for connected accounts, one per mode; independent of the platform's own. */
+  connectWebhookSecretTest?: string | null;
+  connectWebhookSecretLive?: string | null;
   taxEnabled?: boolean | null;
 }
 
@@ -193,6 +196,19 @@ export function webhookSecretsFor(s: StripeSettings, livemode: boolean | null): 
     active !== "none" && eventMode !== "none" && eventMode !== active
       ? [s.otherWebhookSecret, s.webhookSecret]
       : [s.webhookSecret, s.otherWebhookSecret];
+  return ordered.filter((v, i, all): v is string => !!v && all.indexOf(v) === i);
+}
+
+/**
+ * The secrets to verify a connected-accounts event with: the one of the
+ * event's mode first (read from the unverified payload only to pick the
+ * order), then the other. Empty when none is set.
+ */
+export function connectWebhookSecretsFor(
+  secrets: { test: string | null; live: string | null },
+  livemode: boolean | null,
+): string[] {
+  const ordered = livemode === false ? [secrets.test, secrets.live] : [secrets.live, secrets.test];
   return ordered.filter((v, i, all): v is string => !!v && all.indexOf(v) === i);
 }
 

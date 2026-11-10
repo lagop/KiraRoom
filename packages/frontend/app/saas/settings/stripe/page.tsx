@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   BACK_TO_SERVER,
+  CONNECT_WEBHOOK_EVENTS,
   STRIPE_WEBHOOK_EVENTS,
   SWITCH_MODE,
   StripeForm,
@@ -21,7 +22,10 @@ import {
 import { SettingField as Field } from "../setting-field";
 
 // Where Stripe sends KiraRoom's payment events; shown so it can be copied.
-const WEBHOOK_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1").replace(/\/+$/, "")}/webhooks/stripe`;
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api/v1").replace(/\/+$/, "");
+const WEBHOOK_URL = `${API_BASE}/webhooks/stripe`;
+// A separate endpoint in Stripe, of type "Cuentas conectadas", for the salons' own accounts.
+const CONNECT_WEBHOOK_URL = `${API_BASE}/webhooks/stripe-connect`;
 
 const TONE = {
   ok: "border-green-200 bg-green-50 text-green-800",
@@ -36,6 +40,8 @@ const EMPTY_FORM: StripeForm = {
   otherWebhookSecret: "",
   otherSecretKey: "",
   otherPublishableKey: "",
+  connectWebhookSecretTest: "",
+  connectWebhookSecretLive: "",
 };
 
 /** "Borrar lo guardado del otro modo": the three saved fields cleared at once. */
@@ -430,6 +436,54 @@ export default function PlatformStripePage() {
             )}
           </div>
         )}
+
+        <div className="rounded-lg border border-gray-200 p-4 space-y-5">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Webhook de cuentas conectadas (cobros online de los salones)</p>
+            <p className="text-xs text-gray-600 mt-1">
+              Es otro webhook, distinto del de arriba. En Stripe → Desarrolladores → Webhooks, crea uno de tipo «Cuentas
+              conectadas» a <code className="font-mono">{CONNECT_WEBHOOK_URL}</code> con los eventos{" "}
+              {CONNECT_WEBHOOK_EVENTS.map((e, i) => (
+                <span key={e}>
+                  <code className="font-mono">{e}</code>
+                  {i < CONNECT_WEBHOOK_EVENTS.length - 1 ? ", " : ""}
+                </span>
+              ))}
+              . Cada modo (pruebas y real) tiene el suyo, con su propio secreto, y no se intercambian al cambiar de modo. Mientras
+              falte, los salones pueden conectar su cuenta, pero KiraRoom no se entera de los cambios hasta que pulsen «Comprobar».
+            </p>
+          </div>
+          <Field
+            label="Secreto del webhook de cuentas conectadas · modo de pruebas"
+            source={cfg.connectWebhook.test.lastFour ? "console" : "none"}
+            current={cfg.connectWebhook.test.lastFour ? `whsec_…${cfg.connectWebhook.test.lastFour}` : null}
+            hint="Se guarda cifrado y no se vuelve a mostrar."
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              value={form.connectWebhookSecretTest}
+              onChange={(e) => setForm({ ...form, connectWebhookSecretTest: e.target.value })}
+              placeholder={cfg.connectWebhook.test.lastFour ? "Escribe uno nuevo para sustituirlo" : "whsec_…"}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+            />
+          </Field>
+          <Field
+            label="Secreto del webhook de cuentas conectadas · modo real"
+            source={cfg.connectWebhook.live.lastFour ? "console" : "none"}
+            current={cfg.connectWebhook.live.lastFour ? `whsec_…${cfg.connectWebhook.live.lastFour}` : null}
+            hint="Se guarda cifrado y no se vuelve a mostrar."
+          >
+            <input
+              type="password"
+              autoComplete="off"
+              value={form.connectWebhookSecretLive}
+              onChange={(e) => setForm({ ...form, connectWebhookSecretLive: e.target.value })}
+              placeholder={cfg.connectWebhook.live.lastFour ? "Escribe uno nuevo para sustituirlo" : "whsec_…"}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
+            />
+          </Field>
+        </div>
 
         <div className="text-xs text-gray-500">
           IVA: KiraRoom no cobra IVA ni IGIC en sus planes, así que Stripe Tax está siempre desactivado y el precio que ve el
