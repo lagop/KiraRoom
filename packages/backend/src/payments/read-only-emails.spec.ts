@@ -155,7 +155,7 @@ describe("cancelled from the dashboard", () => {
       cancelSubscription: jest.fn(async () => ({ subscriptionId: null, status: "cancelled", cancelledAt: new Date(), readOnlyUntil, newlyCancelled })),
     };
     const notices = { notify: jest.fn(async () => undefined) };
-    const c = new PaymentsController({} as any, subscriptionsService as any, {} as any, {} as any, {} as any, notices as any);
+    const c = new PaymentsController({} as any, subscriptionsService as any, {} as any, {} as any, {} as any, notices as any, {} as any);
     return { c, notices, readOnlyUntil };
   }
 

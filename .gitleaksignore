@@ -42,3 +42,6 @@ b2235d3e31e3a96bc35860817c7a48e79326f14b:packages/backend/src/widget/widget-embe
 b2235d3e31e3a96bc35860817c7a48e79326f14b:packages/frontend/lib/embed-frame.spec.ts:generic-api-key:20
 83284927bede05d9e30a78eb3650c740671d4677:packages/backend/src/widget/widget-embed.spec.ts:generic-api-key:13
 83284927bede05d9e30a78eb3650c740671d4677:packages/frontend/lib/embed-frame.spec.ts:generic-api-key:20
+
+# Fictitious key in a test of the Stripe error redaction (the spec now builds it at runtime).
+e3468b53eeacf6d3f83e609ab1f19362e88b4feb:packages/backend/src/payments/services/connect-accounts.service.spec.ts:stripe-access-token:126
