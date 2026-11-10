@@ -9,6 +9,7 @@ import { publicPrice, publicPriceSettings } from '../common/public-price';
 import { PlatformStripeConfigService, redactStripe } from '../platform/platform-stripe-config.service';
 import { livemodeOf } from '../platform/stripe-settings';
 import { connectStatusOf, ConnectTenantRow } from '../payments/services/stripe-connect';
+import { OnlinePaymentAlertsService } from '../payments/services/online-payment-alerts.service';
 import {
   OnlinePaymentChoice,
   chooseOnlinePayment,
@@ -364,7 +365,20 @@ export class OnlineBookingPaymentService {
         );
       }
     }
+    if (failed > 0) {
+      await this.alerts()?.tellManagers(appointment.tenantId, {
+        title: "No se pudo devolver un pago online",
+        message:
+          "Has cancelado una cita pagada online y Stripe no ha podido devolver el dinero a la clienta. Devuélvelo a mano desde Pagos (o desde tu panel de Stripe) para que no se quede sin su dinero.",
+        link: "/dashboard/payments",
+        key: `refund-failed-${appointment.id}`,
+      });
+    }
     return { refundedCents, failed };
+  }
+
+  private alerts(): OnlinePaymentAlertsService | null {
+    return this.moduleRef?.get(OnlinePaymentAlertsService, { strict: false }) ?? null;
   }
 
   /**
@@ -496,6 +510,13 @@ export class OnlineBookingPaymentService {
       await stripe.refunds.create({ payment_intent: paymentIntent }, { stripeAccount: accountId, idempotencyKey: `refund-${session.id}` });
     } catch (err) {
       this.logger.error(`Refund of ${paymentIntent} failed, do it by hand: ${redactStripe((err as Error).message ?? '')}`);
+      await this.alerts()?.tellManagers(session.metadata?.tenantId ?? '', {
+        title: "Un pago online no se pudo devolver",
+        message:
+          "Una clienta pagó una reserva que ya no existía y Stripe no ha podido devolverle el dinero. Devuélvelo a mano desde tu panel de Stripe.",
+        link: "/dashboard/settings/cobros-online",
+        key: `refund-unclaimed-${session.id}`,
+      });
     }
   }
 }

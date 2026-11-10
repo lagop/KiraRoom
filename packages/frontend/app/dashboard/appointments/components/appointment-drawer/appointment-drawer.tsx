@@ -32,7 +32,7 @@ import {
 import { planSlotSearch, type SlotSuggestion } from "../slot-suggestions";
 import { localDay } from "@/components/Calendar/day-grid";
 import { StatusChangeDialog } from "../StatusChangeDialog";
-import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, paidOnlineCents } from "@/lib/online-booking-state";
+import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, paidOnlineCents } from "@/lib/online-booking-state";
 import { euros } from "@/lib/booking-payment";
 import { LocationSelect } from "@/components/Calendar/LocationSelect";
 import { useBookingLocations } from "@/lib/use-booking-locations";
@@ -358,7 +358,9 @@ export function AppointmentDrawer({
     try {
       // Cancel, complete and no-show go to their own routes, which send the
       // notices, tell the wait-list and issue the invoice.
-      await sendStatusChange(apiClient, appointment.id, newStatus, reason, opts);
+      const result = await sendStatusChange(apiClient, appointment.id, newStatus, reason, opts);
+      const refundNotice = onlineRefundNotice(result);
+      if (refundNotice) toast(refundNotice);
       setAppointment((prev) => (prev && prev.id === appointment.id ? { ...prev, status: newStatus } : prev));
       // The list behind the drawer showed the old status until reloaded.
       onAppointmentUpdated?.();

@@ -37,7 +37,7 @@ import {
   type AskedStatus,
 } from "./components/appointment-drawer.utils";
 import { StatusChangeDialog } from "./components/StatusChangeDialog";
-import { isAwaitingOnlinePayment, paidOnlineCents } from "@/lib/online-booking-state";
+import { isAwaitingOnlinePayment, onlineRefundNotice, paidOnlineCents } from "@/lib/online-booking-state";
 import { LocationSelect } from "@/components/Calendar/LocationSelect";
 import { useBookingLocations } from "@/lib/use-booking-locations";
 import { appointmentLocation, hasLocations } from "@/lib/panel-booking-locations";
@@ -267,7 +267,9 @@ function AppointmentsPageContent() {
     try {
       // Cancel, complete and no-show go to their own routes, which send the
       // notices, tell the wait-list and issue the invoice.
-      await sendStatusChange(apiClient, id, newStatus, reason, opts);
+      const result = await sendStatusChange(apiClient, id, newStatus, reason, opts);
+      const refundNotice = onlineRefundNotice(result);
+      if (refundNotice) toast(refundNotice);
       setAppointments((prev) =>
         prev.map((apt) =>
           apt.id === id ? { ...apt, status: newStatus } : apt,

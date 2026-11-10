@@ -509,8 +509,8 @@ webhook, apart from the platform's own:
    **"Connected accounts"**, URL
    `https://api.kiraroom.net/api/v1/webhooks/stripe-connect`, events
    `account.updated`, `account.application.deauthorized`,
-   `checkout.session.completed`, `checkout.session.expired` and
-   `charge.refunded`.
+   `checkout.session.completed`, `checkout.session.expired`,
+   `charge.refunded`, `charge.dispute.created` and `charge.dispute.closed`.
 2. Paste its signing secret in the platform console (Ajustes > Stripe >
    "Webhook de cuentas conectadas"), in the field of that mode. The two
    secrets (test, live) are kept apart and do not swap when the mode
@@ -544,8 +544,13 @@ refunded in full automatically.
   by `charge.refunded`, never twice.
 - Caja charges only what is left: an appointment's `amountPaid` includes the
   online payment, and a fully prepaid one is already paid.
-- Disputes (chargebacks) are the salon's, on its own Stripe account; KiraRoom
-  does not handle them yet.
+- A refund Stripe refuses on cancellation is not silent: the owners and admins
+  get a panel notification and an email (OnlinePaymentAlertsService), and the
+  cancel response carries `onlineRefund.failed` (a toast in the panel).
+- Disputes (chargebacks): `charge.dispute.created` / `.closed` mark the payment
+  (`metadata.dispute`) and tell the salon, with the date to answer by. The
+  salon answers them in its own Stripe Dashboard; KiraRoom does not submit
+  evidence.
 
 ## First deploy: creating the platform owner
 

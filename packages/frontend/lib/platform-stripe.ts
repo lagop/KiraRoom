@@ -22,6 +22,8 @@ export const CONNECT_WEBHOOK_EVENTS = [
   "checkout.session.completed",
   "checkout.session.expired",
   "charge.refunded",
+  "charge.dispute.created",
+  "charge.dispute.closed",
 ];
 
 export function modeName(mode: StripeMode): string {

@@ -10,6 +10,7 @@ import { PrismaModule } from "../common/prisma/prisma.module";
 import { StripeService } from "./services/stripe.service";
 import { ConnectAccountsService } from "./services/connect-accounts.service";
 import { ConnectEventsService } from "./services/connect-events.service";
+import { OnlinePaymentAlertsService } from "./services/online-payment-alerts.service";
 import { WalletService } from "./services/wallet.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
 import { AddOnsService } from "./services/addons.service";
@@ -45,6 +46,7 @@ import { AuditLogService } from "../saas/audit-log.service";
     StripeService,
     ConnectAccountsService,
     ConnectEventsService,
+    OnlinePaymentAlertsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,
@@ -61,6 +63,7 @@ import { AuditLogService } from "../saas/audit-log.service";
     ConnectAccountsService,
     // The appointments module registers the handler of online-booking payments here.
     ConnectEventsService,
+    OnlinePaymentAlertsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,
