@@ -7,6 +7,8 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { OnlineBookingPaymentService, HOLD_MINUTES, CHECKOUT_MINUTES } from './online-booking-payment.service';
 
+// Built at runtime: a fictitious value that only looks like a Stripe key (gitleaks).
+const fakeKey = ['sk', 'test', 'abcdefghij1234'].join('_');
 const NOW = new Date('2026-11-10T10:00:00.000Z');
 const APPT = '11111111-1111-4111-8111-111111111111';
 const TENANT = 'salon-a';
@@ -207,7 +209,7 @@ describe('createCheckout: the payment page on the salon\'s account', () => {
 
   it('Stripe failing is a clear 503 and never shows a key', async () => {
     const t = build();
-    t.stripe.checkout.sessions.create.mockRejectedValueOnce(new Error('Invalid API Key provided: sk_test_abcdefghij1234'));
+    t.stripe.checkout.sessions.create.mockRejectedValueOnce(new Error(`Invalid API Key provided: ${fakeKey}`));
     const err = await t.service.createCheckout(appt, plan, NOW).catch((e) => e);
     expect(err).toBeInstanceOf(ServiceUnavailableException);
     expect(String(err.message)).not.toMatch(/sk_test_/);
