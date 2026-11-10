@@ -23,6 +23,7 @@ const BLOCKED_DURING_SUPPORT = [
   "POST /payments/subscription/billing-portal",
   "POST /payments/subscription/update-locations",
   "PATCH /payments/stripe/settings",
+  "POST /payments/connect/onboarding",
   "POST /payments/tenants/current/add-ons/:key",
   "DELETE /payments/tenants/current/add-ons/:key",
   "POST /payments/message-bundles/tenants/current/topup",

@@ -18,6 +18,7 @@ import { PaymentsService } from "./payments.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
 import { WalletService } from "./services/wallet.service";
 import { StripeService } from "./services/stripe.service";
+import { ConnectAccountsService } from "./services/connect-accounts.service";
 import { ProfessionalsService } from "../professionals/professionals.service";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -75,6 +76,7 @@ export class PaymentsController {
     private readonly stripeService: StripeService,
     private readonly professionalsService: ProfessionalsService,
     private readonly readOnlyNotices: ReadOnlyNoticeService,
+    private readonly connectAccounts: ConnectAccountsService,
   ) {}
 
   /**
@@ -569,5 +571,34 @@ export class PaymentsController {
     const publishableKey =
       await this.stripeService.getPublishableKeyForTenant(tenantId);
     return { publishableKey };
+  }
+
+  /**
+   * Online payments: where the salon stands with its own Stripe account
+   * (connected through KiraRoom). Read from what is stored.
+   */
+  @Get("connect/status")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Status of the salon's connected Stripe account for online payments" })
+  async connectStatus(@Req() req: any) {
+    return this.connectAccounts.status(req.user.tenantId);
+  }
+
+  /** Asks Stripe for the account's current state (after the salon returns from Stripe's form). */
+  @Post("connect/refresh")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Refresh the connected account's status from Stripe" })
+  async connectRefresh(@Req() req: any) {
+    return this.connectAccounts.refresh(req.user.tenantId);
+  }
+
+  /** Creates the account if needed and returns the link to Stripe's own sign-up form. */
+  @NotDuringSupport()
+  @Post("connect/onboarding")
+  @Roles(...SALON_MANAGERS)
+  @UseGuards(VerifiedOwnerEmailGuard)
+  @ApiOperation({ summary: "Start or continue connecting the salon's Stripe account" })
+  async connectOnboarding(@Req() req: any) {
+    return this.connectAccounts.startOnboarding(req.user.tenantId);
   }
 }

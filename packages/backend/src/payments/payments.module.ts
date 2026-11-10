@@ -7,6 +7,7 @@ import { TenantAddOnsController } from "./controllers/tenant-addons.controller";
 import { PaymentsService } from "./payments.service";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { StripeService } from "./services/stripe.service";
+import { ConnectAccountsService } from "./services/connect-accounts.service";
 import { WalletService } from "./services/wallet.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
 import { AddOnsService } from "./services/addons.service";
@@ -40,6 +41,7 @@ import { AuditLogService } from "../saas/audit-log.service";
   providers: [
     PaymentsService,
     StripeService,
+    ConnectAccountsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,
@@ -53,6 +55,7 @@ import { AuditLogService } from "../saas/audit-log.service";
   exports: [
     PaymentsService,
     StripeService,
+    ConnectAccountsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,

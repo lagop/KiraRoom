@@ -6631,6 +6631,18 @@ class ApiClient implements ApiClientInterface {
     return this.request(`/platform/retention-config`, { method: "PUT", body: JSON.stringify({ enabled }) });
   }
 
+  // The salon's own Stripe account for online payments, connected through KiraRoom.
+  async getConnectStatus(): Promise<ConnectStatus> {
+    return this.request(`/payments/connect/status`);
+  }
+  async refreshConnectStatus(): Promise<ConnectStatus> {
+    return this.request(`/payments/connect/refresh`, { method: "POST" });
+  }
+  /** Creates the account if needed and returns the link to Stripe's own sign-up form. */
+  async startConnectOnboarding(): Promise<{ url: string }> {
+    return this.request(`/payments/connect/onboarding`, { method: "POST" });
+  }
+
   // KiraRoom's own Stripe account. Secret key and webhook secret are
   // write-only: GET says where each comes from, never its value.
   async getPlatformStripeConfig(): Promise<PlatformStripeConfig> {
@@ -6783,6 +6795,21 @@ export interface PlatformRetentionConfig {
 }
 
 export type StripeMode = "test" | "live" | "none";
+
+/** Where a salon stands with its own Stripe account for online payments. */
+export interface ConnectStatus {
+  state: "none" | "pending" | "restricted" | "active";
+  canCharge: boolean;
+  payoutsEnabled: boolean;
+  /** What Stripe still needs, as field paths. */
+  requirementsDue: string[];
+  disabledReason: string | null;
+  /** The account belongs to the other Stripe mode than the keys in force. */
+  otherMode: boolean;
+  checkedAt: string | null;
+  /** KiraRoom's own Stripe keys are set, so a salon can connect. */
+  platformReady: boolean;
+}
 
 export interface PlatformStripeConfig {
   mode: StripeMode;

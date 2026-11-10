@@ -142,6 +142,8 @@ export const DASHBOARD_NAV: NavEntry[] = [
       link("rebooking", "/dashboard/settings/rebooking", "rebooking.settings.title", "repeat"),
       link("fiscal", "/dashboard/settings/fiscal", "invoices.fiscalSettings.title", "scroll"),
       link("accounting", "/dashboard/settings/accounting", "accounting.title", "calculator"),
+      // The salon's own Stripe account for señal and prepayment at booking; in every plan.
+      link("online-payments", "/dashboard/settings/cobros-online", "nav.online_payments", "card"),
       link("channels", "/dashboard/settings/channels", "billing.channels.title", "message", { pro: true }),
     ],
   },

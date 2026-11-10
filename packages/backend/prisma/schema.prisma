@@ -75,6 +75,21 @@ model Tenant {
   /// for the live keys, and the other way round. Null: unknown.
   stripeCustomerLivemode     Boolean?
   stripeSubscriptionLivemode Boolean?
+  /// Online payments (señal / pago anticipado): the salon's own Stripe account,
+  /// connected through KiraRoom's platform (Stripe Connect, direct charges).
+  /// KiraRoom keeps no secret key of the salon, only this id and the status
+  /// Stripe last reported. `stripeConnectLivemode` is the platform's mode when
+  /// it was created: an account of the other mode does not exist for the keys
+  /// in force and counts as not connected.
+  stripeConnectAccountId       String?  @unique
+  stripeConnectLivemode        Boolean?
+  stripeConnectChargesEnabled  Boolean  @default(false)
+  stripeConnectPayoutsEnabled  Boolean  @default(false)
+  stripeConnectDetailsSubmitted Boolean @default(false)
+  /// What Stripe still needs from the salon (requirements.currently_due).
+  stripeConnectRequirementsDue Json?
+  stripeConnectDisabledReason  String?
+  stripeConnectCheckedAt       DateTime?
   /// Plan rev3: cancellation lifecycle + add-ons + multi-location
   cancelledAt            DateTime?
   readOnlyUntil          DateTime?
