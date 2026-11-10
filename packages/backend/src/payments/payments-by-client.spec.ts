@@ -14,7 +14,7 @@ describe("GET /payments/client/:clientId", () => {
   it("asks the service for this salon's payments of that client", async () => {
     const prisma: any = { payment: { findMany: jest.fn(async () => [{ id: "pay1" }]) } };
     const service = new PaymentsService(prisma);
-    const controller = new PaymentsController(service, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const controller = new PaymentsController(service, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
     const out = await controller.getPaymentsByClient({ user: { tenantId: TENANT, role: "owner" } }, CLIENT);
 

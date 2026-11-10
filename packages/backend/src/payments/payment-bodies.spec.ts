@@ -56,7 +56,7 @@ describe("payments bodies", () => {
 
   it("the controller rounds a withdrawal to whole cents and passes the tender and who handed it back", async () => {
     const wallet = { withdraw: jest.fn(async () => ({})), assertClientOfSalon: jest.fn(async () => undefined) };
-    const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any);
+    const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any, null as any);
     await c.withdrawWallet(
       { user: { tenantId: "t1", id: "u1", role: "admin" } },
       uuid(1),
@@ -67,7 +67,7 @@ describe("payments bodies", () => {
 
   it("the controller rounds a top-up to whole cents and passes the tender and who took it", async () => {
     const wallet = { topUp: jest.fn(async () => ({})), assertClientOfSalon: jest.fn(async () => undefined) };
-    const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any);
+    const c = new PaymentsController(null as any, null as any, wallet as any, null as any, null as any, null as any, null as any);
     await c.depositWallet(
       { user: { tenantId: "t1", id: "u1", role: "owner" } },
       uuid(1),

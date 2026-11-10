@@ -40,6 +40,7 @@ function controller(over: { payments?: any; wallet?: any; stripe?: any; professi
       over.stripe ?? ({} as any),
       professionals as any,
       {} as any,
+      {} as any,
     ),
     professionals,
   };

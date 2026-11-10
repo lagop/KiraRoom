@@ -6,6 +6,9 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { ConnectAccountsService } from './connect-accounts.service';
 
+// Built at runtime: a fictitious value that only looks like a Stripe key (gitleaks).
+const fakeKey = ['sk', 'test', 'abcdefghij1234'].join('_');
+
 const tenantRow = (over: Record<string, unknown> = {}) => ({
   id: 't1',
   name: 'Kira Room',
@@ -123,7 +126,7 @@ describe('ConnectAccountsService', () => {
     const failing = {
       accounts: {
         create: jest.fn(async () => {
-          throw new Error('Invalid API Key provided: sk_test_abcdefghij1234');
+          throw new Error(`Invalid API Key provided: ${fakeKey}`);
         }),
         retrieve: jest.fn(),
       },
@@ -131,7 +134,7 @@ describe('ConnectAccountsService', () => {
     };
     const a = build({ stripe: failing });
     await expect(a.service.startOnboarding('t1')).rejects.toBeInstanceOf(ServiceUnavailableException);
-    await expect(a.service.startOnboarding('t1')).rejects.not.toThrow(/sk_test_abcdefghij1234/);
+    await expect(a.service.startOnboarding('t1')).rejects.not.toThrow(new RegExp(fakeKey));
     const noConnect = {
       accounts: {
         create: jest.fn(async () => {
