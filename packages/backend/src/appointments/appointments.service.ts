@@ -184,7 +184,7 @@ export const CLIENT_LINK_CANCEL_REASON = "Cancelada por el cliente desde el enla
 /** What the public "Cancelar mi cita" page shows. */
 export interface CancelLinkInfo {
   /** cancellable; too_late (inside minCancelHours: call the salon); cancelled; closed (past, done, no-show). */
-  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment" | "paid_online";
+  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment";
   canCancel: boolean;
   status: string;
   salonName: string;
@@ -226,6 +226,12 @@ export interface StatusChangeOptions {
    * salon could not confirm it, with a link to book again.
    */
   notConfirmed?: boolean;
+  /**
+   * Cancelled, but the money paid online stays with the salon (a late
+   * cancellation it chooses to charge for). Without it, cancelling a booking
+   * that was paid online gives the payment back in full.
+   */
+  keepOnlinePayment?: boolean;
 }
 
 /** Appointments that still hold their time: the ones a time off clash can still move or cancel. */
@@ -2112,8 +2118,8 @@ export class AppointmentsService {
   }
 
 
-  async cancel(user: any, id: string, reason?: string) {
-    return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason });
+  async cancel(user: any, id: string, reason?: string, opts: { keepOnlinePayment?: boolean } = {}) {
+    return this.changeStatus(user, id, AppointmentStatus.cancelled, { reason, ...opts });
   }
 
   /**
@@ -2229,7 +2235,7 @@ export class AppointmentsService {
             : null,
       holdUntil: held ? new Date(appointment.paymentHoldUntil).toISOString() : null,
     };
-    const base: CancelLinkInfo["state"] = held
+    const state: CancelLinkInfo["state"] = held
       ? "awaiting_payment"
       : appointment.status === AppointmentStatus.cancelled
         ? "cancelled"
@@ -2238,9 +2244,7 @@ export class AppointmentsService {
           : startsAt.getTime() - now.getTime() < minCancelHours * 3_600_000
             ? "too_late"
             : "cancellable";
-    // Paid online: cancelling it means deciding about her money (the salon's
-    // refund policy), which the link does not do. She is sent to the salon.
-    const state: CancelLinkInfo["state"] = base === "cancellable" && payment.state === "paid" ? "paid_online" : base;
+
     return {
       state,
       canCancel: state === "cancellable" || state === "awaiting_payment",
@@ -2453,7 +2457,22 @@ export class AppointmentsService {
     }
 
     await this.afterStatusChange(user, updated, from, to, opts);
-    return this.enrichAppointment(updated);
+    // A cancelled booking that was paid online gives the money back (unless the salon keeps it).
+    const onlineRefund =
+      to === AppointmentStatus.cancelled && !opts.keepOnlinePayment && this.onlinePayments
+        ? await this.onlinePayments
+            .refundForCancellation(
+              { id: updated.id, tenantId: updated.tenantId },
+              opts.reason?.trim() ? `Cita cancelada: ${opts.reason.trim()}` : "Cita cancelada",
+              typeof user?.id === "string" ? user.id : null,
+            )
+            .catch((err) => {
+              this.logger.error(`Refund of cancelled booking ${id} failed: ${(err as Error).message}`);
+              return null;
+            })
+        : null;
+    const enriched = this.enrichAppointment(updated);
+    return onlineRefund ? Object.assign(enriched, { onlineRefund }) : enriched;
   }
 
   /**
@@ -2468,6 +2487,17 @@ export class AppointmentsService {
   ): Promise<Record<string, unknown>> {
     const from = appointment.status as AppointmentStatus;
     assertTransition(from, to);
+
+    // Held while the client pays online: it is not a booking yet. It confirms
+    // itself when Stripe says it is paid; until then the team can only let it go.
+    if (appointment.paymentHoldUntil && !appointment.depositPaid && to !== AppointmentStatus.cancelled) {
+      throw new ConflictException({
+        code: "AWAITING_ONLINE_PAYMENT",
+        message:
+          "Esta reserva está esperando el pago online de la clienta: se confirma sola cuando paga. Si no la quieres, cancélala.",
+        appointmentId: appointment.id,
+      });
+    }
 
     // Checked before the write: it used to run after it, so the client got
     // the 409 while the appointment had already changed.

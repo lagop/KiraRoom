@@ -873,6 +873,12 @@ export interface Appointment {
   price: number;
   totalAmount?: number;
   amountPaid?: number;
+  /** Online payment when booking: "deposit" or "full"; null when she did not pay online. */
+  onlinePaymentKind?: string | null;
+  /** While the client pays, the slot is held until this instant; null once paid. */
+  paymentHoldUntil?: string | null;
+  depositPaid?: boolean | null;
+  depositAmount?: number | string | null;
   amountDue?: number;
   currency: string;
   paymentStatus: "pending" | "paid" | "failed" | "refunded";
@@ -3190,11 +3196,15 @@ class ApiClient implements ApiClientInterface {
     return this.request<BookingLocations>("/appointments/booking-locations");
   }
 
-  async cancelAppointment(id: string, reason?: string): Promise<Appointment> {
+  /**
+   * `keepOnlinePayment`: the salon keeps what the client paid online (a late
+   * cancellation it charges for). Without it, cancelling gives it back in full.
+   */
+  async cancelAppointment(id: string, reason?: string, opts: { keepOnlinePayment?: boolean } = {}): Promise<Appointment> {
     // PUT: the backend route is `@Put(":id/cancel")`; POST was a 404.
     return this.request<Appointment>(`/appointments/${id}/cancel`, {
       method: "PUT",
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, ...(opts.keepOnlinePayment ? { keepOnlinePayment: true } : {}) }),
     });
   }
 

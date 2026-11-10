@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useTranslations } from "@/lib/use-translation";
 import type { AskedStatus } from "./appointment-drawer.utils";
+import { euros } from "@/lib/booking-payment";
 
 /**
  * Asks before the status changes that cannot be taken back lightly:
@@ -16,6 +17,7 @@ export function StatusChangeDialog({
   to,
   loading,
   portal = true,
+  paidOnlineCents = 0,
   onCancel,
   onConfirm,
 }: {
@@ -28,13 +30,19 @@ export function StatusChangeDialog({
    * and focus outside itself.
    */
   portal?: boolean;
+  /** What the client paid online and the salon holds (cents): cancelling gives it back, unless the salon keeps it. */
+  paidOnlineCents?: number;
   onCancel: () => void;
-  onConfirm: (reason?: string) => void;
+  onConfirm: (reason?: string, opts?: { keepOnlinePayment?: boolean }) => void;
 }) {
   const t = useTranslations();
   const [reason, setReason] = useState("");
+  const [keepPayment, setKeepPayment] = useState(false);
   useEffect(() => {
-    if (to) setReason("");
+    if (to) {
+      setReason("");
+      setKeepPayment(false);
+    }
   }, [to]);
 
   if (!to || typeof document === "undefined") return null;
@@ -61,6 +69,25 @@ export function StatusChangeDialog({
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </label>
+            {paidOnlineCents > 0 && (
+              <div data-test="cancel-online-payment" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p>
+                  Esta cita tiene {euros(paidOnlineCents)} pagados online.{" "}
+                  {keepPayment
+                    ? "Te los quedas: no se devuelve nada a la clienta."
+                    : "Al cancelarla se le devuelven automáticamente a la clienta."}
+                </p>
+                <label className="mt-2 flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={keepPayment}
+                    onChange={(e) => setKeepPayment(e.target.checked)}
+                  />
+                  <span>No devolver el pago (cancelación tardía)</span>
+                </label>
+              </div>
+            )}
           </div>
         }
         confirmLabel={t("appointments.cancel_appointment")}
@@ -68,7 +95,7 @@ export function StatusChangeDialog({
         destructive
         loading={loading}
         onCancel={onCancel}
-        onConfirm={() => onConfirm(reason)}
+        onConfirm={() => onConfirm(reason, paidOnlineCents > 0 && keepPayment ? { keepOnlinePayment: true } : undefined)}
       />
     ) : to === "completed" ? (
       <ConfirmDialog

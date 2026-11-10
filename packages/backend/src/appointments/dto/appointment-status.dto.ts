@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString, MaxLength } from "class-validator";
+import { IsBoolean, IsOptional, IsString, MaxLength } from "class-validator";
 
 /**
  * Bodies of PUT /appointments/:id/cancel and /complete. They were read as a
@@ -19,6 +19,14 @@ export class CancelAppointmentDto {
     message: `El motivo es demasiado largo (máximo ${CANCEL_REASON_MAX} caracteres)`,
   })
   reason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The salon keeps what the client paid online (a late cancellation it charges for). Without it, cancelling gives the online payment back in full.",
+  })
+  @IsOptional()
+  @IsBoolean({ message: "keepOnlinePayment no es válido" })
+  keepOnlinePayment?: boolean;
 }
 
 export class CompleteAppointmentDto {

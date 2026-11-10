@@ -47,6 +47,7 @@ describe("PUT /appointments/:id/cancel and /complete bodies", () => {
 
   it("are optional, as the panel sends them", async () => {
     await expect(parse("cancel", {})).resolves.toEqual({});
+    await expect(parse("cancel", { keepOnlinePayment: "yes" })).rejects.toThrow(BadRequestException);
     await expect(parse("complete", {})).resolves.toEqual({});
     // JSON.stringify({ reason: undefined }) is "{}"; null is accepted too.
     await expect(parse("cancel", { reason: null })).resolves.toMatchObject({ reason: null });
@@ -58,7 +59,10 @@ describe("PUT /appointments/:id/cancel and /complete bodies", () => {
     const req = { user: { id: "u1", role: "owner", tenantId: "t1" } };
     await c.cancel(req, "apt-1", (await parse("cancel", { reason: "Enferma" })) as CancelAppointmentDto);
     await c.complete(req, "apt-1", (await parse("complete", { notes: "Mechas" })) as CompleteAppointmentDto);
-    expect(svc.cancel).toHaveBeenCalledWith(req.user, "apt-1", "Enferma");
+    // The money paid online goes back unless the salon says it keeps it.
+    expect(svc.cancel).toHaveBeenCalledWith(req.user, "apt-1", "Enferma", { keepOnlinePayment: false });
+    await c.cancel(req, "apt-2", (await parse("cancel", { reason: "Tarde", keepOnlinePayment: true })) as CancelAppointmentDto);
+    expect(svc.cancel).toHaveBeenLastCalledWith(req.user, "apt-2", "Tarde", { keepOnlinePayment: true });
     expect(svc.complete).toHaveBeenCalledWith(req.user, "apt-1", "Mechas");
   });
 });

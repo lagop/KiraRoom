@@ -37,6 +37,7 @@ import {
   type AskedStatus,
 } from "./components/appointment-drawer.utils";
 import { StatusChangeDialog } from "./components/StatusChangeDialog";
+import { isAwaitingOnlinePayment, paidOnlineCents } from "@/lib/online-booking-state";
 import { LocationSelect } from "@/components/Calendar/LocationSelect";
 import { useBookingLocations } from "@/lib/use-booking-locations";
 import { appointmentLocation, hasLocations } from "@/lib/panel-booking-locations";
@@ -260,12 +261,13 @@ function AppointmentsPageContent() {
     id: string,
     newStatus: AppointmentStatus,
     reason?: string,
+    opts?: { keepOnlinePayment?: boolean },
   ) => {
     setUpdatingId(id);
     try {
       // Cancel, complete and no-show go to their own routes, which send the
       // notices, tell the wait-list and issue the invoice.
-      await sendStatusChange(apiClient, id, newStatus, reason);
+      await sendStatusChange(apiClient, id, newStatus, reason, opts);
       setAppointments((prev) =>
         prev.map((apt) =>
           apt.id === id ? { ...apt, status: newStatus } : apt,
@@ -523,6 +525,15 @@ function AppointmentsPageContent() {
       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
         <div className="animate-spin w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full mr-1"></div>
         {t("appointments.updating")}
+      </span>
+    ) : isAwaitingOnlinePayment(appointment) ? (
+      // Held while she pays online: not a booking yet, it confirms itself when she pays.
+      <span
+        data-test="awaiting-payment"
+        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
+      >
+        <Clock className="w-3 h-3 mr-1" />
+        Esperando pago
       </span>
     ) : (
       getStatusBadge(appointment.status as AppointmentStatus)
@@ -1013,8 +1024,9 @@ function AppointmentsPageContent() {
         to={askingStatus?.to ?? null}
         loading={!!askingStatus && updatingId === askingStatus.id}
         onCancel={() => setAskingStatus(null)}
-        onConfirm={(reason) => {
-          if (askingStatus) void updateStatus(askingStatus.id, askingStatus.to, reason);
+        paidOnlineCents={paidOnlineCents(appointments.find((a) => a.id === askingStatus?.id))}
+        onConfirm={(reason, opts) => {
+          if (askingStatus) void updateStatus(askingStatus.id, askingStatus.to, reason, opts);
         }}
       />
     </div>

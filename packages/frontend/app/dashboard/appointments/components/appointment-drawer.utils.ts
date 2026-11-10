@@ -537,7 +537,7 @@ export function statusLabelKey(status: string): string | null {
 
 /** The API calls a status change may use (a subset of the panel's client). */
 export interface StatusChangeApi {
-  cancelAppointment(id: string, reason?: string): Promise<unknown>;
+  cancelAppointment(id: string, reason?: string, opts?: { keepOnlinePayment?: boolean }): Promise<unknown>;
   completeAppointment(id: string): Promise<unknown>;
   markAppointmentNoShow(id: string): Promise<unknown>;
   // The panel client types its edit body without `status`; any body will do here.
@@ -554,10 +554,13 @@ export function sendStatusChange(
   id: string,
   to: AppointmentStatusValue,
   reason?: string,
+  opts?: { keepOnlinePayment?: boolean },
 ): Promise<unknown> {
   switch (to) {
     case "cancelled":
-      return api.cancelAppointment(id, reason?.trim() || undefined);
+      return opts?.keepOnlinePayment
+        ? api.cancelAppointment(id, reason?.trim() || undefined, { keepOnlinePayment: true })
+        : api.cancelAppointment(id, reason?.trim() || undefined);
     case "completed":
       return api.completeAppointment(id);
     case "no_show":

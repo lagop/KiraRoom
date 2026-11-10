@@ -11,7 +11,7 @@ const API =
 
 /** GET/POST /public/appointments/:token (backend public-appointment.controller.ts). */
 interface CancelLinkInfo {
-  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment" | "paid_online";
+  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment";
   canCancel: boolean;
   salonName: string;
   salonPhone: string | null;
@@ -154,6 +154,9 @@ export default function CancelAppointmentPage() {
   }
 
   const when = `${formatBookingDate(info.date)} a las ${info.time}`;
+  const amount = info.payment.amountCents ? euros(info.payment.amountCents) : "";
+  const what = info.payment.kind === "full" ? "el servicio completo" : "la señal";
+  const paid = info.payment.state === "paid";
   const details = (
     <dl
       data-test="cancel-details"
@@ -175,6 +178,12 @@ export default function CancelAppointmentPage() {
       )}
       <dt className="text-gray-500">Cuándo</dt>
       <dd className="font-medium text-gray-900">{when}</dd>
+      {info.payment.state === "paid" && amount && (
+        <>
+          <dt className="text-gray-500">Pagado</dt>
+          <dd className="font-medium text-gray-900">{amount}</dd>
+        </>
+      )}
     </dl>
   );
   const callSalon = info.salonPhone ? (
@@ -186,9 +195,6 @@ export default function CancelAppointmentPage() {
       {info.salonPhone}
     </a>
   ) : null;
-
-  const amount = info.payment.amountCents ? euros(info.payment.amountCents) : "";
-  const what = info.payment.kind === "full" ? "el servicio completo" : "la señal";
 
   if (info.state === "awaiting_payment") {
     // Back from the payment page and waiting for Stripe's notice to reach us.
@@ -255,25 +261,6 @@ export default function CancelAppointmentPage() {
     );
   }
 
-  if (info.state === "paid_online") {
-    return shell(
-      <div data-test="paid-online" className="space-y-4">
-        <Check className="w-12 h-12 text-green-600 mx-auto" aria-hidden="true" />
-        <h1 className="text-xl font-semibold">
-          {back === "ok" ? "¡Pago recibido! Tu reserva está hecha" : "Tu reserva tiene un pago online"}
-        </h1>
-        {details}
-        <p className="text-sm text-gray-600">
-          Has pagado {what}
-          {amount ? ` (${amount})` : ""}.{" "}
-          {info.payment.kind === "deposit" ? "El resto lo pagas en el salón. " : ""}
-          Para cancelar o cambiar una cita con pago, contacta con {info.salonName}.
-        </p>
-        {callSalon}
-      </div>,
-    );
-  }
-
   if (info.state === "cancelled") {
     return shell(
       <div role="status" aria-live="polite" data-test="cancel-done" className="space-y-4">
@@ -290,7 +277,7 @@ export default function CancelAppointmentPage() {
           {releasedHold
             ? "Hemos liberado el hueco y no se te ha cobrado nada. Si quieres otra cita, puedes reservarla en su web."
             : justCancelled
-              ? `Hemos avisado a ${info.salonName}. Si quieres otra cita, puedes reservarla en su web o llamar al salón.`
+              ? `Hemos avisado a ${info.salonName}.${amount ? ` Te devolvemos ${amount} a la tarjeta con la que pagaste (puede tardar unos días en verse).` : ""} Si quieres otra cita, puedes reservarla en su web o llamar al salón.`
               : "No tienes que hacer nada más."}
         </p>
       </div>,
@@ -309,6 +296,7 @@ export default function CancelAppointmentPage() {
             : "Ya no se puede cancelar online: llama o escribe al salón."}
           {info.minCancelHours > 0 &&
             ` ${info.salonName} pide avisar con al menos ${info.minCancelHours} ${info.minCancelHours === 1 ? "hora" : "horas"} de antelación.`}
+          {paid && ` Como pagaste ${what}${amount ? ` (${amount})` : ""} online, la devolución la decide el salón.`}
         </p>
         {callSalon}
       </div>,
@@ -331,12 +319,21 @@ export default function CancelAppointmentPage() {
 
   return shell(
     <div data-test="cancel-ready" className="space-y-4">
-      <CalendarX className="w-10 h-10 text-gray-500 mx-auto" aria-hidden="true" />
-      <h1 className="text-xl font-semibold">¿Cancelar tu cita?</h1>
+      {paid && back === "ok" ? (
+        <Check className="w-12 h-12 text-green-600 mx-auto" aria-hidden="true" />
+      ) : (
+        <CalendarX className="w-10 h-10 text-gray-500 mx-auto" aria-hidden="true" />
+      )}
+      <h1 className="text-xl font-semibold">
+        {paid && back === "ok" ? "¡Pago recibido! Tu reserva está hecha" : "¿Cancelar tu cita?"}
+      </h1>
       {details}
       <p className="text-sm text-gray-600">
-        Si la cancelas, el hueco queda libre para otra persona y avisaremos a {info.salonName}. Para cambiarla
-        de día, cancélala y reserva otra, o llama al salón.
+        {paid
+          ? `Si la cancelas con tiempo, te devolvemos ${amount || "lo que has pagado"} automáticamente a la tarjeta con la que pagaste (puede tardar unos días en verse).`
+          : `Si la cancelas, el hueco queda libre para otra persona y avisaremos a ${info.salonName}.`}{" "}
+        Para cambiarla de día, cancélala y reserva otra, o llama al salón.
+        {paid && info.payment.kind === "deposit" ? " El resto lo pagas en el salón." : ""}
       </p>
       <button
         type="button"
