@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, CreditCard, ExternalLink, Loader2, RefreshCw } from "lucide-react";
-import apiClient, { ConnectStatus } from "@/lib/api";
+import apiClient, { ConnectStatus, ConnectSummary } from "@/lib/api";
+import { euros } from "@/lib/booking-payment";
 import { useTranslations } from "@/lib/use-translation";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -36,6 +37,12 @@ function CobrosOnlineContent() {
   const status = useQuery<ConnectStatus>({
     queryKey: ["connect", "status"],
     queryFn: () => apiClient.getConnectStatus(),
+  });
+
+  const summary = useQuery<ConnectSummary>({
+    queryKey: ["connect", "summary"],
+    queryFn: () => apiClient.getConnectSummary(30),
+    enabled: status.data?.state === "active",
   });
 
   async function openStripe() {
@@ -225,6 +232,39 @@ function CobrosOnlineContent() {
             </Link>
           </p>
           <p className="text-xs text-gray-500">{t("onlinePayments.services_note")}</p>
+        </div>
+      )}
+
+      {summary.data && (
+        <div data-test="online-summary" className="bg-white border border-gray-200 rounded-xl p-6 space-y-3">
+          <h2 className="font-semibold text-gray-900">Últimos {summary.data.days} días</h2>
+          {summary.data.payments === 0 ? (
+            <p className="text-sm text-gray-600">Todavía no has recibido pagos online.</p>
+          ) : (
+            <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="text-gray-500">Pagos recibidos</dt>
+                <dd className="font-semibold text-gray-900">{summary.data.payments} · {euros(summary.data.collectedCents)}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Devuelto</dt>
+                <dd className="font-semibold text-gray-900">{euros(summary.data.refundedCents)}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Te quedas</dt>
+                <dd className="font-semibold text-gray-900">{euros(summary.data.keptCents)}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Disputas</dt>
+                <dd className="font-semibold text-gray-900">
+                  {summary.data.disputes.open + summary.data.disputes.won + summary.data.disputes.lost === 0
+                    ? "Ninguna"
+                    : `${summary.data.disputes.open} abiertas · ${summary.data.disputes.lost} perdidas`}
+                </dd>
+              </div>
+            </dl>
+          )}
+          <p className="text-xs text-gray-500">Importes antes de las comisiones de Stripe. El detalle de cada cobro está en Pagos.</p>
         </div>
       )}
 

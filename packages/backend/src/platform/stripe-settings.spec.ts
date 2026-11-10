@@ -69,6 +69,9 @@ describe("what the admin pastes", () => {
 
   it("expects a secret key, a publishable key and a webhook secret, each in its field", () => {
     expect(secretKeyProblem(skTest)).toBeNull();
+    // A restricted key is accepted too (its permissions are the platform owner's to set).
+    expect(secretKeyProblem(k("rk", "live", "fictitious0123456789"))).toBeNull();
+    expect(secretKeyProblem(k("rk", "other", "fictitious0123456789"))).toMatch(/sk_test_/);
     expect(secretKeyProblem(pkTest)).toMatch(/sk_test_/);
     expect(publishableKeyProblem(pkLive)).toBeNull();
     expect(publishableKeyProblem(skLive)).toMatch(/pk_/);

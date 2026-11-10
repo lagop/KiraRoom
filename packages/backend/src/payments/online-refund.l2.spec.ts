@@ -326,3 +326,58 @@ describe('cancelling a booking that was paid online (L2, real database)', () => 
     expect(await bare.refundForCancellation({ id: apt.id, tenantId }, 'x')).toBeNull();
   });
 });
+
+describe("an unpaid held booking leaves no empty client behind (L2, real database)", () => {
+  const svc = () => new OnlineBookingPaymentService(db, undefined, undefined, undefined);
+  let n = 0;
+  async function held(client: { createdAt?: Date; source?: string | null; withOtherVisit?: boolean } = {}) {
+    const c = await db.client.create({
+      data: {
+        tenantId,
+        firstName: "Nueva",
+        lastName: "Clienta",
+        email: `unpaid-${run}-${++n}@example.test`,
+        ...(client.createdAt ? { createdAt: client.createdAt } : {}),
+        ...(client.source !== undefined ? { source: client.source } : {}),
+      },
+    });
+    const sessionId = `cs_l2_${run}_${n}`;
+    const apt = await db.appointment.create({
+      data: {
+        tenantId, clientId: c.id, serviceId, professionalId,
+        scheduledDate: new Date(Date.now() + 5 * 864e5), scheduledTime: "11:00", duration: 30, endTime: "11:30",
+        price: 60, totalAmount: 6000, status: "pending", depositPaid: false, onlinePaymentKind: "deposit",
+        paymentHoldUntil: new Date(Date.now() + 36 * 60_000), checkoutSessionId: sessionId,
+      },
+    });
+    if (client.withOtherVisit) {
+      await db.appointment.create({
+        data: {
+          tenantId, clientId: c.id, serviceId, professionalId,
+          scheduledDate: new Date(Date.now() + 9 * 864e5), scheduledTime: "12:00", duration: 30, endTime: "12:30",
+          price: 60, totalAmount: 6000, status: "confirmed",
+        },
+      });
+    }
+    return { c, apt, sessionId };
+  }
+
+  it("the client made with the booking goes when the hold expires unpaid, with the booking", async () => {
+    if (!reachable) return;
+    const { c, apt, sessionId } = await held();
+    const out = await svc().expire({ id: sessionId, metadata: { kind: "online_booking", appointmentId: apt.id, tenantId } } as any);
+    expect(out).toBe(true);
+    expect(await db.appointment.findUnique({ where: { id: apt.id } })).toBeNull();
+    expect(await db.client.findUnique({ where: { id: c.id } })).toBeNull();
+  });
+
+  it("a client who already had a visit, or was on file before, or came from an import, stays", async () => {
+    if (!reachable) return;
+    for (const variant of [{ withOtherVisit: true }, { createdAt: new Date(Date.now() - 864e5) }, { source: "import" }]) {
+      const { c, apt, sessionId } = await held(variant);
+      await svc().expire({ id: sessionId, metadata: { kind: "online_booking", appointmentId: apt.id, tenantId } } as any);
+      expect(await db.appointment.findUnique({ where: { id: apt.id } })).toBeNull();
+      expect(await db.client.findUnique({ where: { id: c.id } })).not.toBeNull();
+    }
+  });
+});

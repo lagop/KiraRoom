@@ -291,7 +291,7 @@ export default function PlatformStripePage() {
           label="Clave secreta"
           source={cfg.secretKey.source}
           current={cfg.secretKey.lastFour ? `…${cfg.secretKey.lastFour}` : null}
-          hint="Stripe → Desarrolladores → Claves de API. «sk_test_…» para pruebas, «sk_live_…» para cobrar de verdad. Se guarda cifrada y no se vuelve a mostrar."
+          hint="Stripe → Desarrolladores → Claves de API. «sk_test_…» para pruebas, «sk_live_…» para cobrar de verdad (también vale una clave restringida «rk_…» con permisos de Connect, Checkout y devoluciones). Se guarda cifrada y no se vuelve a mostrar."
         >
           <input
             type="password"

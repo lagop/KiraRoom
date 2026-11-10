@@ -6673,6 +6673,10 @@ class ApiClient implements ApiClientInterface {
   async getConnectStatus(): Promise<ConnectStatus> {
     return this.request(`/payments/connect/status`);
   }
+  /** What online booking brought in over the last days: taken, given back, disputed (cents). */
+  async getConnectSummary(days = 30): Promise<ConnectSummary> {
+    return this.request(`/payments/connect/summary?days=${days}`);
+  }
   async refreshConnectStatus(): Promise<ConnectStatus> {
     return this.request(`/payments/connect/refresh`, { method: "POST" });
   }
@@ -6844,6 +6848,15 @@ export interface ConnectSettings {
   depositExemptReturning: boolean;
   /** Hours before the appointment up to which a cancellation gets the señal back. */
   minCancelHours: number;
+}
+
+export interface ConnectSummary {
+  days: number;
+  payments: number;
+  collectedCents: number;
+  refundedCents: number;
+  keptCents: number;
+  disputes: { open: number; won: number; lost: number };
 }
 
 export interface ConnectStatus {

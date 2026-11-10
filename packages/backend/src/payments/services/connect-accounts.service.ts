@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { PaymentStatus } from '@prisma/client';
 import { appBaseUrl } from '../../common/app-base-url';
 import { PlatformStripeConfigService, redactStripe } from '../../platform/platform-stripe-config.service';
 import { livemodeOf } from '../../platform/stripe-settings';
@@ -76,6 +77,47 @@ export class ConnectAccountsService {
         depositExemptReturning: row.depositExemptReturning,
         minCancelHours: row.minCancelHours,
       },
+    };
+  }
+
+  /**
+   * What came in through online booking in the last `days` days: payments
+   * taken, what went back (cancellations, refunds from Stripe), and disputes.
+   * Cents. Read from KiraRoom's own records (no call to Stripe).
+   */
+  async summary(tenantId: string, days = 30) {
+    const span = Math.min(366, Math.max(1, Math.round(days) || 30));
+    const since = new Date(Date.now() - span * 864e5);
+    const rows = await this.prisma.payment.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: since },
+        status: { in: [PaymentStatus.paid, PaymentStatus.refunded] },
+        metadata: { path: ['online'], equals: true },
+      },
+      take: 5000,
+      select: { amount: true, metadata: true, refunds: { where: { status: 'succeeded' }, select: { amount: true } } },
+    });
+    let collectedCents = 0;
+    let refundedCents = 0;
+    const disputes = { open: 0, won: 0, lost: 0 };
+    for (const p of rows) {
+      collectedCents += p.amount;
+      refundedCents += p.refunds.reduce((sum, r) => sum + r.amount, 0);
+      const d = (p.metadata as { dispute?: { status?: string } } | null)?.dispute;
+      if (d) {
+        if (d.status === 'won') disputes.won++;
+        else if (d.status === 'lost') disputes.lost++;
+        else disputes.open++;
+      }
+    }
+    return {
+      days: span,
+      payments: rows.length,
+      collectedCents,
+      refundedCents,
+      keptCents: Math.max(0, collectedCents - refundedCents),
+      disputes,
     };
   }
 
