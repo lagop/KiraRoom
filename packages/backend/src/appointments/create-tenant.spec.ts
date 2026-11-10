@@ -162,6 +162,7 @@ function build({
         created.push(data);
         return { id: "apt-1", ...data };
       }),
+      update: jest.fn(async () => ({})),
     },
   };
   const stub = {} as any;
@@ -862,5 +863,61 @@ describe("booking at a location", () => {
     expect(validateSync(online).map((e) => e.property)).toContain("locationId");
     const staff = plainToInstance(StaffBookingDto, { ...BOOKING, clientInfo: undefined, clientId: SERVICE_ID, locationId: LOC_A });
     expect(validateSync(staff)).toEqual([]);
+  });
+});
+
+
+describe("online booking held for its payment (señal / pago anticipado)", () => {
+  const plan = { kind: "deposit" as const, cents: 500, totalCents: 2000, currency: "eur", serviceName: "Corte", accountId: "acct_1", livemode: false };
+  const withPlan = (opts: Parameters<typeof build>[0], chosen: { kind: "deposit" | "full"; cents: number; totalCents: number; currency: string; serviceName: string; accountId: string; livemode: boolean } | null) => {
+    const t = build(opts);
+    (t.service as any).consentAllowsConfirming = jest.fn(async () => true);
+    (t.service as any).onlinePayments = {
+      plan: jest.fn(async () => chosen),
+      createCheckout: jest.fn(async () => ({ checkoutUrl: "https://checkout.stripe.com/x", sessionId: "cs_1", holdUntil: new Date(Date.now() + 36 * 60_000) })),
+    };
+    return t;
+  };
+
+  it("is created pending whatever the salon's automatic confirmation, with the status it takes once paid", async () => {
+    const { service, created } = withPlan({ autoConfirmOnlineBookings: true }, plan);
+    await service.createOnline(BOOKING as any);
+    expect(created[0]).toMatchObject({ status: "pending", statusAfterPayment: "confirmed", onlinePaymentKind: "deposit" });
+    expect(created[0].paymentHoldUntil).toBeInstanceOf(Date);
+    expect(created[0].paymentHoldUntil.getTime()).toBeGreaterThan(Date.now() + 30 * 60_000);
+  });
+
+  it("a salon that approves bookings itself gets it pending after payment too", async () => {
+    const { service, created } = withPlan({ autoConfirmOnlineBookings: false }, plan);
+    await service.createOnline(BOOKING as any);
+    expect(created[0]).toMatchObject({ status: "pending", statusAfterPayment: "pending" });
+  });
+
+  it("a señal is recorded on the booking, in cents; paying all records no señal", async () => {
+    const deposit = withPlan({}, plan);
+    await deposit.service.createOnline(BOOKING as any);
+    expect(deposit.created[0]).toMatchObject({ depositRequired: true, depositAmount: 500 });
+
+    const full = withPlan({}, { ...plan, kind: "full", cents: 2000 });
+    await full.service.createOnline(BOOKING as any);
+    expect(full.created[0]).toMatchObject({ onlinePaymentKind: "full" });
+    expect(full.created[0]).not.toHaveProperty("depositRequired");
+  });
+
+  it("a booking that needs no payment carries no hold fields at all", async () => {
+    const { service, created } = withPlan({ autoConfirmOnlineBookings: true }, null);
+    await service.createOnline(BOOKING as any);
+    expect(created[0]).toMatchObject({ status: "confirmed" });
+    for (const field of ["paymentHoldUntil", "statusAfterPayment", "onlinePaymentKind", "checkoutSessionId"]) {
+      expect(created[0]).not.toHaveProperty(field);
+    }
+  });
+
+  it("holds the slot: a second client cannot take it while the first one pays", async () => {
+    const { service, created } = withPlan({ freeTimes: { [PRO.id]: ["10:00"], [PRO_2.id]: ["10:00"] } }, plan);
+    await service.createOnline(BOOKING as any);
+    expect(created).toHaveLength(1);
+    // The held row is a real appointment row: availability reads it like any other.
+    expect(created[0].status).toBe("pending");
   });
 });

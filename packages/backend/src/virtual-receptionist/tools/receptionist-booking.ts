@@ -483,8 +483,23 @@ export async function confirmAppointment(ctx: SalonToolContext): Promise<Record<
     await writeState(ctx, state, linkTo);
     // No appointmentId: the model showed the UUID to clients as a
     // "referencia". The id stays in the conversation state.
+    // The salon takes payment to book: the slot is held (30 minutes) and the
+    // booking is only real once she pays at this link. Say so, give her the
+    // link, and never say it is booked or that an email was sent.
+    const pay = appointment.payment?.required === true ? appointment.payment : null;
     return {
       created: true,
+      ...(pay
+        ? {
+            paymentRequired: true,
+            paymentUrl: pay.checkoutUrl,
+            paymentAmountEuros: pay.amountCents / 100,
+            paymentKind: pay.kind,
+            paymentHoldMinutes: 30,
+            paymentNote:
+              'NOT booked yet: the slot is held for 30 minutes. She must pay at paymentUrl to confirm it; give her the link and the amount. If she does not pay in time the slot is released.',
+          }
+        : {}),
       // Only true when the provider accepted the email. Say "te hemos
       // enviado un email" only then.
       confirmationEmailSent: appointment.confirmationEmailSent === true,

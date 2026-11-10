@@ -4,6 +4,9 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 import { connectFieldsFromAccount } from './stripe-connect';
 
+/** Whoever handles the payment events of the salons' connected accounts (set by the appointments module). */
+export type ConnectPaymentHandler = (event: Stripe.Event) => Promise<void>;
+
 export type ConnectEventResult = { received: true; duplicate?: true; ignored?: 'other_mode' | 'unhandled' | 'unknown_account' };
 
 /**
@@ -25,10 +28,21 @@ export type ConnectEventResult = { received: true; duplicate?: true; ignored?: '
 export class ConnectEventsService {
   private readonly logger = new Logger(ConnectEventsService.name);
 
+  private paymentHandler: ConnectPaymentHandler | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly platformStripe: PlatformStripeConfigService,
   ) {}
+
+  /**
+   * The appointments module registers itself here for the Checkout events of
+   * online bookings. Done this way round so the payments module does not
+   * depend on appointments (they already reach payments through other modules).
+   */
+  registerPaymentHandler(handler: ConnectPaymentHandler) {
+    this.paymentHandler = handler;
+  }
 
   async handle(event: Stripe.Event): Promise<ConnectEventResult> {
     // An event of the other Stripe mode than the keys in force is not applied
@@ -96,6 +110,12 @@ export class ConnectEventsService {
           },
         });
         this.logger.log(`Salon ${tenant.id} disconnected its Stripe account from KiraRoom`);
+        return { received: true };
+      }
+      case 'checkout.session.completed':
+      case 'checkout.session.expired': {
+        if (!this.paymentHandler) return { received: true, ignored: 'unhandled' };
+        await this.paymentHandler(event);
         return { received: true };
       }
       default:

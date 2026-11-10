@@ -134,6 +134,16 @@ class BookingSlotDto {
 /** POST /appointments: the public site, the widget, the client portal. */
 export class OnlineBookingDto extends BookingSlotDto {
   /**
+   * What she chooses to pay when the salon takes online payments: the señal
+   * or the whole service. The salon's rules decide what is allowed; this
+   * only picks between what they allow.
+   */
+  @ApiPropertyOptional({ enum: ['deposit', 'full'] })
+  @IsOptional()
+  @IsIn(['deposit', 'full'])
+  payment?: 'deposit' | 'full';
+
+  /**
    * Empty or absent means "any professional", which only the widget offers:
    * it then needs widgetInstanceId, which says which salon.
    */

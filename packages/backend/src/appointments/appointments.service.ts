@@ -105,6 +105,8 @@ import type { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payme
 import { appointmentTotalCents, assertVisitChargeable } from "../payments/appointment-payment";
 import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
+import type Stripe from "stripe";
+import { HOLD_MINUTES, OnlineBookingPaymentService } from "./online-booking-payment.service";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
@@ -182,7 +184,7 @@ export const CLIENT_LINK_CANCEL_REASON = "Cancelada por el cliente desde el enla
 /** What the public "Cancelar mi cita" page shows. */
 export interface CancelLinkInfo {
   /** cancellable; too_late (inside minCancelHours: call the salon); cancelled; closed (past, done, no-show). */
-  state: "cancellable" | "too_late" | "cancelled" | "closed";
+  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment" | "paid_online";
   canCancel: boolean;
   status: string;
   salonName: string;
@@ -195,6 +197,14 @@ export interface CancelLinkInfo {
   /** HH:mm, the salon's clock. */
   time: string;
   minCancelHours: number;
+  /** Online payment at booking: held while she pays, paid, or none. */
+  payment: {
+    state: "none" | "awaiting" | "paid";
+    kind: "deposit" | "full" | null;
+    amountCents: number | null;
+    /** ISO instant; only while awaiting. */
+    holdUntil: string | null;
+  };
 }
 
 export interface StatusChangeOptions {
@@ -303,6 +313,8 @@ export class AppointmentsService {
     @Optional() private readonly featureFlags?: FeatureFlagService,
     // The owner's and admins' emails on online bookings and self-cancellations (audit 7 D12).
     @Optional() private readonly salonAlerts?: SalonBookingAlertsService,
+    // Online payment when booking (señal / pago anticipado) on the salon's own Stripe account.
+    @Optional() private readonly onlinePayments?: OnlineBookingPaymentService,
   ) {}
 
   /**
@@ -503,6 +515,9 @@ export class AppointmentsService {
       );
     }
 
+    // Whether she has to pay to book (the salon's rules, her history, her choice).
+    const plan = (await this.onlinePayments?.plan(tenantId, dto)) ?? null;
+
     const date = new Date(scheduledDay);
     // At one of the salon's locations: only who works there (multi-local).
     const locationId = dto.locationId || undefined;
@@ -539,6 +554,9 @@ export class AppointmentsService {
           onClientCreated: () => {
             clientCreatedHere = true;
           },
+          ...(plan && {
+            hold: { until: new Date(Date.now() + HOLD_MINUTES * 60_000), kind: plan.kind, cents: plan.cents },
+          }),
         });
       },
       { timeout: 15_000 },
@@ -562,6 +580,36 @@ export class AppointmentsService {
           wantsWhatsAppPromotions: clientCreatedHere ? dto.wantsWhatsAppPromotions : false,
         })
         .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
+    }
+
+    // She has to pay to book: the payment page on the salon's account, and
+    // nothing is sent until it is paid (completeOnlinePayment). If the page
+    // cannot be made, the held booking goes: she is told to try again.
+    if (plan) {
+      try {
+        const checkout = await this.onlinePayments!.createCheckout(appointment as any, plan);
+        await this.prisma.appointment.update({
+          where: { id: appointment.id },
+          data: { checkoutSessionId: checkout.sessionId, paymentHoldUntil: checkout.holdUntil },
+        });
+        return Object.assign(appointment, {
+          confirmationEmailSent: false,
+          confirmationSmsSent: false,
+          payment: {
+            required: true as const,
+            kind: plan.kind,
+            amountCents: plan.cents,
+            currency: plan.currency,
+            checkoutUrl: checkout.checkoutUrl,
+            holdUntil: checkout.holdUntil.toISOString(),
+          },
+        });
+      } catch (err) {
+        await deleteAppointmentRow(this.prisma, appointment.id).catch((e) =>
+          this.logger.error(`Held booking ${appointment.id} not released: ${(e as Error).message}`),
+        );
+        throw err;
+      }
     }
 
     // From outside the salon: its SMS count against the daily caps
@@ -876,6 +924,11 @@ export class AppointmentsService {
       onClientCreated?: () => void;
       /** A deposit the salon asked for (owner/admin only), in cents. */
       deposit?: { amountCents: number };
+      /**
+       * The booking is held while the client pays online: pending, with the
+       * status it takes once paid. Nothing is sent to anyone until it is.
+       */
+      hold?: { until: Date; kind: "deposit" | "full"; cents: number };
     } = {},
   ) {
     const db = visit.db ?? this.prisma;
@@ -1026,7 +1079,17 @@ export class AppointmentsService {
         ),
         duration,
         endTime: endTime,
-        status: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
+        status: visit.hold
+          ? AppointmentStatus.pending
+          : autoConfirm
+            ? AppointmentStatus.confirmed
+            : AppointmentStatus.pending,
+        ...(visit.hold && {
+          statusAfterPayment: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
+          paymentHoldUntil: visit.hold.until,
+          onlinePaymentKind: visit.hold.kind,
+          ...(visit.hold.kind === "deposit" && { depositRequired: true, depositAmount: visit.hold.cents }),
+        }),
         price: priceCents / 100,
         totalAmount: priceCents, // Store in cents
         currency: service.currency,
@@ -1077,6 +1140,35 @@ export class AppointmentsService {
       });
     }
     return appointment;
+  }
+
+  /**
+   * Stripe's notices about online bookings (Checkout paid / expired), from the
+   * connected-accounts webhook. A paid one makes the held booking real and
+   * sends what a booking sends; an expired one frees the slot.
+   */
+  async handleOnlinePaymentEvent(event: Stripe.Event): Promise<void> {
+    if (!this.onlinePayments) return;
+    const session = event.data.object as Stripe.Checkout.Session;
+    if (event.type === "checkout.session.expired") {
+      await this.onlinePayments.expire(session);
+      return;
+    }
+    const out = await this.onlinePayments.complete(session, event.account);
+    if (out.result === "paid") await this.finishPaidBooking(out.appointmentId, out.tenantId);
+  }
+
+  /** What a booking sends when it is created, for one that waited for its payment. */
+  async finishPaidBooking(appointmentId: string, tenantId: string): Promise<void> {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId },
+      include: { client: true, professional: true, service: true, tenant: true },
+    });
+    if (!appointment) return;
+    await this.afterAppointmentCreated(appointment, appointment.source ?? undefined, { publicBooking: true }).catch((err) =>
+      this.logger.error(`Notices of paid booking ${appointmentId} failed: ${(err as Error).message}`),
+    );
+    void this.salonAlerts?.notify("booked", appointment.id);
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
@@ -2063,6 +2155,14 @@ export class AppointmentsService {
     if (!found) return null;
     const info = this.cancelLinkInfo(found, now);
     if (!info.canCancel) return info;
+    // Still held for payment: letting go is not a cancellation (nothing was
+    // ever announced); the page is closed, the slot freed, nobody is told.
+    if (info.state === "awaiting_payment") {
+      const released = (await this.onlinePayments?.releaseByClient(found)) ?? false;
+      return released
+        ? { ...info, state: "cancelled", canCancel: false, status: AppointmentStatus.cancelled, payment: { ...info.payment, state: "none", holdUntil: null } }
+        : ((await this.describeCancelLink(token, now)) ?? info);
+    }
     const actor = { role: "system", tenantId: found.tenantId, via: "client_cancel_link" };
     try {
       await this.changeStatus(actor, found.id, AppointmentStatus.cancelled, {
@@ -2077,6 +2177,18 @@ export class AppointmentsService {
     }
     const after = await this.appointmentForCancelLink(token);
     return after ? this.cancelLinkInfo(after, now) : info;
+  }
+
+  /**
+   * The payment page of a booking still held for its payment, to open it
+   * again. Null when it can no longer be paid (the time ran out, or it was
+   * paid), or the token is not ours.
+   */
+  async payAgainFromLink(token: string): Promise<{ checkoutUrl: string } | null> {
+    const found = await this.appointmentForCancelLink(token);
+    if (!found || !found.paymentHoldUntil || found.depositPaid || !this.onlinePayments) return null;
+    const checkoutUrl = await this.onlinePayments.reopenCheckoutUrl(found);
+    return checkoutUrl ? { checkoutUrl } : null;
   }
 
   private async appointmentForCancelLink(token: string): Promise<any | null> {
@@ -2102,17 +2214,36 @@ export class AppointmentsService {
     const startsAt = salonInstant(day, time || "00:00", tz);
     const minCancelHours = Math.max(0, Number(appointment.tenant?.minCancelHours) || 0);
     const live = LIVE_APPOINTMENT_STATUSES.includes(appointment.status);
-    const state: CancelLinkInfo["state"] =
-      appointment.status === AppointmentStatus.cancelled
+    // Held while she pays online: not a booking yet, so she can pay or let go.
+    const held = !!appointment.paymentHoldUntil && !appointment.depositPaid && !!appointment.checkoutSessionId;
+    const payKind: "deposit" | "full" | null =
+      appointment.onlinePaymentKind === "full" ? "full" : appointment.onlinePaymentKind === "deposit" ? "deposit" : null;
+    const payment: CancelLinkInfo["payment"] = {
+      state: held ? "awaiting" : payKind ? "paid" : "none",
+      kind: payKind,
+      amountCents:
+        payKind === "deposit"
+          ? Math.round(Number(appointment.depositAmount ?? 0))
+          : payKind === "full"
+            ? Math.round(Number(appointment.totalAmount ?? 0))
+            : null,
+      holdUntil: held ? new Date(appointment.paymentHoldUntil).toISOString() : null,
+    };
+    const base: CancelLinkInfo["state"] = held
+      ? "awaiting_payment"
+      : appointment.status === AppointmentStatus.cancelled
         ? "cancelled"
         : !live || startsAt.getTime() <= now.getTime()
           ? "closed"
           : startsAt.getTime() - now.getTime() < minCancelHours * 3_600_000
             ? "too_late"
             : "cancellable";
+    // Paid online: cancelling it means deciding about her money (the salon's
+    // refund policy), which the link does not do. She is sent to the salon.
+    const state: CancelLinkInfo["state"] = base === "cancellable" && payment.state === "paid" ? "paid_online" : base;
     return {
       state,
-      canCancel: state === "cancellable",
+      canCancel: state === "cancellable" || state === "awaiting_payment",
       status: appointment.status,
       salonName: appointment.tenant?.name || "el salón",
       salonPhone: (appointment.tenant?.phone ?? "").trim() || null,
@@ -2122,6 +2253,7 @@ export class AppointmentsService {
       date: day,
       time,
       minCancelHours,
+      payment,
     };
   }
 

@@ -4,13 +4,8 @@ import { deleteServiceKeepingHistory } from '../common/prisma/history-deletes';
 import { CreateServiceDto, UpdateServiceDto } from './dto';
 import { publicPrice, publicPriceSettings, PublicPriceSettings } from '../common/public-price';
 import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
-import { livemodeOf } from '../platform/stripe-settings';
-import { ConnectTenantRow, connectStatusOf } from '../payments/services/stripe-connect';
-import {
-  OnlinePaymentContext,
-  onlinePaymentOffer,
-  onlinePaymentSettingsProblem,
-} from '../payments/online-payment-policy';
+import { onlinePaymentSettingsProblem } from '../payments/online-payment-policy';
+import { onlinePaymentContextFor, withOnlinePayment } from '../payments/online-payment-context';
 
 /** By category, then by name: the order the panel and the pickers list them. */
 const SERVICE_ORDER = [{ category: 'asc' as const }, { name: 'asc' as const }];
@@ -36,36 +31,6 @@ export const PUBLIC_SERVICE_SELECT = {
   depositPercentage: true,
   allowPrepay: true,
 } as const;
-
-/**
- * The public projection of a service with what she may pay online now
- * (`onlinePayment`), instead of the salon's raw deposit settings. The señal
- * exemption of a returning client is decided at booking, once she is known.
- */
-function withOnlinePayment<
-  T extends {
-    price: number;
-    depositRequired: boolean | null;
-    depositAmount: unknown;
-    depositPercentage: unknown;
-    allowPrepay: boolean | null;
-  },
->(service: T, ctx: OnlinePaymentContext) {
-  const { depositRequired, depositAmount, depositPercentage, allowPrepay, ...rest } = service;
-  return {
-    ...rest,
-    onlinePayment: onlinePaymentOffer(
-      {
-        priceEuros: service.price,
-        depositRequired,
-        depositAmount: depositAmount as number | string | null,
-        depositPercentage: depositPercentage as number | string | null,
-        allowPrepay,
-      },
-      ctx,
-    ),
-  };
-}
 
 /**
  * The public projection with the price a client pays: tax included, as a
@@ -196,29 +161,8 @@ export class ServicesService {
     return withOnlinePayment(withPublicPrice(service, prices), payment);
   }
 
-  /**
-   * Whether this salon can take online payments now: its connected Stripe
-   * account can charge, in the Stripe mode of the platform's keys in force.
-   * Without keys, or with an account of the other mode, it cannot.
-   */
-  private async onlinePaymentContext(tenantId: string): Promise<OnlinePaymentContext> {
-    const platform = this.platformStripe;
-    if (!platform || !platform.client()) return { canCharge: false };
-    const row = await this.prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: {
-        stripeConnectAccountId: true,
-        stripeConnectLivemode: true,
-        stripeConnectChargesEnabled: true,
-        stripeConnectPayoutsEnabled: true,
-        stripeConnectDetailsSubmitted: true,
-        stripeConnectRequirementsDue: true,
-        stripeConnectDisabledReason: true,
-        stripeConnectCheckedAt: true,
-      },
-    });
-    if (!row) return { canCharge: false };
-    return { canCharge: connectStatusOf(row as ConnectTenantRow, livemodeOf(platform.mode())).canCharge };
+  private onlinePaymentContext(tenantId: string) {
+    return onlinePaymentContextFor(this.prisma, this.platformStripe, tenantId);
   }
 
   /** How this salon's catalogue prices become what clients pay (common/public-price.ts). */
