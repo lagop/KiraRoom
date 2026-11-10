@@ -1,8 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { deleteServiceKeepingHistory } from '../common/prisma/history-deletes';
 import { CreateServiceDto, UpdateServiceDto } from './dto';
 import { publicPrice, publicPriceSettings, PublicPriceSettings } from '../common/public-price';
+import { PlatformStripeConfigService } from '../platform/platform-stripe-config.service';
+import { livemodeOf } from '../platform/stripe-settings';
+import { ConnectTenantRow, connectStatusOf } from '../payments/services/stripe-connect';
+import {
+  OnlinePaymentContext,
+  onlinePaymentOffer,
+  onlinePaymentSettingsProblem,
+} from '../payments/online-payment-policy';
 
 /** By category, then by name: the order the panel and the pickers list them. */
 const SERVICE_ORDER = [{ category: 'asc' as const }, { name: 'asc' as const }];
@@ -22,7 +30,42 @@ export const PUBLIC_SERVICE_SELECT = {
   currency: true,
   isActive: true,
   isOnlineBookable: true,
+  // Not shown as such: turned into `onlinePayment` (what the client may pay now).
+  depositRequired: true,
+  depositAmount: true,
+  depositPercentage: true,
+  allowPrepay: true,
 } as const;
+
+/**
+ * The public projection of a service with what she may pay online now
+ * (`onlinePayment`), instead of the salon's raw deposit settings. The señal
+ * exemption of a returning client is decided at booking, once she is known.
+ */
+function withOnlinePayment<
+  T extends {
+    price: number;
+    depositRequired: boolean | null;
+    depositAmount: unknown;
+    depositPercentage: unknown;
+    allowPrepay: boolean | null;
+  },
+>(service: T, ctx: OnlinePaymentContext) {
+  const { depositRequired, depositAmount, depositPercentage, allowPrepay, ...rest } = service;
+  return {
+    ...rest,
+    onlinePayment: onlinePaymentOffer(
+      {
+        priceEuros: service.price,
+        depositRequired,
+        depositAmount: depositAmount as number | string | null,
+        depositPercentage: depositPercentage as number | string | null,
+        allowPrepay,
+      },
+      ctx,
+    ),
+  };
+}
 
 /**
  * The public projection with the price a client pays: tax included, as a
@@ -38,11 +81,38 @@ function withPublicPrice<T extends { price: unknown }>(
   return { ...service, price: publicPrice(service.price, prices), taxLabel: prices.taxLabel };
 }
 
+/** The deposit settings as stored, whatever shape the caller or the row holds them in. */
+type DepositSettings = {
+  price?: unknown;
+  depositRequired?: boolean | null;
+  depositAmount?: unknown;
+  depositPercentage?: unknown;
+  allowPrepay?: boolean | null;
+};
+
 @Injectable()
 export class ServicesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Whether the platform's Stripe keys are set, and their mode: a salon's
+    // connected account only counts for the mode it was created in.
+    @Optional() private readonly platformStripe?: PlatformStripeConfigService,
+  ) {}
+
+  /** 400 with the reason when a service's online-payment settings make no sense. */
+  private assertPaymentSettings(s: DepositSettings) {
+    const problem = onlinePaymentSettingsProblem({
+      price: Number(s.price ?? 0),
+      depositRequired: s.depositRequired,
+      depositAmount: s.depositAmount as number | string | null | undefined,
+      depositPercentage: s.depositPercentage as number | string | null | undefined,
+      allowPrepay: s.allowPrepay,
+    });
+    if (problem) throw new BadRequestException(problem);
+  }
 
   async create(tenantId: string, createServiceDto: CreateServiceDto) {
+    this.assertPaymentSettings(createServiceDto);
     // `??`, not `||`: with `||` an explicit false fell through to the
     // default, so a service could never be created inactive or offline-only.
     return this.prisma.service.create({
@@ -65,6 +135,7 @@ export class ServicesService {
         depositRequired: createServiceDto.depositRequired ?? false,
         depositAmount: createServiceDto.depositAmount,
         depositPercentage: createServiceDto.depositPercentage,
+        allowPrepay: createServiceDto.allowPrepay ?? false,
       },
     });
   }
@@ -72,20 +143,21 @@ export class ServicesService {
   /**
    * The salon's catalogue. Its own staff get every service, active or not,
    * in full; anyone else (the client portal, an anonymous caller) only what
-   * can be booked online, in the public projection: no deposit settings, no
-   * internal lists (staff, equipment, products...). See PublicViewerService.
+   * can be booked online, in the public projection: what she may pay online
+   * (not the deposit settings themselves), no internal lists (staff, equipment, products...). See PublicViewerService.
    */
   async findAll(tenantId: string, viewer: { staff: boolean } = { staff: true }) {
     if (!viewer.staff) {
-      const [services, prices] = await Promise.all([
+      const [services, prices, payment] = await Promise.all([
         this.prisma.service.findMany({
           where: { tenantId, ...PUBLIC_SERVICE_WHERE },
           select: PUBLIC_SERVICE_SELECT,
           orderBy: SERVICE_ORDER,
         }),
         this.publicPrices(tenantId),
+        this.onlinePaymentContext(tenantId),
       ]);
-      return services.map((s) => withPublicPrice(s, prices));
+      return services.map((s) => withOnlinePayment(withPublicPrice(s, prices), payment));
     }
     return this.prisma.service.findMany({
       where: { tenantId },
@@ -108,19 +180,45 @@ export class ServicesService {
 
   /** findOne for someone outside the salon, by findAll's public rules. */
   async findPublicOne(tenantId: string, id: string) {
-    const [service, prices] = await Promise.all([
+    const [service, prices, payment] = await Promise.all([
       this.prisma.service.findFirst({
         where: { id, tenantId, ...PUBLIC_SERVICE_WHERE },
         select: PUBLIC_SERVICE_SELECT,
       }),
       this.publicPrices(tenantId),
+      this.onlinePaymentContext(tenantId),
     ]);
 
     if (!service) {
       throw new NotFoundException(`Service with ID ${id} not found`);
     }
 
-    return withPublicPrice(service, prices);
+    return withOnlinePayment(withPublicPrice(service, prices), payment);
+  }
+
+  /**
+   * Whether this salon can take online payments now: its connected Stripe
+   * account can charge, in the Stripe mode of the platform's keys in force.
+   * Without keys, or with an account of the other mode, it cannot.
+   */
+  private async onlinePaymentContext(tenantId: string): Promise<OnlinePaymentContext> {
+    const platform = this.platformStripe;
+    if (!platform || !platform.client()) return { canCharge: false };
+    const row = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        stripeConnectAccountId: true,
+        stripeConnectLivemode: true,
+        stripeConnectChargesEnabled: true,
+        stripeConnectPayoutsEnabled: true,
+        stripeConnectDetailsSubmitted: true,
+        stripeConnectRequirementsDue: true,
+        stripeConnectDisabledReason: true,
+        stripeConnectCheckedAt: true,
+      },
+    });
+    if (!row) return { canCharge: false };
+    return { canCharge: connectStatusOf(row as ConnectTenantRow, livemodeOf(platform.mode())).canCharge };
   }
 
   /** How this salon's catalogue prices become what clients pay (common/public-price.ts). */
@@ -134,7 +232,17 @@ export class ServicesService {
 
   async update(tenantId: string, id: string, updateServiceDto: UpdateServiceDto) {
     // Another salon's service is a 404, never an edit.
-    await this.findOne(tenantId, id);
+    const existing = await this.findOne(tenantId, id);
+    // The settings as they will be once saved: what was sent over what is stored.
+    const sent = <K extends keyof DepositSettings>(key: K) =>
+      (updateServiceDto as DepositSettings)[key] !== undefined ? (updateServiceDto as DepositSettings)[key] : (existing as DepositSettings)[key];
+    this.assertPaymentSettings({
+      price: sent('price'),
+      depositRequired: sent('depositRequired') as boolean | null,
+      depositAmount: sent('depositAmount'),
+      depositPercentage: sent('depositPercentage'),
+      allowPrepay: sent('allowPrepay') as boolean | null,
+    });
 
     return this.prisma.service.update({
       where: { id, tenantId },
@@ -155,6 +263,7 @@ export class ServicesService {
         depositRequired: updateServiceDto.depositRequired,
         depositAmount: updateServiceDto.depositAmount,
         depositPercentage: updateServiceDto.depositPercentage,
+        allowPrepay: updateServiceDto.allowPrepay,
       },
     });
   }

@@ -27,7 +27,17 @@ const SELECT = {
   stripeConnectRequirementsDue: true,
   stripeConnectDisabledReason: true,
   stripeConnectCheckedAt: true,
+  depositExemptReturning: true,
+  minCancelHours: true,
 } as const;
+
+/** The salon's own rules for online payments, shown beside the status. */
+export interface ConnectSettings {
+  /** A client with a completed visit is not asked for the señal. */
+  depositExemptReturning: boolean;
+  /** Hours before the appointment up to which a cancellation gets the señal back. */
+  minCancelHours: number;
+}
 
 /**
  * The salon's own Stripe account for online payments, connected through
@@ -56,14 +66,32 @@ export class ConnectAccountsService {
   }
 
   /** What the panel shows, from what is stored (no call to Stripe). */
-  async status(tenantId: string): Promise<ConnectStatus & { platformReady: boolean }> {
+  async status(tenantId: string): Promise<ConnectStatus & { platformReady: boolean; settings: ConnectSettings }> {
     const row = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: SELECT });
     if (!row) throw new BadRequestException('Salón no encontrado.');
-    return { ...connectStatusOf(row, this.platformLivemode()), platformReady: !!this.platformStripe.client() };
+    return {
+      ...connectStatusOf(row, this.platformLivemode()),
+      platformReady: !!this.platformStripe.client(),
+      settings: {
+        depositExemptReturning: row.depositExemptReturning,
+        minCancelHours: row.minCancelHours,
+      },
+    };
+  }
+
+  /** The salon's rules for online payments. Only what is sent changes. */
+  async updateSettings(tenantId: string, input: { depositExemptReturning?: boolean }) {
+    if (typeof input.depositExemptReturning === 'boolean') {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: { depositExemptReturning: input.depositExemptReturning },
+      });
+    }
+    return this.status(tenantId);
   }
 
   /** Asks Stripe for the account's current state, saves it and returns it. */
-  async refresh(tenantId: string): Promise<ConnectStatus & { platformReady: boolean }> {
+  async refresh(tenantId: string): Promise<ConnectStatus & { platformReady: boolean; settings: ConnectSettings }> {
     const row = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: SELECT });
     if (!row) throw new BadRequestException('Salón no encontrado.');
     const stripe = this.requireStripe();

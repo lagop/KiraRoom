@@ -119,6 +119,11 @@ export class CreateServiceDto {
   @IsOptional()
   depositAmount?: number;
 
+  @ApiProperty({ description: 'The client may pay the whole service in advance when she books', required: false })
+  @IsBoolean()
+  @IsOptional()
+  allowPrepay?: boolean;
+
   @ApiProperty({ description: 'Deposit percentage (of total price)', required: false })
   @Transform(numberFromText)
   @IsNumber({}, { message: 'El porcentaje de señal no es válido' })

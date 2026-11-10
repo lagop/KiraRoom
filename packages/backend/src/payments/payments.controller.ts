@@ -19,6 +19,7 @@ import { SubscriptionsService } from "./services/subscriptions.service";
 import { WalletService } from "./services/wallet.service";
 import { StripeService } from "./services/stripe.service";
 import { ConnectAccountsService } from "./services/connect-accounts.service";
+import { UpdateConnectSettingsDto } from "./dto/connect-settings.dto";
 import { ProfessionalsService } from "../professionals/professionals.service";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -590,6 +591,15 @@ export class PaymentsController {
   @ApiOperation({ summary: "Refresh the connected account's status from Stripe" })
   async connectRefresh(@Req() req: any) {
     return this.connectAccounts.refresh(req.user.tenantId);
+  }
+
+  /** The salon's rules for online payments (who is exempt from the señal). */
+  @NotDuringSupport()
+  @Patch("connect/settings")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Update the salon's rules for online payments" })
+  async updateConnectSettings(@Req() req: any, @Body() dto: UpdateConnectSettingsDto) {
+    return this.connectAccounts.updateSettings(req.user.tenantId, dto);
   }
 
   /** Creates the account if needed and returns the link to Stripe's own sign-up form. */

@@ -54,6 +54,9 @@ model Tenant {
   assistantName          String             @default("Kira")
   cancellationPolicy     String?
   minCancelHours         Int                @default(24)
+  /// Online señal: a client who already has a completed visit is not asked
+  /// for it (she is recognised by her email and phone together).
+  depositExemptReturning Boolean            @default(true)
   openingHours           Json               @default("{}")
   /// Minutes between the start times offered when booking (site, widget,
   /// receptionist, the panel's suggestions): 10, 15, 20, 30 or 60.
@@ -757,6 +760,9 @@ model Service {
   depositRequired     Boolean               @default(false)
   depositAmount       Decimal?
   depositPercentage   Decimal?
+  /// Online payments: the client may pay the whole service in advance when
+  /// she books (alone, or on top of a required señal above).
+  allowPrepay         Boolean               @default(false)
   images              Json                  @default("[]")
   prerequisites       Json                  @default("[]")
   staff               Json                  @default("[]")

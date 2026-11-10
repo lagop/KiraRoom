@@ -41,6 +41,12 @@ export interface ServiceFormState {
   minAdvanceBooking: string;
   /** Days ahead an online booking may be made, as typed. */
   maxAdvanceBooking: string;
+  /** What the client pays to book: nothing, a fixed señal, or a percentage of the price. */
+  paymentKind: "none" | "fixed" | "percent";
+  /** The señal as typed: euros for "fixed", 1 to 100 for "percent". */
+  depositValue: string;
+  /** The client may pay the whole service in advance. */
+  allowPrepay: boolean;
 }
 
 export interface ServicePayload {
@@ -56,6 +62,10 @@ export interface ServicePayload {
   requiresApproval: boolean;
   minAdvanceBooking: number;
   maxAdvanceBooking: number;
+  depositRequired: boolean;
+  depositAmount: number | null;
+  depositPercentage: number | null;
+  allowPrepay: boolean;
 }
 
 /** What a field failed on: a key under `services.` in messages/*.json. */
@@ -65,7 +75,13 @@ export type ServiceFormError =
   | "price_invalid"
   | "buffer_invalid"
   | "min_advance_invalid"
-  | "max_advance_invalid";
+  | "max_advance_invalid"
+  | "deposit_invalid"
+  | "deposit_above_price"
+  | "online_price_low";
+
+/** Stripe does not charge under 0,50 EUR: a service cheaper than that cannot ask for money online. */
+export const MIN_ONLINE_CHARGE_EUROS = 0.5;
 
 /** A new service: the backend's own defaults (services.service.ts). */
 export const EMPTY_SERVICE_FORM: ServiceFormState = {
@@ -80,6 +96,9 @@ export const EMPTY_SERVICE_FORM: ServiceFormState = {
   requiresApproval: false,
   minAdvanceBooking: "2",
   maxAdvanceBooking: "30",
+  paymentKind: "none",
+  depositValue: "",
+  allowPrepay: false,
 };
 
 type ApiService = {
@@ -94,7 +113,21 @@ type ApiService = {
   requiresApproval?: boolean;
   minAdvanceBooking?: number | null;
   maxAdvanceBooking?: number | null;
+  depositRequired?: boolean | null;
+  depositAmount?: number | string | null;
+  depositPercentage?: number | string | null;
+  allowPrepay?: boolean | null;
 };
+
+/** The señal a stored service asks for, as the form shows it. */
+function depositToForm(service: ApiService): Pick<ServiceFormState, "paymentKind" | "depositValue"> {
+  if (!service.depositRequired) return { paymentKind: "none", depositValue: "" };
+  const fixed = Number(service.depositAmount);
+  if (Number.isFinite(fixed) && fixed > 0) return { paymentKind: "fixed", depositValue: String(fixed) };
+  const percent = Number(service.depositPercentage);
+  if (Number.isFinite(percent) && percent > 0) return { paymentKind: "percent", depositValue: String(percent) };
+  return { paymentKind: "none", depositValue: "" };
+}
 
 /** A service from the API, into the form. */
 export function serviceToForm(service: ApiService): ServiceFormState {
@@ -112,6 +145,8 @@ export function serviceToForm(service: ApiService): ServiceFormState {
     requiresApproval: service.requiresApproval ?? false,
     minAdvanceBooking: String(service.minAdvanceBooking ?? EMPTY_SERVICE_FORM.minAdvanceBooking),
     maxAdvanceBooking: String(service.maxAdvanceBooking ?? EMPTY_SERVICE_FORM.maxAdvanceBooking),
+    ...depositToForm(service),
+    allowPrepay: service.allowPrepay ?? false,
   };
 }
 
@@ -158,6 +193,23 @@ export function formToPayload(
     return { ok: false, error: "max_advance_invalid" };
   }
 
+  // What she pays to book. Only when the service can be booked online does it matter.
+  let depositAmount: number | null = null;
+  let depositPercentage: number | null = null;
+  if (form.paymentKind === "fixed") {
+    const euros = parseEuros(form.depositValue);
+    if (euros === null || euros <= 0) return { ok: false, error: "deposit_invalid" };
+    if (euros > price) return { ok: false, error: "deposit_above_price" };
+    depositAmount = euros;
+  } else if (form.paymentKind === "percent") {
+    const percent = wholeNumber(form.depositValue);
+    if (percent === null || percent < 1 || percent > 100) return { ok: false, error: "deposit_invalid" };
+    depositPercentage = percent;
+  }
+  if ((form.paymentKind !== "none" || form.allowPrepay) && price < MIN_ONLINE_CHARGE_EUROS) {
+    return { ok: false, error: "online_price_low" };
+  }
+
   return {
     ok: true,
     payload: {
@@ -173,6 +225,10 @@ export function formToPayload(
       requiresApproval: form.requiresApproval,
       minAdvanceBooking: minAdvance,
       maxAdvanceBooking: maxAdvance,
+      depositRequired: form.paymentKind !== "none",
+      depositAmount,
+      depositPercentage,
+      allowPrepay: form.allowPrepay,
     },
   };
 }
