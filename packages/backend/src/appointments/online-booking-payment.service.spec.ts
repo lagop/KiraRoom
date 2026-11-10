@@ -362,3 +362,54 @@ describe('releasing holds', () => {
     expect(await t.service.sweep(NOW)).toEqual({ released: 1, completed: 0 });
   });
 });
+
+describe('coming back to a held booking', () => {
+  const held = { id: APPT, tenantId: TENANT, checkoutSessionId: 'cs_1' };
+
+  it('reopens the same payment page while it is open, and nothing once it is not', async () => {
+    const t = build();
+    t.prisma.tenant.findUnique.mockResolvedValue({ stripeConnectAccountId: ACCOUNT });
+    t.stripe.checkout.sessions.retrieve.mockResolvedValueOnce({ id: 'cs_1', status: 'open', url: 'https://checkout.stripe.com/c/pay/cs_1' });
+    expect(await t.service.reopenCheckoutUrl(held)).toBe('https://checkout.stripe.com/c/pay/cs_1');
+    expect(t.stripe.checkout.sessions.retrieve).toHaveBeenCalledWith('cs_1', undefined, { stripeAccount: ACCOUNT });
+    t.stripe.checkout.sessions.retrieve.mockResolvedValueOnce({ id: 'cs_1', status: 'expired', url: null });
+    expect(await t.service.reopenCheckoutUrl(held)).toBeNull();
+    t.stripe.checkout.sessions.retrieve.mockRejectedValueOnce(new Error('Stripe down'));
+    expect(await t.service.reopenCheckoutUrl(held)).toBeNull();
+    expect(await t.service.reopenCheckoutUrl({ ...held, checkoutSessionId: null })).toBeNull();
+  });
+
+  it('letting go closes the page, then releases the booking', async () => {
+    const t = build();
+    t.prisma.tenant.findUnique.mockResolvedValue({ stripeConnectAccountId: ACCOUNT });
+    t.stripe.checkout.sessions.retrieve.mockResolvedValueOnce({ id: 'cs_1', status: 'open', payment_status: 'unpaid' });
+    t.setAppointment({ id: APPT, checkoutSessionId: 'cs_1' });
+    const del = jest.spyOn(require('./appointment-delete'), 'deleteAppointmentRow').mockResolvedValue(undefined);
+    expect(await t.service.releaseByClient(held)).toBe(true);
+    expect(t.calls.expired).toEqual(['cs_1']);
+    expect(del).toHaveBeenCalledWith(t.prisma, APPT);
+    del.mockRestore();
+  });
+
+  it('if she paid while deciding, nothing is closed or released', async () => {
+    const t = build();
+    t.prisma.tenant.findUnique.mockResolvedValue({ stripeConnectAccountId: ACCOUNT });
+    t.stripe.checkout.sessions.retrieve.mockResolvedValueOnce({ id: 'cs_1', status: 'complete', payment_status: 'paid' });
+    const del = jest.spyOn(require('./appointment-delete'), 'deleteAppointmentRow').mockResolvedValue(undefined);
+    expect(await t.service.releaseByClient(held)).toBe(false);
+    expect(t.calls.expired).toEqual([]);
+    expect(del).not.toHaveBeenCalled();
+    del.mockRestore();
+  });
+
+  it('Stripe unreachable: the booking is still released (the page expires by itself)', async () => {
+    const t = build();
+    t.prisma.tenant.findUnique.mockResolvedValue({ stripeConnectAccountId: ACCOUNT });
+    t.stripe.checkout.sessions.retrieve.mockRejectedValueOnce(new Error('Stripe down'));
+    t.setAppointment({ id: APPT, checkoutSessionId: 'cs_1' });
+    const del = jest.spyOn(require('./appointment-delete'), 'deleteAppointmentRow').mockResolvedValue(undefined);
+    expect(await t.service.releaseByClient(held)).toBe(true);
+    expect(del).toHaveBeenCalledTimes(1);
+    del.mockRestore();
+  });
+});

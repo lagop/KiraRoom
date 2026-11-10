@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, HttpStatus, NotFoundException, Param, Post } from "@nestjs/common";
+import { Controller, GoneException, Get, HttpCode, HttpStatus, NotFoundException, Param, Post } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { Public } from "../auth/decorators/public.decorator";
@@ -26,6 +26,16 @@ export class PublicAppointmentController {
     const info = await this.appointments.describeCancelLink(token);
     if (!info) throw new NotFoundException("Enlace no válido");
     return info;
+  }
+
+  @Post(":token/pay")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({ summary: "The payment page of a booking still held for its payment, to pay it" })
+  async pay(@Param("token") token: string) {
+    const out = await this.appointments.payAgainFromLink(token);
+    if (!out) throw new GoneException("El tiempo para pagar ha terminado. Vuelve a reservar.");
+    return out;
   }
 
   @Post(":token/cancel")

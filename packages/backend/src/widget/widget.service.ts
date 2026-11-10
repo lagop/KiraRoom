@@ -1,3 +1,5 @@
+import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
+import { DEPOSIT_SERVICE_SELECT, onlinePaymentContextFor, withOnlinePayment } from "../payments/online-payment-context";
 import { GoneException, Injectable, NotFoundException, Logger, Optional } from "@nestjs/common";
 import { randomBytes } from "crypto";
 import { PrismaService } from "../common/prisma/prisma.service";
@@ -86,6 +88,8 @@ export class WidgetService {
     private prisma: PrismaService,
     // The plan check for the WhatsApp promotions box (global FeatureFlagModule).
     @Optional() private featureFlags?: FeatureFlagService,
+    // Whether the salon can take online payments (señal / pago anticipado) now.
+    @Optional() private platformStripe?: PlatformStripeConfigService,
   ) {}
 
   /**
@@ -257,9 +261,12 @@ export class WidgetService {
         price: true,
         currency: true,
         images: true,
+        // Turned into `onlinePayment` below, never sent as such.
+        ...DEPOSIT_SERVICE_SELECT,
       },
     });
     const prices = publicPriceSettings(widget.tenant.fiscalSettings);
+    const payment = await onlinePaymentContextFor(this.prisma, this.platformStripe, widget.tenantId);
     // Two or more locations to book at among this widget's professionals:
     // the client picks one, as on the public booking page. None otherwise.
     const where = widgetLocations(
@@ -302,7 +309,7 @@ export class WidgetService {
       privacyPolicyUrl: ownPrivacyPolicyUrl(widget.tenant.privacyPolicyUrl),
       // The final price, tax included (common/public-price.ts), never the
       // net catalogue figure of a salon that writes its prices without it.
-      services: allServices.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
+      services: allServices.map((s) => withOnlinePayment({ ...s, price: publicPrice(s.price, prices) }, payment)),
       // With locations to pick from, each one also says where they work and
       // their main location (the location follows from who she picks).
       // Hidden ones stay bookable as "Profesional" (public-professional.ts).

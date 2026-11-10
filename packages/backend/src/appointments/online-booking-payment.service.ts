@@ -322,6 +322,62 @@ export class OnlineBookingPaymentService {
     return { result: 'paid', appointmentId: appointment.id, tenantId: appointment.tenantId };
   }
 
+  /**
+   * The payment page of a held booking, to open it again (she closed it or
+   * came back from Stripe without paying). Null when it can no longer be
+   * paid: it expired, or was paid.
+   */
+  async reopenCheckoutUrl(appointment: { tenantId: string; checkoutSessionId: string | null }): Promise<string | null> {
+    const stripe = this.platformStripe?.client();
+    if (!stripe || !appointment.checkoutSessionId) return null;
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: appointment.tenantId },
+      select: { stripeConnectAccountId: true },
+    });
+    if (!tenant?.stripeConnectAccountId) return null;
+    try {
+      const session = await stripe.checkout.sessions.retrieve(appointment.checkoutSessionId, undefined, {
+        stripeAccount: tenant.stripeConnectAccountId,
+      });
+      return session.status === 'open' && session.url ? session.url : null;
+    } catch (err) {
+      this.logger.warn(`Checkout of booking could not be read: ${redactStripe((err as Error).message ?? '')}`);
+      return null;
+    }
+  }
+
+  /**
+   * She changed her mind before paying: the page is closed so it cannot be
+   * paid later, and the held booking goes. Nothing is announced to anyone:
+   * the booking was never announced. False when it was already paid.
+   */
+  async releaseByClient(appointment: { id: string; tenantId: string; checkoutSessionId: string | null }): Promise<boolean> {
+    const stripe = this.platformStripe?.client();
+    if (stripe && appointment.checkoutSessionId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: appointment.tenantId },
+        select: { stripeConnectAccountId: true },
+      });
+      if (tenant?.stripeConnectAccountId) {
+        try {
+          const session = await stripe.checkout.sessions.retrieve(appointment.checkoutSessionId, undefined, {
+            stripeAccount: tenant.stripeConnectAccountId,
+          });
+          // Paid while she was deciding: it stands (the payment notice confirms it).
+          if (session.payment_status === 'paid') return false;
+          if (session.status === 'open') {
+            await stripe.checkout.sessions.expire(appointment.checkoutSessionId, undefined, {
+              stripeAccount: tenant.stripeConnectAccountId,
+            });
+          }
+        } catch (err) {
+          this.logger.warn(`Checkout of booking ${appointment.id} not closed: ${redactStripe((err as Error).message ?? '')}`);
+        }
+      }
+    }
+    return this.releaseHold(appointment.id, appointment.tenantId);
+  }
+
   /** A Checkout nobody paid: its held booking is released, the slot is free. */
   async expire(session: Stripe.Checkout.Session): Promise<boolean> {
     const meta = session.metadata ?? {};

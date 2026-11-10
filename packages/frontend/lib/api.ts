@@ -1174,6 +1174,12 @@ export interface CreateAppointmentDto {
   scheduledDate: string;
   scheduledTime: string;
   notes?: string;
+  /**
+   * Public booking only, when the service takes an online payment: the señal
+   * or the whole service (lib/booking-payment.ts). The server decides the
+   * amount and whether she has to pay at all.
+   */
+  payment?: "deposit" | "full";
   depositRequired?: boolean;
   depositAmount?: number;
   /** null clears the appointment's own rate (PATCH). */

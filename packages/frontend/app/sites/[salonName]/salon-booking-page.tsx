@@ -73,6 +73,17 @@ import {
 } from "@/lib/public-booking-locations";
 import PublicReviewsSection from "./components/public-reviews";
 import { HoneypotField } from "@/components/booking/honeypot-field";
+import { BookingPaymentChoice } from "@/components/booking/payment-choice";
+import {
+  BOOKING_PAYMENT_TEXT,
+  PaymentChoice,
+  ServiceOnlinePayment,
+  amountDueNow,
+  bookingNeedsPayment,
+  euros,
+  paymentToSend,
+  safeCheckoutUrl,
+} from "@/lib/booking-payment";
 import { ChatWidget } from "@/src/components/virtual-receptionist";
 
 interface BookingData {
@@ -137,6 +148,8 @@ interface Service {
   category: string;
   isActive: boolean;
   isOnlineBookable: boolean;
+  /** What a client may pay online when she books (cents). */
+  onlinePayment?: ServiceOnlinePayment;
 }
 
 interface AvailableTimeSlot {
@@ -189,6 +202,7 @@ function fromPublicPage(page: PublicSalonPage) {
     category: s.category,
     isActive: true,
     isOnlineBookable: s.isOnlineBookable !== false,
+    onlinePayment: s.onlinePayment,
   }));
   const professionals: Professional[] = page.professionals.map((p) => ({
     id: p.id,
@@ -282,6 +296,10 @@ export default function SalonBookingPage({
   });
   // The two boxes next to the button, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
+  // What she picked to pay online, for the service it was picked on (a new service starts again).
+  const [paymentPick, setPaymentPick] = useState<{ serviceId: string; value: PaymentChoice } | null>(null);
+  // Leaving for Stripe's payment page: the form stays shut meanwhile.
+  const [goingToPay, setGoingToPay] = useState(false);
   // The hidden field for bots (HoneypotField): a person leaves it empty.
   const [website, setWebsite] = useState("");
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
@@ -510,6 +528,11 @@ export default function SalonBookingPage({
     }));
   };
 
+  // What the chosen service asks her to pay online, and her pick.
+  const chosenService = services.find((s) => s.id === bookingData.serviceId);
+  const paymentChoiceValue = paymentPick && paymentPick.serviceId === bookingData.serviceId ? paymentPick.value : null;
+  const dueNow = amountDueNow(chosenService?.onlinePayment, paymentChoiceValue);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Only a time the server offered for the inputs on screen. A time picked
@@ -525,6 +548,7 @@ export default function SalonBookingPage({
       return;
     }
     setLoading(true);
+    const paymentSent = paymentToSend(chosenService?.onlinePayment, paymentChoiceValue);
 
     try {
       // This used to be a stub. It logged the payload to the browser
@@ -564,11 +588,24 @@ export default function SalonBookingPage({
         // The location she booked at, when the salon has several.
         ...(bookingData.locationId ? { locationId: bookingData.locationId } : {}),
         // Only what she ticked: an unticked box sends nothing.
+        // The señal or the whole service, when the service takes payments online.
+        ...(paymentSent ? { payment: paymentSent } : {}),
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(offersWhatsAppNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
         ...(offersWhatsAppPromotions && wantsWhatsAppPromotions ? { wantsWhatsAppPromotions: true } : {}),
         ...(website ? { website } : {}),
       });
+
+      // She has to pay to confirm it: the appointment is held for her and
+      // not announced to anyone until Stripe says it is paid. Off to the
+      // payment page; she comes back to her appointment's page.
+      if (bookingNeedsPayment(booked)) {
+        const url = safeCheckoutUrl(booked.payment.checkoutUrl);
+        if (!url) throw new Error(BOOKING_PAYMENT_TEXT.payFailed);
+        setGoingToPay(true);
+        window.location.assign(url);
+        return;
+      }
 
       // Only now. The confirmation has to mean the appointment exists: a
       // summary that stays on screen, from what the server booked. At one of
@@ -1290,21 +1327,30 @@ export default function SalonBookingPage({
                 </div>
               </div>
 
+              <BookingPaymentChoice
+                offer={chosenService?.onlinePayment}
+                choice={paymentChoiceValue}
+                onChange={(value) => setPaymentPick({ serviceId: bookingData.serviceId, value })}
+                disabled={loading || goingToPay}
+              />
+
               {/* Submit Button */}
               <div className="pt-4 space-y-3">
                 <button
                   type="submit"
-                  disabled={loading || !isOfferedTime(bookingData.time, availableSlots)}
+                  disabled={loading || goingToPay || !isOfferedTime(bookingData.time, availableSlots)}
                   className="w-full px-6 py-3 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
-                  {loading ? (
+                  {loading || goingToPay ? (
                     <>
                       <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                      <span>{t("common.loading")}</span>
+                      <span>{goingToPay ? BOOKING_PAYMENT_TEXT.redirecting : t("common.loading")}</span>
                     </>
                   ) : (
                     <>
-                      <span>{t("bookingPublic.confirm_booking")}</span>
+                      <span>
+                        {dueNow ? BOOKING_PAYMENT_TEXT.payButton(euros(dueNow)) : t("bookingPublic.confirm_booking")}
+                      </span>
                       <ChevronRight className="w-4 h-4" />
                     </>
                   )}

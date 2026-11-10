@@ -184,7 +184,7 @@ export const CLIENT_LINK_CANCEL_REASON = "Cancelada por el cliente desde el enla
 /** What the public "Cancelar mi cita" page shows. */
 export interface CancelLinkInfo {
   /** cancellable; too_late (inside minCancelHours: call the salon); cancelled; closed (past, done, no-show). */
-  state: "cancellable" | "too_late" | "cancelled" | "closed";
+  state: "cancellable" | "too_late" | "cancelled" | "closed" | "awaiting_payment" | "paid_online";
   canCancel: boolean;
   status: string;
   salonName: string;
@@ -197,6 +197,14 @@ export interface CancelLinkInfo {
   /** HH:mm, the salon's clock. */
   time: string;
   minCancelHours: number;
+  /** Online payment at booking: held while she pays, paid, or none. */
+  payment: {
+    state: "none" | "awaiting" | "paid";
+    kind: "deposit" | "full" | null;
+    amountCents: number | null;
+    /** ISO instant; only while awaiting. */
+    holdUntil: string | null;
+  };
 }
 
 export interface StatusChangeOptions {
@@ -2147,6 +2155,14 @@ export class AppointmentsService {
     if (!found) return null;
     const info = this.cancelLinkInfo(found, now);
     if (!info.canCancel) return info;
+    // Still held for payment: letting go is not a cancellation (nothing was
+    // ever announced); the page is closed, the slot freed, nobody is told.
+    if (info.state === "awaiting_payment") {
+      const released = (await this.onlinePayments?.releaseByClient(found)) ?? false;
+      return released
+        ? { ...info, state: "cancelled", canCancel: false, status: AppointmentStatus.cancelled, payment: { ...info.payment, state: "none", holdUntil: null } }
+        : ((await this.describeCancelLink(token, now)) ?? info);
+    }
     const actor = { role: "system", tenantId: found.tenantId, via: "client_cancel_link" };
     try {
       await this.changeStatus(actor, found.id, AppointmentStatus.cancelled, {
@@ -2161,6 +2177,18 @@ export class AppointmentsService {
     }
     const after = await this.appointmentForCancelLink(token);
     return after ? this.cancelLinkInfo(after, now) : info;
+  }
+
+  /**
+   * The payment page of a booking still held for its payment, to open it
+   * again. Null when it can no longer be paid (the time ran out, or it was
+   * paid), or the token is not ours.
+   */
+  async payAgainFromLink(token: string): Promise<{ checkoutUrl: string } | null> {
+    const found = await this.appointmentForCancelLink(token);
+    if (!found || !found.paymentHoldUntil || found.depositPaid || !this.onlinePayments) return null;
+    const checkoutUrl = await this.onlinePayments.reopenCheckoutUrl(found);
+    return checkoutUrl ? { checkoutUrl } : null;
   }
 
   private async appointmentForCancelLink(token: string): Promise<any | null> {
@@ -2186,17 +2214,36 @@ export class AppointmentsService {
     const startsAt = salonInstant(day, time || "00:00", tz);
     const minCancelHours = Math.max(0, Number(appointment.tenant?.minCancelHours) || 0);
     const live = LIVE_APPOINTMENT_STATUSES.includes(appointment.status);
-    const state: CancelLinkInfo["state"] =
-      appointment.status === AppointmentStatus.cancelled
+    // Held while she pays online: not a booking yet, so she can pay or let go.
+    const held = !!appointment.paymentHoldUntil && !appointment.depositPaid && !!appointment.checkoutSessionId;
+    const payKind: "deposit" | "full" | null =
+      appointment.onlinePaymentKind === "full" ? "full" : appointment.onlinePaymentKind === "deposit" ? "deposit" : null;
+    const payment: CancelLinkInfo["payment"] = {
+      state: held ? "awaiting" : payKind ? "paid" : "none",
+      kind: payKind,
+      amountCents:
+        payKind === "deposit"
+          ? Math.round(Number(appointment.depositAmount ?? 0))
+          : payKind === "full"
+            ? Math.round(Number(appointment.totalAmount ?? 0))
+            : null,
+      holdUntil: held ? new Date(appointment.paymentHoldUntil).toISOString() : null,
+    };
+    const base: CancelLinkInfo["state"] = held
+      ? "awaiting_payment"
+      : appointment.status === AppointmentStatus.cancelled
         ? "cancelled"
         : !live || startsAt.getTime() <= now.getTime()
           ? "closed"
           : startsAt.getTime() - now.getTime() < minCancelHours * 3_600_000
             ? "too_late"
             : "cancellable";
+    // Paid online: cancelling it means deciding about her money (the salon's
+    // refund policy), which the link does not do. She is sent to the salon.
+    const state: CancelLinkInfo["state"] = base === "cancellable" && payment.state === "paid" ? "paid_online" : base;
     return {
       state,
-      canCancel: state === "cancellable",
+      canCancel: state === "cancellable" || state === "awaiting_payment",
       status: appointment.status,
       salonName: appointment.tenant?.name || "el salón",
       salonPhone: (appointment.tenant?.phone ?? "").trim() || null,
@@ -2206,6 +2253,7 @@ export class AppointmentsService {
       date: day,
       time,
       minCancelHours,
+      payment,
     };
   }
 

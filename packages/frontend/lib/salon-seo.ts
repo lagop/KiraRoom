@@ -11,6 +11,8 @@
  * No React and no Next imports, so lib/salon-seo.spec.ts can run them.
  */
 
+import type { ServiceOnlinePayment } from "./booking-payment";
+
 export interface PublicSalonService {
   id: string;
   name: string;
@@ -26,6 +28,8 @@ export interface PublicSalonService {
   category: string;
   /** False: on the price list, but booked by phone (the server refuses it online). */
   isOnlineBookable?: boolean;
+  /** What a client may pay online when she books (cents); absent from older servers. */
+  onlinePayment?: ServiceOnlinePayment;
   /** Days ahead it can be booked online (Service.maxAdvanceBooking). Absent from older servers. */
   maxAdvanceBooking?: number;
 }
