@@ -59,6 +59,8 @@ import { AuditLogService } from "../saas/audit-log.service";
     PaymentsService,
     StripeService,
     ConnectAccountsService,
+    // The appointments module registers the handler of online-booking payments here.
+    ConnectEventsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,

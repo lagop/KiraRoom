@@ -99,6 +99,47 @@ describe('ConnectEventsService', () => {
     expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
+  describe('the payment events of online bookings', () => {
+    const checkout = (type: string) => event(type, { id: 'cs_1', metadata: { kind: 'online_booking' } });
+
+    it('go to whoever registered for them (the appointments), once each', async () => {
+      const { service } = build();
+      const handler = jest.fn(async () => undefined);
+      service.registerPaymentHandler(handler);
+      const completed = checkout('checkout.session.completed');
+      expect(await service.handle(completed)).toEqual({ received: true });
+      expect(await service.handle(checkout('checkout.session.expired'))).toEqual({ received: true });
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledWith(completed);
+      // The same notice again is not handled again.
+      expect(await service.handle(completed)).toEqual({ received: true, duplicate: true });
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it('are acknowledged and ignored while nobody has registered', async () => {
+      const { service } = build();
+      expect(await service.handle(checkout('checkout.session.completed'))).toEqual({ received: true, ignored: 'unhandled' });
+    });
+
+    it('are not handled in the other Stripe mode', async () => {
+      const { service } = build({ mode: 'live' });
+      const handler = jest.fn(async () => undefined);
+      service.registerPaymentHandler(handler);
+      expect(await service.handle(checkout('checkout.session.completed'))).toEqual({ received: true, ignored: 'other_mode' });
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("a failure raises the error and releases the claim so Stripe's retry is handled", async () => {
+      const { service, claimed } = build();
+      service.registerPaymentHandler(async () => {
+        throw new Error('db down');
+      });
+      const e = checkout('checkout.session.completed');
+      await expect(service.handle(e)).rejects.toThrow('db down');
+      expect(claimed.has(e.id)).toBe(false);
+    });
+  });
+
   it('events not handled yet are acknowledged so Stripe stops retrying them', async () => {
     const { service } = build();
     expect(await service.handle(event('payout.paid', { id: 'po_1' }))).toEqual({ received: true, ignored: 'unhandled' });

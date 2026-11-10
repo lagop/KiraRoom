@@ -175,6 +175,50 @@ describe("propose, then book on a real yes", () => {
     expect(await run("create_appointment")).toMatchObject({ created: true, confirmationEmailSent: true });
   });
 
+  it("a booking that has to be paid is not booked yet: she gets the link and the amount, and no confirmation is claimed", async () => {
+    const { run, say } = setup({
+      book: async () =>
+        ({
+          id: "apt-3",
+          service: { name: "Corte" },
+          professional: { firstName: "Ana", lastName: "García" },
+          status: "pending",
+          confirmationEmailSent: false,
+          payment: {
+            required: true,
+            kind: "deposit",
+            amountCents: 1500,
+            currency: "eur",
+            checkoutUrl: "https://checkout.stripe.com/c/pay/cs_1",
+            holdUntil: "2026-10-05T10:36:00.000Z",
+          },
+        }) as any,
+    });
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    const out: any = await run("create_appointment");
+    expect(out).toMatchObject({
+      created: true,
+      confirmed: false,
+      confirmationEmailSent: false,
+      paymentRequired: true,
+      paymentUrl: "https://checkout.stripe.com/c/pay/cs_1",
+      paymentAmountEuros: 15,
+      paymentKind: "deposit",
+      paymentHoldMinutes: 30,
+    });
+    expect(out.paymentNote).toMatch(/NOT booked yet/);
+  });
+
+  it("a booking without payment carries no payment fields", async () => {
+    const { run, say } = setup();
+    await run("propose_appointment", DETAILS);
+    say("sí");
+    const out: any = await run("create_appointment");
+    expect(out).not.toHaveProperty("paymentRequired");
+    expect(out).not.toHaveProperty("paymentUrl");
+  });
+
   it("needs a proposal first", async () => {
     const { run, say } = setup();
     say("sí");

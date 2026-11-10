@@ -5,6 +5,7 @@
  */
 import {
   MIN_CHARGE_CENTS,
+  chooseOnlinePayment,
   depositCentsFor,
   onlinePaymentOffer,
   onlinePaymentSettingsProblem,
@@ -128,5 +129,40 @@ describe('onlinePaymentSettingsProblem', () => {
 
   it('settings left over from a service that no longer asks for a señal are not a problem', () => {
     expect(onlinePaymentSettingsProblem({ price: 60, depositRequired: false, depositAmount: 500 })).toBeNull();
+  });
+});
+
+describe('chooseOnlinePayment: what she is made to pay', () => {
+  const offer = (svc: object, ctx = can) => onlinePaymentOffer({ priceEuros: 60, ...svc }, ctx);
+
+  it('nothing on offer: nothing to pay, whatever she asks', () => {
+    expect(chooseOnlinePayment(offer({}), 'full')).toBeNull();
+    expect(chooseOnlinePayment(offer({ depositRequired: true, depositAmount: 15 }, { canCharge: false }), 'deposit')).toBeNull();
+  });
+
+  it('prepayment alone is only charged when she asks for it', () => {
+    expect(chooseOnlinePayment(offer({ allowPrepay: true }), undefined)).toBeNull();
+    expect(chooseOnlinePayment(offer({ allowPrepay: true }), 'deposit')).toBeNull();
+    expect(chooseOnlinePayment(offer({ allowPrepay: true }), 'full')).toEqual({ kind: 'full', cents: 6000 });
+  });
+
+  it('a required señal is always charged, and she cannot pay all where the salon did not allow it', () => {
+    const o = offer({ depositRequired: true, depositAmount: 15 });
+    expect(chooseOnlinePayment(o, undefined)).toEqual({ kind: 'deposit', cents: 1500 });
+    expect(chooseOnlinePayment(o, 'full')).toEqual({ kind: 'deposit', cents: 1500 });
+  });
+
+  it('señal or all: the señal by default, all when she chooses it', () => {
+    const o = offer({ depositRequired: true, depositAmount: 15, allowPrepay: true });
+    expect(chooseOnlinePayment(o, undefined)).toEqual({ kind: 'deposit', cents: 1500 });
+    expect(chooseOnlinePayment(o, 'deposit')).toEqual({ kind: 'deposit', cents: 1500 });
+    expect(chooseOnlinePayment(o, 'full')).toEqual({ kind: 'full', cents: 6000 });
+  });
+
+  it('an exempt client is not made to pay a señal, but may still pay all', () => {
+    const exempt = { canCharge: true, exempt: true };
+    const o = offer({ depositRequired: true, depositAmount: 15, allowPrepay: true }, exempt);
+    expect(chooseOnlinePayment(o, undefined)).toBeNull();
+    expect(chooseOnlinePayment(o, 'full')).toEqual({ kind: 'full', cents: 6000 });
   });
 });

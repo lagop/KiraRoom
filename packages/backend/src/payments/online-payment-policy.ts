@@ -106,6 +106,39 @@ export function onlinePaymentOffer(service: OnlinePaymentService, ctx: OnlinePay
   };
 }
 
+/** What the client pays now, once the offer and her choice are known. */
+export interface OnlinePaymentChoice {
+  kind: 'deposit' | 'full';
+  cents: number;
+}
+
+/**
+ * What the client is made to pay for this booking, or null when she books
+ * without paying. `requested` is what she picked on the page; the salon's
+ * rules decide what is allowed:
+ *
+ *   mode none             nothing, whatever she asked
+ *   mode optional         all, only if she asked for it
+ *   mode deposit          the señal (asking for all is not allowed here)
+ *   mode deposit_or_full  the señal, or all if she asked for it
+ */
+export function chooseOnlinePayment(
+  offer: OnlinePaymentOffer,
+  requested?: 'deposit' | 'full' | null,
+): OnlinePaymentChoice | null {
+  switch (offer.mode) {
+    case 'optional':
+      return requested === 'full' ? { kind: 'full', cents: offer.totalCents } : null;
+    case 'deposit':
+      return offer.depositCents ? { kind: 'deposit', cents: offer.depositCents } : null;
+    case 'deposit_or_full':
+      if (requested === 'full') return { kind: 'full', cents: offer.totalCents };
+      return offer.depositCents ? { kind: 'deposit', cents: offer.depositCents } : null;
+    default:
+      return null;
+  }
+}
+
 /**
  * Why a service's online-payment settings cannot be saved, in Spanish; null
  * when they can. A señal is exactly one of a fixed amount or a percentage, it

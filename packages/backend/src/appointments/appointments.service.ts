@@ -105,6 +105,8 @@ import type { UpdateAppointmentPaymentDto } from "./dto/update-appointment-payme
 import { appointmentTotalCents, assertVisitChargeable } from "../payments/appointment-payment";
 import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../payments/appointment-charge";
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
+import type Stripe from "stripe";
+import { HOLD_MINUTES, OnlineBookingPaymentService } from "./online-booking-payment.service";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
@@ -303,6 +305,8 @@ export class AppointmentsService {
     @Optional() private readonly featureFlags?: FeatureFlagService,
     // The owner's and admins' emails on online bookings and self-cancellations (audit 7 D12).
     @Optional() private readonly salonAlerts?: SalonBookingAlertsService,
+    // Online payment when booking (señal / pago anticipado) on the salon's own Stripe account.
+    @Optional() private readonly onlinePayments?: OnlineBookingPaymentService,
   ) {}
 
   /**
@@ -503,6 +507,9 @@ export class AppointmentsService {
       );
     }
 
+    // Whether she has to pay to book (the salon's rules, her history, her choice).
+    const plan = (await this.onlinePayments?.plan(tenantId, dto)) ?? null;
+
     const date = new Date(scheduledDay);
     // At one of the salon's locations: only who works there (multi-local).
     const locationId = dto.locationId || undefined;
@@ -539,6 +546,9 @@ export class AppointmentsService {
           onClientCreated: () => {
             clientCreatedHere = true;
           },
+          ...(plan && {
+            hold: { until: new Date(Date.now() + HOLD_MINUTES * 60_000), kind: plan.kind, cents: plan.cents },
+          }),
         });
       },
       { timeout: 15_000 },
@@ -562,6 +572,36 @@ export class AppointmentsService {
           wantsWhatsAppPromotions: clientCreatedHere ? dto.wantsWhatsAppPromotions : false,
         })
         .catch((err) => this.logger.warn(`Booking choices not recorded: ${(err as Error).message}`));
+    }
+
+    // She has to pay to book: the payment page on the salon's account, and
+    // nothing is sent until it is paid (completeOnlinePayment). If the page
+    // cannot be made, the held booking goes: she is told to try again.
+    if (plan) {
+      try {
+        const checkout = await this.onlinePayments!.createCheckout(appointment as any, plan);
+        await this.prisma.appointment.update({
+          where: { id: appointment.id },
+          data: { checkoutSessionId: checkout.sessionId, paymentHoldUntil: checkout.holdUntil },
+        });
+        return Object.assign(appointment, {
+          confirmationEmailSent: false,
+          confirmationSmsSent: false,
+          payment: {
+            required: true as const,
+            kind: plan.kind,
+            amountCents: plan.cents,
+            currency: plan.currency,
+            checkoutUrl: checkout.checkoutUrl,
+            holdUntil: checkout.holdUntil.toISOString(),
+          },
+        });
+      } catch (err) {
+        await deleteAppointmentRow(this.prisma, appointment.id).catch((e) =>
+          this.logger.error(`Held booking ${appointment.id} not released: ${(e as Error).message}`),
+        );
+        throw err;
+      }
     }
 
     // From outside the salon: its SMS count against the daily caps
@@ -876,6 +916,11 @@ export class AppointmentsService {
       onClientCreated?: () => void;
       /** A deposit the salon asked for (owner/admin only), in cents. */
       deposit?: { amountCents: number };
+      /**
+       * The booking is held while the client pays online: pending, with the
+       * status it takes once paid. Nothing is sent to anyone until it is.
+       */
+      hold?: { until: Date; kind: "deposit" | "full"; cents: number };
     } = {},
   ) {
     const db = visit.db ?? this.prisma;
@@ -1026,7 +1071,17 @@ export class AppointmentsService {
         ),
         duration,
         endTime: endTime,
-        status: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
+        status: visit.hold
+          ? AppointmentStatus.pending
+          : autoConfirm
+            ? AppointmentStatus.confirmed
+            : AppointmentStatus.pending,
+        ...(visit.hold && {
+          statusAfterPayment: autoConfirm ? AppointmentStatus.confirmed : AppointmentStatus.pending,
+          paymentHoldUntil: visit.hold.until,
+          onlinePaymentKind: visit.hold.kind,
+          ...(visit.hold.kind === "deposit" && { depositRequired: true, depositAmount: visit.hold.cents }),
+        }),
         price: priceCents / 100,
         totalAmount: priceCents, // Store in cents
         currency: service.currency,
@@ -1077,6 +1132,35 @@ export class AppointmentsService {
       });
     }
     return appointment;
+  }
+
+  /**
+   * Stripe's notices about online bookings (Checkout paid / expired), from the
+   * connected-accounts webhook. A paid one makes the held booking real and
+   * sends what a booking sends; an expired one frees the slot.
+   */
+  async handleOnlinePaymentEvent(event: Stripe.Event): Promise<void> {
+    if (!this.onlinePayments) return;
+    const session = event.data.object as Stripe.Checkout.Session;
+    if (event.type === "checkout.session.expired") {
+      await this.onlinePayments.expire(session);
+      return;
+    }
+    const out = await this.onlinePayments.complete(session, event.account);
+    if (out.result === "paid") await this.finishPaidBooking(out.appointmentId, out.tenantId);
+  }
+
+  /** What a booking sends when it is created, for one that waited for its payment. */
+  async finishPaidBooking(appointmentId: string, tenantId: string): Promise<void> {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId },
+      include: { client: true, professional: true, service: true, tenant: true },
+    });
+    if (!appointment) return;
+    await this.afterAppointmentCreated(appointment, appointment.source ?? undefined, { publicBooking: true }).catch((err) =>
+      this.logger.error(`Notices of paid booking ${appointmentId} failed: ${(err as Error).message}`),
+    );
+    void this.salonAlerts?.notify("booked", appointment.id);
   }
 
   /** Notifications, rebooking cleanup and telemetry for a new appointment. */
