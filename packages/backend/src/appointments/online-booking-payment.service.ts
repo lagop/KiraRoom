@@ -448,13 +448,51 @@ export class OnlineBookingPaymentService {
   private async releaseHold(appointmentId: string, tenantId: string, sessionId?: string): Promise<boolean> {
     const held = await this.prisma.appointment.findFirst({
       where: { id: appointmentId, tenantId, paymentHoldUntil: { not: null }, depositPaid: false },
-      select: { id: true, checkoutSessionId: true },
+      select: { id: true, checkoutSessionId: true, clientId: true, createdAt: true },
     });
     if (!held || (sessionId && held.checkoutSessionId && held.checkoutSessionId !== sessionId)) return false;
     const payments = await this.prisma.payment.count({ where: { tenantId, appointmentId } });
     if (payments > 0) return false;
     await deleteAppointmentRow(this.prisma, appointmentId);
+    if (held.clientId) await this.dropClientOfUnpaidBooking(tenantId, held.clientId, held.createdAt);
     return true;
+  }
+
+  /**
+   * Booking creates the client on the spot (before she pays). If she never
+   * pays, that new client is left with nothing: no booking, no payment, no
+   * history. Removed, so the salon's client list does not fill with people who
+   * only opened a payment page. Only a client that is provably that: made
+   * together with the held booking and with nothing else on it. One that
+   * already existed, or has anything at all, stays.
+   */
+  private async dropClientOfUnpaidBooking(tenantId: string, clientId: string, bookedAt: Date): Promise<void> {
+    try {
+      // A signed consent form is a legal record: its client stays.
+      if ((await this.prisma.consent.count({ where: { tenantId, clientId } })) > 0) return;
+      await this.prisma.client.deleteMany({
+        where: {
+          id: clientId,
+          tenantId,
+          createdAt: { gte: new Date(bookedAt.getTime() - 60_000) },
+          isTest: false,
+          source: null,
+          notes: null,
+          passwordHash: null,
+          visitCount: 0,
+          loyaltyPoints: 0,
+          appointments: { none: {} },
+          payments: { none: {} },
+          orders: { none: {} },
+          loyaltyMembers: { none: {} },
+          chatConversations: { none: {} },
+          waitListEntries: { none: {} },
+        },
+      });
+    } catch (err) {
+      // Leaving a client behind is harmless; never fail the release over it.
+      this.logger.warn(`Client of an unpaid booking not removed: ${(err as Error).message}`);
+    }
   }
 
   /**

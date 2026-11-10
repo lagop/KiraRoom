@@ -214,9 +214,11 @@ export function connectWebhookSecretsFor(
 
 /** Why a value would not work, in Spanish for the console; null when it is fine. */
 export function secretKeyProblem(key: string): string | null {
-  return /^sk_(test|live)_[A-Za-z0-9]{10,}$/.test(key.trim())
+  // Standard (sk_) or restricted (rk_). A restricted key must allow what KiraRoom does:
+  // Connect accounts, Checkout sessions and refunds (see the runbook).
+  return /^(sk|rk)_(test|live)_[A-Za-z0-9]{10,}$/.test(key.trim())
     ? null
-    : "La clave secreta de Stripe empieza por «sk_test_» (pruebas) o «sk_live_» (real). Está en Stripe → Desarrolladores → Claves de API.";
+    : "La clave secreta de Stripe empieza por «sk_test_» (pruebas) o «sk_live_» (real); también vale una clave restringida «rk_…». Está en Stripe → Desarrolladores → Claves de API.";
 }
 
 export function publishableKeyProblem(key: string): string | null {

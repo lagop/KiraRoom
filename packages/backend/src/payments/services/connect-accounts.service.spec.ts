@@ -167,3 +167,38 @@ describe('ConnectAccountsService', () => {
     await expect(service.startOnboarding('t1')).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 });
+
+describe('ConnectAccountsService.summary (what online booking brought in)', () => {
+  const rows = [
+    { amount: 1500, metadata: { online: true }, refunds: [] },
+    { amount: 6000, metadata: { online: true, dispute: { id: 'dp_1', status: 'needs_response' } }, refunds: [] },
+    { amount: 2000, metadata: { online: true, dispute: { id: 'dp_2', status: 'lost' } }, refunds: [{ amount: 500 }] },
+    { amount: 3000, metadata: { online: true, dispute: { id: 'dp_3', status: 'won' } }, refunds: [{ amount: 3000 }] },
+  ];
+  function withPayments(found: any[]) {
+    const b = build();
+    (b.prisma as any).payment = { findMany: jest.fn(async () => found) };
+    return b;
+  }
+
+  it('adds up what was taken, what went back and the disputes', async () => {
+    const { service, prisma } = withPayments(rows);
+    const out = await service.summary('t1', 30);
+    expect(out).toEqual({
+      days: 30,
+      payments: 4,
+      collectedCents: 12500,
+      refundedCents: 3500,
+      keptCents: 9000,
+      disputes: { open: 1, won: 1, lost: 1 },
+    });
+    const where = (prisma as any).payment.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ tenantId: 't1', metadata: { path: ['online'], equals: true } });
+  });
+
+  it('nothing yet is zeros, and the span is kept within reason', async () => {
+    const { service } = withPayments([]);
+    expect(await service.summary('t1', 0)).toMatchObject({ days: 30, payments: 0, collectedCents: 0, keptCents: 0 });
+    expect((await service.summary('t1', 9999)).days).toBe(366);
+  });
+});

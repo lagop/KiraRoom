@@ -211,7 +211,7 @@ export class PlatformStripeConfigService implements OnModuleInit {
   /** The Stripe client for the platform account, or null when there is no key. */
   client(): Stripe | null {
     const key = this.settings.secretKey;
-    if (!key || !key.startsWith("sk_")) return null;
+    if (!key || !/^(sk|rk)_/.test(key)) return null;
     if (!this.stripe || key !== this.stripeKey) {
       this.stripe = new Stripe(key, { apiVersion: API_VERSION });
       this.stripeKey = key;

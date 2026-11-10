@@ -585,6 +585,14 @@ export class PaymentsController {
     return this.connectAccounts.status(req.user.tenantId);
   }
 
+  /** What online booking brought in over the last days: taken, given back, disputed. */
+  @Get("connect/summary")
+  @Roles(...SALON_MANAGERS)
+  @ApiOperation({ summary: "Online payments taken, refunded and disputed over the last days" })
+  async connectSummary(@Req() req: any, @Query("days") days?: string) {
+    return this.connectAccounts.summary(req.user.tenantId, days ? Number(days) : 30);
+  }
+
   /** Asks Stripe for the account's current state (after the salon returns from Stripe's form). */
   @Post("connect/refresh")
   @Roles(...SALON_MANAGERS)

@@ -542,6 +542,19 @@ refunded in full automatically.
   (`could NOT be refunded, do it from Pagos`) and the salon can refund it
   from Pagos. A refund made in the salon's own Stripe Dashboard is recorded
   by `charge.refunded`, never twice.
+- A booking that is held for payment and expires unpaid leaves no empty client
+  behind: the client made together with that booking is removed with it, but
+  only if it has nothing else (no visit, payment, notes, consent form, import
+  source), so a client who already existed is never touched.
+- The platform's Stripe secret key may be a standard key (`sk_`) or a
+  restricted one (`rk_`). A restricted key must allow what KiraRoom does:
+  Connect (accounts and account links), Checkout sessions, refunds and
+  webhook reads; a missing permission shows as a Stripe permission error, not
+  as an invalid key. A standard key avoids that.
+- Panel: Ajustes > Cobros online shows the last 30 days (taken, given back,
+  kept, disputes) from KiraRoom's own records (`GET /payments/connect/summary`).
+- The held-slot time (about 36 minutes) is not configurable: Stripe does not
+  allow a Checkout page to last less than 30 minutes, so it cannot be shorter.
 - Caja charges only what is left: an appointment's `amountPaid` includes the
   online payment, and a fully prepaid one is already paid.
 - A refund Stripe refuses on cancellation is not silent: the owners and admins
