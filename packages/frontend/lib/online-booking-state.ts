@@ -46,6 +46,34 @@ export function paidOnlineCents(appointment: unknown): number {
   return Math.min(paid, online || paid);
 }
 
+/**
+ * What a cancellation says about the money it should have given back: nothing
+ * when there was none (or it went back), a warning when Stripe could not return
+ * some of it and the salon has to. `result` is the cancel response.
+ */
+export function onlineRefundNotice(result: unknown): { title: string; description: string; variant?: "destructive" } | null {
+  const r = (result as { onlineRefund?: { refundedCents?: number; failed?: number } } | null | undefined)?.onlineRefund;
+  if (!r) return null;
+  const failed = Number(r.failed ?? 0);
+  if (failed > 0) {
+    return {
+      title: "No se pudo devolver el pago online",
+      description: "La cita se ha cancelado, pero Stripe no ha podido devolver el dinero a la clienta. Devuélvelo a mano desde Pagos.",
+      variant: "destructive",
+    };
+  }
+  const cents = cents0(r.refundedCents);
+  if (cents <= 0) return null;
+  return {
+    title: "Pago online devuelto",
+    description: `Se han devuelto ${(cents / 100).toFixed(2).replace(".", ",")} € a la clienta (puede tardar unos días en verse en su tarjeta).`,
+  };
+}
+const cents0 = (v: unknown): number => {
+  const n = Math.round(Number(v ?? 0));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
 /** What was paid online: "señal" or "servicio completo", for a sentence. */
 export function onlineKindLabel(appointment: unknown): string {
   return fields(appointment).onlinePaymentKind === "full" ? "el servicio completo" : "la señal";

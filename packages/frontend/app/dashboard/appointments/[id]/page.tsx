@@ -32,7 +32,7 @@ import {
   type AskedStatus,
 } from '../components/appointment-drawer.utils';
 import { StatusChangeDialog } from '../components/StatusChangeDialog';
-import { isAwaitingOnlinePayment, paidOnlineCents } from '@/lib/online-booking-state';
+import { isAwaitingOnlinePayment, onlineRefundNotice, paidOnlineCents } from '@/lib/online-booking-state';
 import { AppointmentStatusBadge } from '../components/appointment-drawer/primitives/AppointmentStatusBadge';
 import { PaymentSummaryCard } from '../components/appointment-drawer/cards/PaymentSummaryCard';
 import { SalonTermsCard } from '../components/appointment-drawer/cards/SalonTermsCard';
@@ -124,7 +124,9 @@ export default function AppointmentDetailPage({ params }: { params: { id: string
     try {
       // Cancel, complete and no-show go to their own routes, which send the
       // notices, tell the wait-list and issue the invoice.
-      await sendStatusChange(apiClient, params.id, newStatus, reason, opts);
+      const result = await sendStatusChange(apiClient, params.id, newStatus, reason, opts);
+      const refundNotice = onlineRefundNotice(result);
+      if (refundNotice) toast(refundNotice);
       setAppointment((prev) => (prev ? { ...prev, status: newStatus } : prev));
     } catch (error) {
       console.error('Error updating appointment status:', error);

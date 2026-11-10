@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { BadRequestException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { OnlineBookingPaymentService } from '../appointments/online-booking-payment.service';
+import { OnlinePaymentAlertsService } from './services/online-payment-alerts.service';
 
 /**
  * L2: giving back what a client paid online when she booked (señal / pago
@@ -259,9 +260,11 @@ describe('a refund made on the salon\'s Stripe Dashboard (L2, real database)', (
 });
 
 describe('cancelling a booking that was paid online (L2, real database)', () => {
+  const alerts = { tellManagers: jest.fn(async () => undefined) };
+  beforeEach(() => alerts.tellManagers.mockClear());
   const service = (platform: unknown) => {
     const pay = payments(platform);
-    const moduleRef: any = { get: () => pay };
+    const moduleRef: any = { get: (token: unknown) => (token === OnlinePaymentAlertsService ? alerts : pay) };
     return new OnlineBookingPaymentService(db, platform as any, undefined, moduleRef);
   };
 
@@ -312,6 +315,8 @@ describe('cancelling a booking that was paid online (L2, real database)', () => 
     // The one that failed stays paid, so the salon can give it back from Pagos.
     const statuses = await Promise.all([payment.id, second.id].map(async (id) => (await db.payment.findUnique({ where: { id } })).status));
     expect(statuses.sort()).toEqual(['paid', 'refunded']);
+    // The salon is told, so the client is not left without her money.
+    expect(alerts.tellManagers).toHaveBeenCalledWith(tenantId, expect.objectContaining({ title: 'No se pudo devolver un pago online', key: `refund-failed-${apt.id}` }));
   });
 
   it('without the payments service there is nothing to do, and no error', async () => {

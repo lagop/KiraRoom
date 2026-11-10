@@ -187,4 +187,62 @@ describe('ConnectEventsService', () => {
     await expect(service.handle(e)).rejects.toThrow('db down');
     expect(claimed.has(e.id)).toBe(false);
   });
+
+  describe("disputes (chargebacks)", () => {
+    const dispute = (over: Record<string, unknown> = {}) => ({
+      id: "dp_1",
+      payment_intent: "pi_1",
+      amount: 1500,
+      reason: "fraudulent",
+      status: "needs_response",
+      evidence_details: { due_by: 1796000000 },
+      ...over,
+    });
+    function withPayment(payment: any) {
+      const b = build();
+      const prisma: any = b.prisma;
+      prisma.payment = {
+        findFirst: jest.fn(async () => payment),
+        update: jest.fn(async () => ({})),
+      };
+      const alerts = { tellManagers: jest.fn(async () => undefined) };
+      const service = new ConnectEventsService(prisma, { mode: () => "test" } as any, undefined, alerts as any);
+      (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      return { service, prisma, alerts };
+    }
+    const online = { id: "p1", tenantId: "t1", metadata: { online: true, stripeAccount: "acct_1" } };
+
+    it("a dispute is marked on the payment and the salon is told, with the date to answer by", async () => {
+      const { service, prisma, alerts } = withPayment(online);
+      const out = await service.handle(event("charge.dispute.created", dispute(), { account: "acct_1" }));
+      expect(out).toEqual({ received: true });
+      expect(prisma.payment.update).toHaveBeenCalledWith({
+        where: { id: "p1" },
+        data: { metadata: expect.objectContaining({ online: true, dispute: expect.objectContaining({ id: "dp_1", status: "needs_response", amountCents: 1500 }) }) },
+      });
+      expect(alerts.tellManagers).toHaveBeenCalledWith(
+        "t1",
+        expect.objectContaining({ title: "Una clienta ha disputado un pago online", key: "dispute-dp_1-created", message: expect.stringContaining("15,00 €") }),
+      );
+      expect((alerts.tellManagers.mock.calls[0] as any)[1].message).toMatch(/hasta el/);
+    });
+
+    it("the outcome is told too: lost and won", async () => {
+      const lost = withPayment(online);
+      await lost.service.handle(event("charge.dispute.closed", dispute({ status: "lost" }), { account: "acct_1" }));
+      expect((lost.alerts.tellManagers.mock.calls[0] as any)[1].title).toBe("Disputa perdida");
+      const won = withPayment(online);
+      await won.service.handle(event("charge.dispute.closed", dispute({ status: "won" }), { account: "acct_1" }));
+      expect((won.alerts.tellManagers.mock.calls[0] as any)[1].title).toBe("Disputa ganada");
+    });
+
+    it("a payment that is not an online booking's, or of another account, is acknowledged and changes nothing", async () => {
+      for (const payment of [null, { ...online, metadata: {} }, { ...online, metadata: { online: true, stripeAccount: "acct_other" } }]) {
+        const { service, prisma, alerts } = withPayment(payment);
+        expect(await service.handle(event("charge.dispute.created", dispute(), { account: "acct_1" }))).toEqual({ received: true, ignored: "unhandled" });
+        expect(prisma.payment.update).not.toHaveBeenCalled();
+        expect(alerts.tellManagers).not.toHaveBeenCalled();
+      }
+    });
+  });
 });

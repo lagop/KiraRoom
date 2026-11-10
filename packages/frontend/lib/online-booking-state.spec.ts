@@ -4,7 +4,7 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/online-booking-state.spec.ts
  */
-import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, paidOnlineCents } from "./online-booking-state";
+import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, paidOnlineCents } from "./online-booking-state";
 
 let pass = 0;
 let fail = 0;
@@ -36,6 +36,12 @@ check("never paid online: nothing, even if she paid at the till", paidOnlineCent
 check("never more than was paid (a part was already given back)", paidOnlineCents({ ...paidDeposit, amountPaid: 500 }) === 500);
 check("amounts as the API sends them (strings) are read", paidOnlineCents({ ...paidDeposit, depositAmount: "1500", amountPaid: "1500.00" }) === 1500);
 check("the kind in words", onlineKindLabel(paidFull) === "el servicio completo" && onlineKindLabel(paidDeposit) === "la señal" && onlineKindLabel({}) === "la señal");
+
+console.log("\n[what a cancellation says about her money]");
+check("nothing paid online: no notice", onlineRefundNotice({ id: "a" }) === null && onlineRefundNotice(null) === null && onlineRefundNotice({ onlineRefund: { refundedCents: 0, failed: 0 } }) === null);
+check("given back: how much", /15,00/.test(onlineRefundNotice({ onlineRefund: { refundedCents: 1500, failed: 0 } })?.description ?? ""));
+check("could not be given back: a warning for the salon to act", onlineRefundNotice({ onlineRefund: { refundedCents: 0, failed: 1 } })?.variant === "destructive");
+check("a part given back and a part not: still the warning", onlineRefundNotice({ onlineRefund: { refundedCents: 800, failed: 1 } })?.variant === "destructive");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
