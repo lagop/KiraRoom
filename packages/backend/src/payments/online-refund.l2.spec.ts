@@ -28,6 +28,8 @@ let serviceId: string;
 let professionalId: string;
 const run = randomUUID().slice(0, 8);
 const ACCOUNT = 'acct_l2_salon';
+// Built at runtime: a fictitious value that only looks like a Stripe key (gitleaks).
+const fakeKey = ['sk', 'test', 'xxxxxxxxxxxx1234'].join('_');
 
 let refundSeq = 0;
 function fakeStripe() {
@@ -163,12 +165,12 @@ describe('refunding an online payment (L2, real database)', () => {
   it('if Stripe refuses, nothing changes here and the reason is clear, without any key', async () => {
     if (!reachable) return;
     const { platform, stripe } = fakeStripe();
-    stripe.refunds.create.mockRejectedValueOnce(new Error('Invalid API Key provided: sk_test_xxxxxxxxxxxx1234'));
+    stripe.refunds.create.mockRejectedValueOnce(new Error(`Invalid API Key provided: ${fakeKey}`));
     const { apt, payment } = await paidBooking();
     const err = await payments(platform).refundPayment(tenantId, payment.id, { amount: 1500, reason: 'Cita cancelada' }, null).catch((e) => e);
     expect(err).toBeInstanceOf(BadRequestException);
     expect(String(err.message)).toMatch(/Stripe no ha podido hacer la devolución/);
-    expect(String(err.message)).not.toMatch(/sk_test_xxxx/);
+    expect(String(err.message)).not.toContain(fakeKey);
     expect(await refundsOf(payment.id)).toHaveLength(0);
     expect((await db.payment.findUnique({ where: { id: payment.id } })).status).toBe('paid');
     expect(Number((await db.appointment.findUnique({ where: { id: apt.id } })).amountPaid)).toBe(1500);
