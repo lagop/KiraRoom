@@ -254,7 +254,9 @@ export class AppointmentsController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() body: CancelAppointmentDto,
   ) {
-    return this.appointmentsService.cancel(req.user, id, body?.reason);
+    return this.appointmentsService.cancel(req.user, id, body?.reason, {
+      keepOnlinePayment: body?.keepOnlinePayment === true,
+    });
   }
 
   // The actions on an appointment that time off or a closure caught

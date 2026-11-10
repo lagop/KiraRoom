@@ -7,6 +7,9 @@ import {
   Optional,
 } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
+import type Stripe from "stripe";
+import { PlatformStripeConfigService, redactStripe } from "../platform/platform-stripe-config.service";
+import { onlineBookingAccountOf } from "./online-booking-account";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { LoyaltyService } from "../loyalty/loyalty.service";
 import { AppointmentStatus, InvoiceSource, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
@@ -113,6 +116,8 @@ export class PaymentsService {
     // changeStatus (looked up when needed: AppointmentsModule is not imported
     // here, it would close a module cycle).
     @Optional() private readonly moduleRef?: ModuleRef,
+    // KiraRoom's Stripe keys: the refunds of online bookings are made on the salon's connected account.
+    @Optional() private readonly platformStripe?: PlatformStripeConfigService,
   ) {}
 
   /**
@@ -498,6 +503,8 @@ export class PaymentsService {
     paymentId: string,
     input: { amount?: number; reason: string; lines?: RefundLineRequest[] },
     actorId?: string | null,
+    /** `stripeRefundId`: the money was already given back on Stripe (the salon did it there); only record it here. */
+    opts: { stripeRefundId?: string } = {},
   ) {
     const payment = await this.prisma.payment.findFirst({
       where: { id: paymentId, tenantId },
@@ -510,7 +517,11 @@ export class PaymentsService {
     if (payment.status !== PaymentStatus.paid) {
       throw new BadRequestException("Solo se puede devolver un cobro pagado.");
     }
-    if (payment.stripePaymentId) {
+    // A payment made online when booking (on the salon's own Stripe account)
+    // is refunded here: Stripe gives the money back first, then it is
+    // recorded like any other refund. Any other Stripe payment is not ours to refund.
+    const onlineAccount = onlineBookingAccountOf(payment);
+    if (payment.stripePaymentId && !onlineAccount) {
       throw new BadRequestException("Este cobro se hizo en línea con Stripe: devuélvelo desde tu cuenta de Stripe.");
     }
     const reason = (input.reason ?? "").trim();
@@ -549,6 +560,14 @@ export class PaymentsService {
     // Cash comes out of the drawer: checked here, and again under its lock.
     const cash = payment.method === PaymentMethod.cash;
     if (cash && !(await openCashSessionId(this.prisma, tenantId))) throw drawerClosedForRefund();
+
+    // The money goes back on Stripe before anything is recorded here: if
+    // Stripe refuses, nothing changes. If recording then fails, the refund
+    // exists on Stripe and its notice records it (reconcileOnlineRefunds).
+    let stripeRefundId: string | null = opts.stripeRefundId ?? null;
+    if (onlineAccount && !stripeRefundId) {
+      stripeRefundId = await this.refundOnStripe(payment, amount, onlineAccount, already);
+    }
 
     const full = amount === left;
     const status = full ? PaymentStatus.refunded : PaymentStatus.paid;
@@ -601,6 +620,7 @@ export class PaymentsService {
           reason,
           status: "succeeded",
           adminId: actorId ?? null,
+          ...(stripeRefundId ? { stripeRefundId } : {}),
           ...(cashSessionId ? { cashSessionId } : {}),
           ...(given.lines.length ? { saleLines: given.lines as unknown as Prisma.InputJsonValue } : {}),
         },
@@ -716,6 +736,78 @@ export class PaymentsService {
       invoice: invoice ? { id: invoice.id, number: `${invoice.series ?? ""}${invoice.number ?? ""}` } : null,
       rectificationNeeded: !!invoice,
     };
+  }
+
+  /** Gives `amount` back on the salon's Stripe account; returns Stripe's refund id. */
+  private async refundOnStripe(
+    payment: { id: string; stripePaymentId: string | null },
+    amount: number,
+    accountId: string,
+    alreadyRefunded: number,
+  ): Promise<string> {
+    const stripe = this.platformStripe?.client();
+    if (!stripe || !payment.stripePaymentId) {
+      throw new BadRequestException("Ahora mismo no se puede devolver este cobro: Stripe no está disponible. Inténtalo más tarde.");
+    }
+    try {
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: payment.stripePaymentId,
+          amount,
+          reason: "requested_by_customer",
+          metadata: { kiraroomPaymentId: payment.id },
+        },
+        // The same refund asked twice (a double click, a retry) is made once.
+        { stripeAccount: accountId, idempotencyKey: `refund-${payment.id}-${alreadyRefunded}-${amount}` },
+      );
+      return refund.id;
+    } catch (err) {
+      throw new BadRequestException(
+        `Stripe no ha podido hacer la devolución: ${redactStripe((err as Error).message ?? "error desconocido")}`,
+      );
+    }
+  }
+
+  /**
+   * Stripe says a charge was refunded (the salon did it from its Stripe
+   * Dashboard, or our own refund's notice arrived): each refund of it that
+   * is not recorded here yet is recorded, once, through the usual refund so
+   * loyalty, commissions and the appointment follow. Returns how many.
+   */
+  async reconcileOnlineRefunds(charge: Stripe.Charge, accountId: string | null | undefined): Promise<number> {
+    const paymentIntent = typeof charge.payment_intent === "string" ? charge.payment_intent : (charge.payment_intent?.id ?? null);
+    if (!paymentIntent || !accountId) return 0;
+    const payment = await this.prisma.payment.findFirst({
+      where: { stripePaymentId: paymentIntent },
+      select: { id: true, tenantId: true, metadata: true },
+    });
+    // Only online bookings' payments, on the account that made them.
+    if (!payment || onlineBookingAccountOf(payment) !== accountId) return 0;
+    const stripe = this.platformStripe?.client();
+    if (!stripe) return 0;
+
+    const listed = await stripe.refunds.list({ charge: charge.id, limit: 100 }, { stripeAccount: accountId });
+    let recorded = 0;
+    for (const r of listed.data) {
+      if (r.status !== "succeeded") continue;
+      const known = await this.prisma.refund.findUnique({ where: { stripeRefundId: r.id }, select: { id: true } });
+      if (known) continue;
+      try {
+        await this.refundPayment(
+          payment.tenantId,
+          payment.id,
+          { amount: r.amount, reason: "Devolución hecha desde Stripe" },
+          null,
+          { stripeRefundId: r.id },
+        );
+        recorded++;
+      } catch (err) {
+        // Already fully refunded here, or recorded a moment ago by the refund that caused this notice.
+        if (err instanceof ConflictException) continue;
+        throw err;
+      }
+    }
+    return recorded;
   }
 
   /**
@@ -983,3 +1075,4 @@ export class PaymentsService {
     return payments.map(withRefunded);
   }
 }
+

@@ -1,4 +1,7 @@
 import { Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
+import { PaymentsService } from '../payments/payments.service';
+import { onlineBookingAccountOf } from '../payments/online-booking-account';
 import { ConfigService } from '@nestjs/config';
 import type Stripe from 'stripe';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -72,6 +75,9 @@ export class OnlineBookingPaymentService {
     private readonly prisma: PrismaService,
     @Optional() private readonly platformStripe?: PlatformStripeConfigService,
     @Optional() private readonly config?: ConfigService,
+    // PaymentsService is looked up when a refund is needed, not injected: it reaches
+    // the appointments through its own imports, and injecting it would close a cycle.
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   /** A client with a completed visit, recognised by her email AND phone together. */
@@ -320,6 +326,45 @@ export class OnlineBookingPaymentService {
       });
     });
     return { result: 'paid', appointmentId: appointment.id, tenantId: appointment.tenantId };
+  }
+
+  /**
+   * A booking that was paid online is cancelled: what she paid goes back on
+   * the salon's Stripe account, in full (a cancellation in time by her, one by
+   * the salon, a booking the salon never confirmed). Refused to nothing: if
+   * Stripe cannot do it now, the booking stays cancelled, the failure is
+   * logged loudly and the salon can give it back from Pagos. Returns what was
+   * given back, and how many payments could not be.
+   */
+  async refundForCancellation(
+    appointment: { id: string; tenantId: string },
+    reason: string,
+    actorId?: string | null,
+  ): Promise<{ refundedCents: number; failed: number } | null> {
+    const payments = this.moduleRef?.get(PaymentsService, { strict: false });
+    if (!payments) return null;
+    const rows = await this.prisma.payment.findMany({
+      where: { tenantId: appointment.tenantId, appointmentId: appointment.id, status: 'paid', stripePaymentId: { not: null } },
+      select: { id: true, amount: true, metadata: true, refunds: { where: { status: 'succeeded' }, select: { amount: true } } },
+    });
+    const online = rows.filter((p) => onlineBookingAccountOf(p));
+    if (online.length === 0) return null;
+    let refundedCents = 0;
+    let failed = 0;
+    for (const p of online) {
+      const left = p.amount - p.refunds.reduce((s, r) => s + r.amount, 0);
+      if (left <= 0) continue;
+      try {
+        await payments.refundPayment(appointment.tenantId, p.id, { amount: left, reason }, actorId ?? null);
+        refundedCents += left;
+      } catch (err) {
+        failed++;
+        this.logger.error(
+          `Online payment ${p.id} of cancelled booking ${appointment.id} could NOT be refunded, do it from Pagos: ${(err as Error).message}`,
+        );
+      }
+    }
+    return { refundedCents, failed };
   }
 
   /**

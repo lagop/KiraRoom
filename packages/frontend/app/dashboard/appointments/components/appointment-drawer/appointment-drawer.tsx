@@ -32,6 +32,8 @@ import {
 import { planSlotSearch, type SlotSuggestion } from "../slot-suggestions";
 import { localDay } from "@/components/Calendar/day-grid";
 import { StatusChangeDialog } from "../StatusChangeDialog";
+import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, paidOnlineCents } from "@/lib/online-booking-state";
+import { euros } from "@/lib/booking-payment";
 import { LocationSelect } from "@/components/Calendar/LocationSelect";
 import { useBookingLocations } from "@/lib/use-booking-locations";
 import {
@@ -349,14 +351,14 @@ export function AppointmentDrawer({
     }
   };
 
-  const handleStatusChange = async (newStatus: AppointmentStatus, reason?: string) => {
+  const handleStatusChange = async (newStatus: AppointmentStatus, reason?: string, opts?: { keepOnlinePayment?: boolean }) => {
     if (!appointment) return;
 
     setUpdating(true);
     try {
       // Cancel, complete and no-show go to their own routes, which send the
       // notices, tell the wait-list and issue the invoice.
-      await sendStatusChange(apiClient, appointment.id, newStatus, reason);
+      await sendStatusChange(apiClient, appointment.id, newStatus, reason, opts);
       setAppointment((prev) => (prev && prev.id === appointment.id ? { ...prev, status: newStatus } : prev));
       // The list behind the drawer showed the old status until reloaded.
       onAppointmentUpdated?.();
@@ -924,11 +926,26 @@ export function AppointmentDrawer({
                 to={askingStatus}
                 loading={updating}
                 portal={false}
+                paidOnlineCents={paidOnlineCents(appointment)}
                 onCancel={() => setAskingStatus(null)}
-                onConfirm={(reason) => {
-                  if (askingStatus) void handleStatusChange(askingStatus, reason);
+                onConfirm={(reason, opts) => {
+                  if (askingStatus) void handleStatusChange(askingStatus, reason, opts);
                 }}
               />
+
+              {/* Paid online when booking: held until she pays, or what she paid. */}
+              {isAwaitingOnlinePayment(appointment) && (
+                <div data-test="drawer-awaiting-payment" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  Esperando el pago online de la clienta
+                  {holdUntilLabel(appointment) ? ` (hueco guardado hasta las ${holdUntilLabel(appointment)})` : ""}. Se confirma sola al
+                  pagar; si no paga, el hueco se libera.
+                </div>
+              )}
+              {paidOnlineCents(appointment) > 0 && (
+                <div data-test="drawer-paid-online" className="mt-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+                  La clienta pagó online {onlineKindLabel(appointment)}: {euros(paidOnlineCents(appointment))}. En Caja solo se cobra lo que falta.
+                </div>
+              )}
 
               {/* Main Content */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">

@@ -99,6 +99,42 @@ describe('ConnectEventsService', () => {
     expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
+  describe('refunds made on the salon\'s Stripe Dashboard (charge.refunded)', () => {
+    const charge = { id: 'ch_1', payment_intent: 'pi_1' };
+
+    it('are handed to the payments with the account that made them, once', async () => {
+      const t = build();
+      const payments: any = { reconcileOnlineRefunds: jest.fn(async () => 1) };
+      const service = new (require('./connect-events.service').ConnectEventsService)(t.prisma as any, { mode: () => 'test' } as any, payments);
+      (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      const e = event('charge.refunded', charge, { account: 'acct_1' });
+      expect(await service.handle(e)).toEqual({ received: true });
+      expect(payments.reconcileOnlineRefunds).toHaveBeenCalledWith(charge, 'acct_1');
+      expect(await service.handle(e)).toEqual({ received: true, duplicate: true });
+      expect(payments.reconcileOnlineRefunds).toHaveBeenCalledTimes(1);
+    });
+
+    it('are acknowledged and ignored without the payments service, and not in the other Stripe mode', async () => {
+      expect(await build().service.handle(event('charge.refunded', charge))).toEqual({ received: true, ignored: 'unhandled' });
+      const t = build({ mode: 'live' });
+      const payments: any = { reconcileOnlineRefunds: jest.fn() };
+      const service = new (require('./connect-events.service').ConnectEventsService)(t.prisma as any, { mode: () => 'live' } as any, payments);
+      (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      expect(await service.handle(event('charge.refunded', charge, { livemode: false }))).toEqual({ received: true, ignored: 'other_mode' });
+      expect(payments.reconcileOnlineRefunds).not.toHaveBeenCalled();
+    });
+
+    it('a failure raises the error and releases the claim so Stripe retries', async () => {
+      const t = build();
+      const payments: any = { reconcileOnlineRefunds: jest.fn(async () => { throw new Error('db down'); }) };
+      const service = new (require('./connect-events.service').ConnectEventsService)(t.prisma as any, { mode: () => 'test' } as any, payments);
+      (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      const e = event('charge.refunded', charge);
+      await expect(service.handle(e)).rejects.toThrow('db down');
+      expect(t.claimed.has(e.id)).toBe(false);
+    });
+  });
+
   describe('the payment events of online bookings', () => {
     const checkout = (type: string) => event(type, { id: 'cs_1', metadata: { kind: 'online_booking' } });
 

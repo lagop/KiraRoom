@@ -16,7 +16,13 @@ export const STRIPE_WEBHOOK_EVENTS = [
 ];
 
 /** The events KiraRoom handles on the webhook for CONNECTED accounts (type "Cuentas conectadas" in Stripe). */
-export const CONNECT_WEBHOOK_EVENTS = ["account.updated", "account.application.deauthorized"];
+export const CONNECT_WEBHOOK_EVENTS = [
+  "account.updated",
+  "account.application.deauthorized",
+  "checkout.session.completed",
+  "checkout.session.expired",
+  "charge.refunded",
+];
 
 export function modeName(mode: StripeMode): string {
   return mode === "live" ? "real" : mode === "test" ? "de pruebas" : "sin Stripe";

@@ -48,3 +48,6 @@ e3468b53eeacf6d3f83e609ab1f19362e88b4feb:packages/backend/src/payments/services/
 
 # Fictitious key in a test that Stripe errors never show a key (the spec now builds it at runtime).
 132e15423555730fd830416c90f9dd6bd9086d75:packages/backend/src/appointments/online-booking-payment.service.spec.ts:stripe-access-token:210
+
+# Fictitious key in a test that a failed refund never shows a key (the spec now builds it at runtime).
+96c9b5e00002aa1966b656b4ba15ac5d52bc9256:packages/backend/src/payments/online-refund.l2.spec.ts:stripe-access-token:166

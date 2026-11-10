@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type Stripe from 'stripe';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlatformStripeConfigService } from '../../platform/platform-stripe-config.service';
 import { connectFieldsFromAccount } from './stripe-connect';
+import { PaymentsService } from '../payments.service';
 
 /** Whoever handles the payment events of the salons' connected accounts (set by the appointments module). */
 export type ConnectPaymentHandler = (event: Stripe.Event) => Promise<void>;
@@ -33,6 +34,8 @@ export class ConnectEventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly platformStripe: PlatformStripeConfigService,
+    // Refunds made on a salon's Stripe Dashboard are recorded here (charge.refunded).
+    @Optional() private readonly payments?: PaymentsService,
   ) {}
 
   /**
@@ -110,6 +113,11 @@ export class ConnectEventsService {
           },
         });
         this.logger.log(`Salon ${tenant.id} disconnected its Stripe account from KiraRoom`);
+        return { received: true };
+      }
+      case 'charge.refunded': {
+        if (!this.payments) return { received: true, ignored: 'unhandled' };
+        await this.payments.reconcileOnlineRefunds(event.data.object as Stripe.Charge, event.account);
         return { received: true };
       }
       case 'checkout.session.completed':

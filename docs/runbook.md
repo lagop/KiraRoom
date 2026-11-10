@@ -508,7 +508,9 @@ webhook, apart from the platform's own:
 1. In Stripe (each mode) > Developers > Webhooks > Add endpoint, type
    **"Connected accounts"**, URL
    `https://api.kiraroom.net/api/v1/webhooks/stripe-connect`, events
-   `account.updated` and `account.application.deauthorized`.
+   `account.updated`, `account.application.deauthorized`,
+   `checkout.session.completed`, `checkout.session.expired` and
+   `charge.refunded`.
 2. Paste its signing secret in the platform console (Ajustes > Stripe >
    "Webhook de cuentas conectadas"), in the field of that mode. The two
    secrets (test, live) are kept apart and do not swap when the mode
@@ -519,6 +521,31 @@ webhook, apart from the platform's own:
    they press "Comprobar el estado".
 4. A salon that disconnects KiraRoom from its Stripe Dashboard is cleared
    (`account.application.deauthorized`) and can connect again.
+
+#### Paying when booking: what happens to the money
+
+The client pays on the salon's own Stripe account (direct charge, no
+commission). The booking is held (pending, slot occupied) until Stripe
+reports the payment; unpaid holds are released (36 min, swept every 5 min,
+asking Stripe first). A payment for a booking that no longer exists is
+refunded in full automatically.
+
+- **Cancelling a paid booking refunds the online payment in full** (the
+  client from her link, outside the salon's notice hours; the salon from
+  the panel; the 48 h pending-expiry job). The panel's cancel dialog shows
+  what she paid and a tick *No devolver el pago* for a late cancellation the
+  salon charges for. Marking a **no-show** keeps the payment. Inside the
+  notice hours the link does not cancel: the salon decides.
+- Refunds are made on Stripe first and then recorded (Refund with
+  `stripeRefundId`, Payment, appointment `amountPaid`, loyalty, commissions).
+  If Stripe fails the cancellation stands, the error is logged
+  (`could NOT be refunded, do it from Pagos`) and the salon can refund it
+  from Pagos. A refund made in the salon's own Stripe Dashboard is recorded
+  by `charge.refunded`, never twice.
+- Caja charges only what is left: an appointment's `amountPaid` includes the
+  online payment, and a fully prepaid one is already paid.
+- Disputes (chargebacks) are the salon's, on its own Stripe account; KiraRoom
+  does not handle them yet.
 
 ## First deploy: creating the platform owner
 

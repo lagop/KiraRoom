@@ -67,18 +67,29 @@ describe('the booking page of a booking held for its payment', () => {
     expect((await svc.describeCancelLink(token, NOW))!.payment).toMatchObject({ kind: 'full', amountCents: 6000 });
   });
 
-  it('once paid the payment is shown, and she cannot cancel it online: the salon decides about her money', async () => {
+  it('once paid the payment is shown; in time she may cancel it (the payment goes back), too late she is sent to the salon', async () => {
     const paid = base({ status: 'confirmed', paymentHoldUntil: null, depositPaid: true });
     const { svc, change, token } = harness(paid);
-    const info = await svc.describeCancelLink(token, NOW);
-    expect(info).toMatchObject({
-      state: 'paid_online',
-      canCancel: false,
+    expect(await svc.describeCancelLink(token, NOW)).toMatchObject({
+      state: 'cancellable',
+      canCancel: true,
       payment: { state: 'paid', kind: 'deposit', amountCents: 1500, holdUntil: null },
     });
-    // Pressing the button changes nothing either.
+    // Pressing the button cancels it through the usual path, which gives the payment back.
     await svc.cancelFromLink(token, NOW);
-    expect(change).not.toHaveBeenCalled();
+    expect(change).toHaveBeenCalledWith(
+      expect.objectContaining({ via: 'client_cancel_link' }),
+      APT,
+      'cancelled',
+      expect.anything(),
+    );
+
+    // Inside the salon's notice window nothing changes: the salon decides about the money.
+    const late = harness(base({ status: 'confirmed', paymentHoldUntil: null, depositPaid: true }));
+    const inside = new Date('2026-12-10T00:00:00.000Z');
+    expect(await late.svc.describeCancelLink(late.token, inside)).toMatchObject({ state: 'too_late', canCancel: false, payment: { state: 'paid' } });
+    await late.svc.cancelFromLink(late.token, inside);
+    expect(late.change).not.toHaveBeenCalled();
   });
 
   it('a booking without online payment shows none', async () => {
