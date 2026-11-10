@@ -498,6 +498,28 @@ saves the old one in the other's place, so pressing it again undoes it).
 Events of the other mode than the key in force are never applied (a
 test payment cannot activate a plan while live keys are in force).
 
+### Online payments of the salons (Stripe Connect)
+
+Each salon connects its own Stripe account from Ajustes > Cobros online
+(direct charges: the money goes to the salon's account, KiraRoom keeps
+no key of it). Stripe reports changes of those accounts to a SECOND
+webhook, apart from the platform's own:
+
+1. In Stripe (each mode) > Developers > Webhooks > Add endpoint, type
+   **"Connected accounts"**, URL
+   `https://api.kiraroom.net/api/v1/webhooks/stripe-connect`, events
+   `account.updated` and `account.application.deauthorized`.
+2. Paste its signing secret in the platform console (Ajustes > Stripe >
+   "Webhook de cuentas conectadas"), in the field of that mode. The two
+   secrets (test, live) are kept apart and do not swap when the mode
+   switches.
+3. Without the secret the endpoint answers 503 (Stripe retries) and
+   processes nothing; unsigned events are never processed. Without the
+   webhook, salons can still connect, but their status only updates when
+   they press "Comprobar el estado".
+4. A salon that disconnects KiraRoom from its Stripe Dashboard is cleared
+   (`account.application.deauthorized`) and can connect again.
+
 ## First deploy: creating the platform owner
 
 A fresh database has no users, so nobody can sign in to the SaaS console. After

@@ -125,12 +125,57 @@ function makeService({
   return { svc: new PublicSiteService(prisma as any, webDomain as any, EMPRESA), prisma };
 }
 
+describe("PublicSiteService.getPage: paying online when booking", () => {
+  function withPayment(connected: boolean) {
+    const t = makeService();
+    // The service the page lists asks for a señal, and prepayment is allowed.
+    (t.prisma.service.findMany as jest.Mock).mockImplementationOnce(async () => [
+      { id: "s1", name: "Corte", description: null, duration: 30, price: 18.5, currency: "EUR", category: "hair", depositRequired: true, depositAmount: "5.00", depositPercentage: null, allowPrepay: true },
+    ]);
+    (t.prisma.tenant as any).findUnique = jest.fn(async () => ({
+      stripeConnectAccountId: connected ? "acct_1" : null,
+      stripeConnectLivemode: false,
+      stripeConnectChargesEnabled: connected,
+      stripeConnectPayoutsEnabled: connected,
+      stripeConnectDetailsSubmitted: connected,
+      stripeConnectRequirementsDue: [],
+      stripeConnectDisabledReason: null,
+      stripeConnectCheckedAt: null,
+    }));
+    const platform = { client: () => ({}), mode: () => "test" };
+    return new PublicSiteService(t.prisma as any, { servingEnabled: () => false, liveSubdomain: () => null } as any, EMPRESA, platform as any);
+  }
+
+  it("a salon that can charge says what to pay, and never sends its raw deposit settings", async () => {
+    const page = await withPayment(true).getPage("salon-luna");
+    expect(page.services[0].onlinePayment).toMatchObject({ mode: "deposit_or_full", depositCents: 500, totalCents: 1850 });
+    for (const raw of ["depositRequired", "depositAmount", "depositPercentage", "allowPrepay"]) {
+      expect(page.services[0]).not.toHaveProperty(raw);
+    }
+  });
+
+  it("a salon that has not connected Stripe offers nothing, whatever its services say", async () => {
+    const page = await withPayment(false).getPage("salon-luna");
+    expect(page.services[0].onlinePayment).toMatchObject({ mode: "none", depositCents: null });
+  });
+});
+
 describe("PublicSiteService.getPage", () => {
   it("returns the page data with numbers, hours and no per-person schedules", async () => {
     const { svc } = makeService();
     const page = await svc.getPage("salon-luna");
     expect(page.services).toEqual([
-      { id: "s1", name: "Corte", description: null, duration: 30, price: 18.5, currency: "EUR", category: "hair" },
+      {
+        id: "s1",
+        name: "Corte",
+        description: null,
+        duration: 30,
+        price: 18.5,
+        currency: "EUR",
+        category: "hair",
+        // The salon has not connected Stripe: nothing to pay online.
+        onlinePayment: { mode: "none", totalCents: 1850, depositCents: null, depositRequired: false, canPayFull: false },
+      },
     ]);
     expect(page.openingHours).toEqual({
       monday: { openTime: "09:00", closeTime: "18:00" },

@@ -1,3 +1,5 @@
+import { PlatformStripeConfigService } from "../platform/platform-stripe-config.service";
+import { DEPOSIT_SERVICE_SELECT, onlinePaymentContextFor, withOnlinePayment } from "../payments/online-payment-context";
 import { GoneException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import { Prisma, SubscriptionStatus } from "@prisma/client";
 import { PrismaService } from "../common/prisma/prisma.service";
@@ -65,6 +67,8 @@ export class PublicSiteService {
     private readonly webDomain: WebDomainService,
     // The plan check for the WhatsApp promotions box (global FeatureFlagModule).
     @Optional() private readonly featureFlags?: FeatureFlagService,
+    // Whether the salon can take online payments (señal / pago anticipado) now.
+    @Optional() private readonly platformStripe?: PlatformStripeConfigService,
   ) {}
 
   /**
@@ -142,6 +146,7 @@ export class PublicSiteService {
       new Date(),
     );
     const horizon = new Date(dateOfDay(today)!.getTime() + MAX_SPAN_DAYS * 86_400_000);
+    const payment = await onlinePaymentContextFor(this.prisma, this.platformStripe, tenant.id);
     const [services, professionals, closures, whatsappNotices, where, whatsappPromotions] = await Promise.all([
       this.prisma.service.findMany({
         where: { tenantId: tenant.id, isActive: true },
@@ -158,6 +163,8 @@ export class PublicSiteService {
           // How many days ahead it can be booked online (the booking window
           // the date picker stops at; GET /appointments/booking-window).
           maxAdvanceBooking: true,
+          // Turned into `onlinePayment` below, never sent as such.
+          ...DEPOSIT_SERVICE_SELECT,
         },
         orderBy: [{ category: "asc" }, { name: "asc" }],
       }),
@@ -279,7 +286,7 @@ export class PublicSiteService {
       bookingUnavailable: bookingUnavailableReason(tenant.subscriptionStatus, professionals.length),
       // The final price, tax included, whichever way the salon writes its
       // catalogue: 36.30 for a 30.00 net service at 21 % IVA.
-      services: services.map((s) => ({ ...s, price: publicPrice(s.price, prices) })),
+      services: services.map((s) => withOnlinePayment({ ...s, price: publicPrice(s.price, prices) }, payment)),
       // The tax those prices include (IVA, IGIC, IPSI), so the page can say
       // "IVA incluido" once, next to the price list.
       taxLabel: prices.taxLabel,

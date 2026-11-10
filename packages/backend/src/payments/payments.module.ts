@@ -2,12 +2,14 @@ import { forwardRef, Module } from "@nestjs/common";
 import { ScheduleModule } from "@nestjs/schedule";
 import { PaymentsController } from "./payments.controller";
 import { WebhooksController } from "./webhooks.controller";
+import { ConnectWebhooksController } from "./connect-webhooks.controller";
 import { AddOnsAdminController } from "./controllers/addons.controller";
 import { TenantAddOnsController } from "./controllers/tenant-addons.controller";
 import { PaymentsService } from "./payments.service";
 import { PrismaModule } from "../common/prisma/prisma.module";
 import { StripeService } from "./services/stripe.service";
 import { ConnectAccountsService } from "./services/connect-accounts.service";
+import { ConnectEventsService } from "./services/connect-events.service";
 import { WalletService } from "./services/wallet.service";
 import { SubscriptionsService } from "./services/subscriptions.service";
 import { AddOnsService } from "./services/addons.service";
@@ -37,11 +39,12 @@ import { AuditLogService } from "../saas/audit-log.service";
     // KiraRoom's Stripe account, set in the platform console (else .env).
     PlatformModule,
   ],
-  controllers: [PaymentsController, WebhooksController, AddOnsAdminController, TenantAddOnsController],
+  controllers: [PaymentsController, WebhooksController, ConnectWebhooksController, AddOnsAdminController, TenantAddOnsController],
   providers: [
     PaymentsService,
     StripeService,
     ConnectAccountsService,
+    ConnectEventsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,
@@ -56,6 +59,8 @@ import { AuditLogService } from "../saas/audit-log.service";
     PaymentsService,
     StripeService,
     ConnectAccountsService,
+    // The appointments module registers the handler of online-booking payments here.
+    ConnectEventsService,
     WalletService,
     SubscriptionsService,
     AddOnsService,

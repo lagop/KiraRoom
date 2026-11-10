@@ -15,6 +15,9 @@ export const STRIPE_WEBHOOK_EVENTS = [
   "charge.refunded",
 ];
 
+/** The events KiraRoom handles on the webhook for CONNECTED accounts (type "Cuentas conectadas" in Stripe). */
+export const CONNECT_WEBHOOK_EVENTS = ["account.updated", "account.application.deauthorized"];
+
 export function modeName(mode: StripeMode): string {
   return mode === "live" ? "real" : mode === "test" ? "de pruebas" : "sin Stripe";
 }
@@ -43,6 +46,8 @@ export interface StripeForm {
   otherWebhookSecret: string;
   otherSecretKey: string;
   otherPublishableKey: string;
+  connectWebhookSecretTest: string;
+  connectWebhookSecretLive: string;
 }
 
 /** "Pasar a modo X": swaps the set in force with the saved one of the other mode. */
@@ -59,6 +64,8 @@ export function stripeUpdate(form: StripeForm, cfg: PlatformStripeConfig): Platf
   if (form.webhookSecret.trim()) out.webhookSecret = form.webhookSecret.trim();
   if (form.otherWebhookSecret.trim()) out.otherWebhookSecret = form.otherWebhookSecret.trim();
   if (form.otherSecretKey.trim()) out.otherSecretKey = form.otherSecretKey.trim();
+  if (form.connectWebhookSecretTest.trim()) out.connectWebhookSecretTest = form.connectWebhookSecretTest.trim();
+  if (form.connectWebhookSecretLive.trim()) out.connectWebhookSecretLive = form.connectWebhookSecretLive.trim();
   const pk = form.publishableKey.trim();
   if (pk && pk !== (cfg.publishableKey.value ?? "")) out.publishableKey = pk;
   const otherPk = form.otherPublishableKey.trim();

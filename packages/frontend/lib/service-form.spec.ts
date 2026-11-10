@@ -97,11 +97,57 @@ check("a new service starts with the backend's defaults", (() => {
   return r.ok && r.payload.duration === 30 && r.payload.minAdvanceBooking === 2 && r.payload.maxAdvanceBooking === 30;
 })());
 
+console.log("online payment when booking");
+const priced = { ...EMPTY_SERVICE_FORM, name: "Tinte", price: "60" };
+check("no señal, no prepayment: nothing asked", (() => {
+  const r = formToPayload(priced);
+  return r.ok && r.payload.depositRequired === false && r.payload.depositAmount === null && r.payload.depositPercentage === null && r.payload.allowPrepay === false;
+})());
+check("a fixed señal in euros (comma or point)", (() => {
+  const r = formToPayload({ ...priced, paymentKind: "fixed", depositValue: "12,50" });
+  return r.ok && r.payload.depositRequired && r.payload.depositAmount === 12.5 && r.payload.depositPercentage === null;
+})());
+check("a percentage señal", (() => {
+  const r = formToPayload({ ...priced, paymentKind: "percent", depositValue: "30" });
+  return r.ok && r.payload.depositRequired && r.payload.depositPercentage === 30 && r.payload.depositAmount === null;
+})());
+check("prepayment alone", (() => {
+  const r = formToPayload({ ...priced, allowPrepay: true });
+  return r.ok && !r.payload.depositRequired && r.payload.allowPrepay === true;
+})());
+check("the señal needs a value", (() => {
+  const r = formToPayload({ ...priced, paymentKind: "fixed", depositValue: "" });
+  return !r.ok && r.error === "deposit_invalid";
+})());
+check("zero, negative and three-decimal euros are refused", ["0", "-5", "5.555", "abc"].every((v) => !formToPayload({ ...priced, paymentKind: "fixed", depositValue: v }).ok));
+check("a percentage is a whole number from 1 to 100", ["0", "101", "12.5", ""].every((v) => !formToPayload({ ...priced, paymentKind: "percent", depositValue: v }).ok) && formToPayload({ ...priced, paymentKind: "percent", depositValue: "100" }).ok);
+check("a señal above the price is refused", (() => {
+  const r = formToPayload({ ...priced, paymentKind: "fixed", depositValue: "80" });
+  return !r.ok && r.error === "deposit_above_price";
+})());
+check("a service under 0,50 € cannot ask for money online", (() => {
+  const r = formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", price: "0.3", allowPrepay: true });
+  return !r.ok && r.error === "online_price_low";
+})());
+check("a free service with nothing online is still fine", formToPayload({ ...EMPTY_SERVICE_FORM, name: "X", price: "0" }).ok);
+check("a stored fixed señal fills the form", (() => {
+  const f = serviceToForm({ name: "T", category: "hair", duration: 30, price: "60.00", isActive: true, depositRequired: true, depositAmount: "15.00", depositPercentage: null, allowPrepay: true });
+  return f.paymentKind === "fixed" && f.depositValue === "15" && f.allowPrepay === true;
+})());
+check("a stored percentage señal fills the form", (() => {
+  const f = serviceToForm({ name: "T", category: "hair", duration: 30, price: "60.00", isActive: true, depositRequired: true, depositAmount: null, depositPercentage: "25.00" });
+  return f.paymentKind === "percent" && f.depositValue === "25";
+})());
+check("settings left on a service that no longer asks for a señal are not shown", (() => {
+  const f = serviceToForm({ name: "T", category: "hair", duration: 30, price: "60.00", isActive: true, depositRequired: false, depositAmount: "15.00" });
+  return f.paymentKind === "none" && f.depositValue === "";
+})());
+
 console.log("every error has a message in both languages");
 for (const lang of ["es", "en"]) {
   const raw = fs.readFileSync(path.join(__dirname, "..", "messages", `${lang}.json`), "utf8").replace(/^﻿/, "");
   const services = JSON.parse(raw).services ?? {};
-  for (const key of ["name_required", "duration_invalid", "price_invalid", "buffer_invalid", "min_advance_invalid", "max_advance_invalid"]) {
+  for (const key of ["name_required", "duration_invalid", "price_invalid", "buffer_invalid", "min_advance_invalid", "max_advance_invalid", "deposit_invalid", "deposit_above_price", "online_price_low", "pay_title", "pay_kind_none", "pay_kind_fixed", "pay_kind_percent", "allow_prepay"]) {
     check(`${lang}: services.${key}`, typeof services[key] === "string" && services[key].length > 0);
   }
 }

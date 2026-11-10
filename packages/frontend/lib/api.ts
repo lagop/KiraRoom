@@ -1034,6 +1034,22 @@ export interface Service {
   minAdvanceBooking?: number;
   /** Days ahead an online booking may be made. */
   maxAdvanceBooking?: number;
+  /** The salon's own view: a señal is asked when booking online. */
+  depositRequired?: boolean;
+  /** Señal as a fixed amount in euros (a Decimal column: arrives as a string). */
+  depositAmount?: number | string | null;
+  /** Señal as a percentage of the price (1 to 100). */
+  depositPercentage?: number | string | null;
+  /** The client may pay the whole service in advance when she books. */
+  allowPrepay?: boolean;
+  /** The public view: what a client may pay now (cents). Absent in the salon's own view. */
+  onlinePayment?: {
+    mode: "none" | "optional" | "deposit" | "deposit_or_full";
+    totalCents: number;
+    depositCents: number | null;
+    depositRequired: boolean;
+    canPayFull: boolean;
+  };
 }
 
 /** What the services panel sends; see lib/service-form.ts. */
@@ -1049,6 +1065,12 @@ export interface ServiceWrite {
   requiresApproval?: boolean;
   minAdvanceBooking?: number;
   maxAdvanceBooking?: number;
+  depositRequired?: boolean;
+  /** Euros; null when the señal is a percentage (or none). */
+  depositAmount?: number | null;
+  /** 1 to 100; null when the señal is a fixed amount (or none). */
+  depositPercentage?: number | null;
+  allowPrepay?: boolean;
 }
 
 /** A commission payout, as the "Pagos" tab lists it. Amounts in cents. */
@@ -1152,6 +1174,12 @@ export interface CreateAppointmentDto {
   scheduledDate: string;
   scheduledTime: string;
   notes?: string;
+  /**
+   * Public booking only, when the service takes an online payment: the señal
+   * or the whole service (lib/booking-payment.ts). The server decides the
+   * amount and whether she has to pay at all.
+   */
+  payment?: "deposit" | "full";
   depositRequired?: boolean;
   depositAmount?: number;
   /** null clears the appointment's own rate (PATCH). */
@@ -6638,6 +6666,9 @@ class ApiClient implements ApiClientInterface {
   async refreshConnectStatus(): Promise<ConnectStatus> {
     return this.request(`/payments/connect/refresh`, { method: "POST" });
   }
+  async updateConnectSettings(input: Partial<Pick<ConnectSettings, "depositExemptReturning">>): Promise<ConnectStatus> {
+    return this.request(`/payments/connect/settings`, { method: "PATCH", body: JSON.stringify(input) });
+  }
   /** Creates the account if needed and returns the link to Stripe's own sign-up form. */
   async startConnectOnboarding(): Promise<{ url: string }> {
     return this.request(`/payments/connect/onboarding`, { method: "POST" });
@@ -6797,6 +6828,14 @@ export interface PlatformRetentionConfig {
 export type StripeMode = "test" | "live" | "none";
 
 /** Where a salon stands with its own Stripe account for online payments. */
+/** The salon's own rules for online payments. */
+export interface ConnectSettings {
+  /** A client with a completed visit is not asked for the señal. */
+  depositExemptReturning: boolean;
+  /** Hours before the appointment up to which a cancellation gets the señal back. */
+  minCancelHours: number;
+}
+
 export interface ConnectStatus {
   state: "none" | "pending" | "restricted" | "active";
   canCharge: boolean;
@@ -6809,6 +6848,7 @@ export interface ConnectStatus {
   checkedAt: string | null;
   /** KiraRoom's own Stripe keys are set, so a salon can connect. */
   platformReady: boolean;
+  settings: ConnectSettings;
 }
 
 export interface PlatformStripeConfig {
@@ -6827,6 +6867,8 @@ export interface PlatformStripeConfig {
     canSwitch: boolean;
     switchProblem: string | null;
   };
+  /** The webhook for connected accounts (online payments of the salons): one signing secret per mode. */
+  connectWebhook: { test: { lastFour: string | null }; live: { lastFour: string | null } };
   /** What the server's .env holds, for "Volver a lo del servidor". */
   server: { mode: StripeMode; hasWebhookSecret: boolean };
   /** Why the settings in force cannot take payments safely; null when they can. */
@@ -6847,6 +6889,9 @@ export interface PlatformStripeUpdate {
   otherPublishableKey?: string | null;
   /** Swap the set in force with the saved one of the other mode; takes no other field. */
   switchMode?: boolean;
+  /** Signing secrets of the webhook for connected accounts, per mode. */
+  connectWebhookSecretTest?: string | null;
+  connectWebhookSecretLive?: string | null;
 }
 
 /** Audit 8 D8: real salons whose plan was activated by a test-mode payment (nothing charged). */

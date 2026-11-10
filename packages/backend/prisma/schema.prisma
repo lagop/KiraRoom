@@ -54,6 +54,9 @@ model Tenant {
   assistantName          String             @default("Kira")
   cancellationPolicy     String?
   minCancelHours         Int                @default(24)
+  /// Online señal: a client who already has a completed visit is not asked
+  /// for it (she is recognised by her email and phone together).
+  depositExemptReturning Boolean            @default(true)
   openingHours           Json               @default("{}")
   /// Minutes between the start times offered when booking (site, widget,
   /// receptionist, the panel's suggestions): 10, 15, 20, 30 or 60.
@@ -757,6 +760,9 @@ model Service {
   depositRequired     Boolean               @default(false)
   depositAmount       Decimal?
   depositPercentage   Decimal?
+  /// Online payments: the client may pay the whole service in advance when
+  /// she books (alone, or on top of a required señal above).
+  allowPrepay         Boolean               @default(false)
   images              Json                  @default("[]")
   prerequisites       Json                  @default("[]")
   staff               Json                  @default("[]")
@@ -900,6 +906,18 @@ model Appointment {
   depositAmount          Decimal?
   depositPaid            Boolean             @default(false)
   depositPaymentIntentId String?
+  /// Online payment at booking: until when the slot is held while the client
+  /// pays (Stripe Checkout on the salon's account). Null once paid, or when
+  /// the booking was never held. A held booking that is not paid by then is
+  /// deleted (online-booking-payment.service.ts).
+  paymentHoldUntil       DateTime?
+  /// The Checkout Session of the held booking, on the salon's connected account.
+  checkoutSessionId      String?             @unique
+  /// "deposit" or "full": what the client is paying online.
+  onlinePaymentKind      String?
+  /// The status the booking takes once paid (confirmed, or pending when the
+  /// salon approves online bookings itself). While held it is pending.
+  statusAfterPayment     AppointmentStatus?
   /// The appointment's own service as it was booked (or as it was when the
   /// salon switched the appointment to another service): its name, its price
   /// in EUROS and its length in minutes. Editing the service in the catalog
@@ -964,6 +982,7 @@ model Appointment {
   /// Periodic jobs: the reminders select by startTime, the loyalty sweep by updatedAt.
   @@index([startTime])
   @@index([updatedAt])
+  @@index([paymentHoldUntil])
   @@map("appointments")
 }
 
@@ -3709,6 +3728,11 @@ model PlatformStripeConfig {
   /// "Pasar a modo X" swaps the two sets without pasting anything again.
   otherSecretKeyEncrypted String? @db.Text
   otherPublishableKey     String?
+  /// Signing secrets of the Stripe webhook for CONNECTED accounts (a separate
+  /// endpoint from the platform's own), one per Stripe mode, kept apart by
+  /// mode because they never swap when the mode switches.
+  connectWebhookSecretTestEncrypted String? @db.Text
+  connectWebhookSecretLiveEncrypted String? @db.Text
   /// Ignored: KiraRoom charges no VAT (D6). Kept for the column.
   taxEnabled             Boolean?
   updatedAt              DateTime @updatedAt

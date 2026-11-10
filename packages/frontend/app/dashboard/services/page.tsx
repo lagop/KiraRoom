@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { ImportLink } from "@/components/import-link";
 
 import { useState, useEffect, Suspense } from "react";
@@ -638,6 +639,63 @@ function ServicesPageContent() {
                           </span>
                         </span>
                       </label>
+
+                      <div className="space-y-3 border-t border-gray-100 pt-3">
+                        <p className="text-sm font-medium text-gray-900">{t("services.pay_title")}</p>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label htmlFor="service-pay-kind" className="block text-sm font-medium text-gray-700 mb-1">
+                              {t("services.pay_kind")}
+                            </label>
+                            <select
+                              id="service-pay-kind"
+                              value={formData.paymentKind}
+                              onChange={(e) => setField("paymentKind", e.target.value as ServiceFormState["paymentKind"])}
+                              className={inputClass}
+                            >
+                              <option value="none">{t("services.pay_kind_none")}</option>
+                              <option value="fixed">{t("services.pay_kind_fixed")}</option>
+                              <option value="percent">{t("services.pay_kind_percent")}</option>
+                            </select>
+                          </div>
+                          {formData.paymentKind !== "none" && (
+                            <div>
+                              <label htmlFor="service-pay-value" className="block text-sm font-medium text-gray-700 mb-1">
+                                {formData.paymentKind === "fixed" ? t("services.pay_value_fixed") : t("services.pay_value_percent")}
+                              </label>
+                              <input
+                                id="service-pay-value"
+                                type="text"
+                                inputMode="decimal"
+                                value={formData.depositValue}
+                                onChange={(e) => setField("depositValue", e.target.value)}
+                                className={inputClass}
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <label className="flex items-start gap-2 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={formData.allowPrepay}
+                            onChange={(e) => setField("allowPrepay", e.target.checked)}
+                            aria-describedby="service-prepay-hint"
+                          />
+                          <span>
+                            {t("services.allow_prepay")}
+                            <span id="service-prepay-hint" className="block text-xs text-gray-500">
+                              {t("services.allow_prepay_hint")}
+                            </span>
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500">
+                          {t("services.pay_connect_note")}{" "}
+                          <Link href="/dashboard/settings/cobros-online" className="underline">
+                            {t("services.pay_connect_link")}
+                          </Link>
+                        </p>
+                      </div>
                     </>
                   )}
                 </fieldset>

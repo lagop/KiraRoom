@@ -27,6 +27,7 @@ import { getMetadataStorage } from "class-validator";
 const ALLOWED_UNVALIDATED = new Set([
   "WebhooksController.handleTwilioWebhook", // X-Twilio-Signature
   "WebhooksController.handleStripeWebhook", // stripe-signature over the raw body
+  "ConnectWebhooksController.handle", // stripe-signature over the raw body (connected accounts)
   "MetaWebhookController.handle", // x-hub-signature-256 over the raw body
   "ChannelsWebhookController.handleMeta", // x-hub-signature-256 over the raw body
   "ChannelsWebhookController.handleTelegram", // per-tenant secret token header

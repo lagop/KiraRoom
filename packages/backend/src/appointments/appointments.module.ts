@@ -7,6 +7,11 @@ import { AppointmentServicesService } from "./appointment-services.service";
 import { HomeSummaryService } from "./home-summary.service";
 import { PublicAppointmentController } from "./public-appointment.controller";
 import { PendingBookingExpiryScheduler } from "./pending-booking-expiry.scheduler";
+import { OnlineBookingPaymentService } from "./online-booking-payment.service";
+import { OnlinePaymentEventsBridge } from "./online-payment-events.bridge";
+import { OnlinePaymentHoldScheduler } from "./online-payment-hold.scheduler";
+import { PlatformModule } from "../platform/platform.module";
+import { PaymentsModule } from "../payments/payments.module";
 import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
 import { AnalyticsModule } from "../analytics/analytics.module";
 import { NotificationsModule } from "../notifications/notifications.module";
@@ -34,6 +39,10 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     WaitListModule,
     // Inicio (HomeSummaryService): the location filter and today's occupancy, as in Analítica.
     AnalyticsModule,
+    // Online payment when booking: the platform's Stripe keys, and the
+    // connected-accounts webhook the payment events arrive on.
+    PlatformModule,
+    PaymentsModule,
   ],
   controllers: [AppointmentsController, AppointmentServicesController, PublicAppointmentController],
   providers: [
@@ -42,6 +51,9 @@ import { WhatsAppMessagingModule } from "../whatsapp/whatsapp-messaging.module";
     HomeSummaryService,
     PendingBookingExpiryScheduler,
     SalonBookingAlertsService,
+    OnlineBookingPaymentService,
+    OnlinePaymentEventsBridge,
+    OnlinePaymentHoldScheduler,
   ],
   exports: [AppointmentsService, AppointmentServicesService, HomeSummaryService],
 })

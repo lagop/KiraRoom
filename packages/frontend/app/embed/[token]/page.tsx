@@ -1,6 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BookingPaymentChoice } from "@/components/booking/payment-choice";
+import {
+  BOOKING_PAYMENT_TEXT,
+  PaymentChoice,
+  ServiceOnlinePayment,
+  amountDueNow,
+  bookingNeedsPayment,
+  euros,
+  paymentToSend,
+  safeCheckoutUrl,
+} from "@/lib/booking-payment";
 import { useParams } from "next/navigation";
 import {
   Calendar,
@@ -81,6 +92,8 @@ interface WidgetConfig {
     price: number;
     currency: string;
     images: any;
+    /** What a client may pay online when she books (cents). */
+    onlinePayment?: ServiceOnlinePayment;
   }>;
   professionals: Array<{
     id: string;
@@ -159,6 +172,9 @@ export default function EmbedWidgetPage() {
   const [website, setWebsite] = useState("");
   // The two boxes, both unticked (BOOKING_CHOICE_TEXT).
   const [refusesMarketingEmail, setRefusesMarketingEmail] = useState(false);
+  // What she picked to pay online, for the service it was picked on.
+  const [paymentPick, setPaymentPick] = useState<{ serviceId: string; value: PaymentChoice } | null>(null);
+  const [goingToPay, setGoingToPay] = useState(false);
   const [wantsWhatsAppNotices, setWantsWhatsAppNotices] = useState(false);
   // Optional, never pre-ticked (config.whatsappPromotions).
   const [wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false);
@@ -291,6 +307,10 @@ export default function EmbedWidgetPage() {
     if (!config || !time) return;
     setSubmitting(true);
     setBookingError(null);
+    const paymentSent = paymentToSend(
+      config.services.find((s) => s.id === serviceId)?.onlinePayment,
+      paymentPick && paymentPick.serviceId === serviceId ? paymentPick.value : null,
+    );
     try {
       // "Ana" is Ana with no last name, not "Ana Ana".
       const { firstName, lastName } = splitClientName(name);
@@ -308,6 +328,8 @@ export default function EmbedWidgetPage() {
         // The phone is required (the salon's way to reach the client about a
         // change); the email is optional.
         clientInfo: { firstName, lastName, phone, email: email.trim() || undefined },
+        // The señal or the whole service, when the service takes payments online.
+        ...(paymentSent ? { payment: paymentSent } : {}),
         // Only what she ticked: an unticked box sends nothing.
         ...(refusesMarketingEmail ? { refusesMarketingEmail: true } : {}),
         ...(config.whatsappNotices && wantsWhatsAppNotices ? { wantsWhatsAppNotices: true } : {}),
@@ -325,6 +347,21 @@ export default function EmbedWidgetPage() {
         throw new Error(bookingErrorMessage(err.message) || `HTTP ${res.status}`);
       }
       const appt = await res.json();
+      // She has to pay to confirm it: held for her, announced when Stripe
+      // says it is paid. Off to the payment page (the widget sits in an
+      // iframe on the salon's site: the whole window goes, so Stripe's page
+      // is not framed).
+      if (bookingNeedsPayment(appt)) {
+        const url = safeCheckoutUrl(appt.payment.checkoutUrl);
+        if (!url) throw new Error(BOOKING_PAYMENT_TEXT.payFailed);
+        setGoingToPay(true);
+        try {
+          (window.top ?? window).location.assign(url);
+        } catch {
+          window.location.assign(url);
+        }
+        return;
+      }
       setBookingId(appt.id);
       setBookedPlace(confirmedPlace(bookingLocations(config), locationId, appt));
       setStep("done");
@@ -364,6 +401,10 @@ export default function EmbedWidgetPage() {
   }
 
   const selectedService = config.services.find((s) => s.id === serviceId);
+  const dueNow = amountDueNow(
+    selectedService?.onlinePayment,
+    paymentPick && paymentPick.serviceId === serviceId ? paymentPick.value : null,
+  );
   // With a location step: only what can be booked at the chosen location
   // (before one is chosen, every service and whoever works at any of them).
   const servicesHere = servicesAtLocation(config.services, config.professionals, locations, locationId);
@@ -737,6 +778,12 @@ export default function EmbedWidgetPage() {
                 {bookingError}
               </div>
             )}
+            <BookingPaymentChoice
+              offer={selectedService?.onlinePayment}
+              choice={paymentPick && paymentPick.serviceId === serviceId ? paymentPick.value : null}
+              onChange={(value) => setPaymentPick({ serviceId, value })}
+              disabled={submitting || goingToPay}
+            />
             <div className="flex gap-2">
               <button
                 type="button"
@@ -747,10 +794,16 @@ export default function EmbedWidgetPage() {
               </button>
               <button
                 type="submit"
-                disabled={submitting || !time}
+                disabled={submitting || goingToPay || !time}
                 className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
               >
-                {submitting ? "Enviando…" : "Confirmar reserva"}
+                {goingToPay
+                  ? BOOKING_PAYMENT_TEXT.redirecting
+                  : submitting
+                    ? "Enviando…"
+                    : dueNow
+                      ? BOOKING_PAYMENT_TEXT.payButton(euros(dueNow))
+                      : "Confirmar reserva"}
               </button>
             </div>
             {/* Who uses these details and what for (RGPD art. 13). */}

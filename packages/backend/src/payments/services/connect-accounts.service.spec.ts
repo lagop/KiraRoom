@@ -24,6 +24,8 @@ const tenantRow = (over: Record<string, unknown> = {}) => ({
   stripeConnectRequirementsDue: null,
   stripeConnectDisabledReason: null,
   stripeConnectCheckedAt: null,
+  depositExemptReturning: true,
+  minCancelHours: 24,
   ...over,
 });
 
@@ -147,6 +149,17 @@ describe('ConnectAccountsService', () => {
     await expect(build({ stripe: noConnect }).service.startOnboarding('t1')).rejects.toThrow(
       /cobros online todavía no están disponibles/,
     );
+  });
+
+  it("shows the salon's rules for online payments, and changes only what is sent", async () => {
+    const { service, prisma, getRow } = build();
+    expect((await service.status('t1')).settings).toEqual({ depositExemptReturning: true, minCancelHours: 24 });
+    const out = await service.updateSettings('t1', { depositExemptReturning: false });
+    expect(out.settings.depositExemptReturning).toBe(false);
+    expect(getRow()).toMatchObject({ depositExemptReturning: false });
+    prisma.tenant.update.mockClear();
+    await service.updateSettings('t1', {});
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
   });
 
   it('without keys, starting is refused before any call', async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, CreditCard, ExternalLink, Loader2, RefreshCw } from "lucide-react";
@@ -51,6 +52,21 @@ function CobrosOnlineContent() {
         description: err instanceof Error ? err.message : undefined,
         variant: "destructive",
       });
+    }
+  }
+
+  async function setExempt(value: boolean) {
+    setWorking(true);
+    try {
+      qc.setQueryData(["connect", "status"], await apiClient.updateConnectSettings({ depositExemptReturning: value }));
+    } catch (err) {
+      toast({
+        title: t("onlinePayments.rules_error"),
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setWorking(false);
     }
   }
 
@@ -180,6 +196,35 @@ function CobrosOnlineContent() {
               {t("onlinePayments.checked", { date: new Date(data.checkedAt).toLocaleString("es-ES") })}
             </p>
           )}
+        </div>
+      )}
+
+      {data && (
+        <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-gray-900">{t("onlinePayments.rules_title")}</h2>
+          <label className="flex items-start gap-3 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={data.settings.depositExemptReturning}
+              disabled={working}
+              onChange={(e) => void setExempt(e.target.checked)}
+              aria-describedby="rules-exempt-hint"
+            />
+            <span>
+              {t("onlinePayments.exempt_label")}
+              <span id="rules-exempt-hint" className="block text-xs text-gray-500">
+                {t("onlinePayments.exempt_hint")}
+              </span>
+            </span>
+          </label>
+          <p className="text-sm text-gray-700">
+            {t("onlinePayments.cancel_rule", { hours: data.settings.minCancelHours })}{" "}
+            <Link href="/dashboard/settings" className="underline">
+              {t("onlinePayments.cancel_change")}
+            </Link>
+          </p>
+          <p className="text-xs text-gray-500">{t("onlinePayments.services_note")}</p>
         </div>
       )}
 

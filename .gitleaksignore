@@ -45,3 +45,6 @@ b2235d3e31e3a96bc35860817c7a48e79326f14b:packages/frontend/lib/embed-frame.spec.
 
 # Fictitious key in a test of the Stripe error redaction (the spec now builds it at runtime).
 e3468b53eeacf6d3f83e609ab1f19362e88b4feb:packages/backend/src/payments/services/connect-accounts.service.spec.ts:stripe-access-token:126
+
+# Fictitious key in a test that Stripe errors never show a key (the spec now builds it at runtime).
+132e15423555730fd830416c90f9dd6bd9086d75:packages/backend/src/appointments/online-booking-payment.service.spec.ts:stripe-access-token:210

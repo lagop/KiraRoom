@@ -73,6 +73,13 @@ const usedKeys = [
   "onlinePayments.pending_text",
   "onlinePayments.restricted_text",
   "onlinePayments.active_text",
+  "onlinePayments.rules_title",
+  "onlinePayments.rules_error",
+  "onlinePayments.exempt_label",
+  "onlinePayments.exempt_hint",
+  "onlinePayments.cancel_rule",
+  "onlinePayments.cancel_change",
+  "onlinePayments.services_note",
 ];
 const has = (json: any, key: string) => key.split(".").reduce((o: any, k) => (o ? o[k] : undefined), json) !== undefined;
 check("every key the page uses exists in both languages", usedKeys.every((k) => has(es, k) && has(en, k)), usedKeys.filter((k) => !has(es, k) || !has(en, k)));
