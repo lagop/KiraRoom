@@ -5,10 +5,10 @@
  * Direct charges: the payment is made on the salon's account, so the money
  * and the contract are between the salon and Stripe; KiraRoom holds no funds
  * and no secret key of the salon, only the account id and the status Stripe
- * last reported. The account behaves like a "Standard" one, built with
- * controller properties (Stripe deprecated the account types): the salon has
+ * last reported. The account behaves like a "Standard" one: the salon has
  * its own Stripe Dashboard, Stripe collects its identity and bank details,
- * the account pays Stripe's fees and answers for negative balances.
+ * the account pays Stripe's fees and Stripe answers for losses. It is created
+ * with Accounts v2 (stripe-v2.ts); v1 is used for everything else.
  *
  * Pure, so it is tested without Stripe (stripe-connect.spec.ts).
  */
@@ -127,33 +127,87 @@ function usableWebsite(url: string | null): string | undefined {
 }
 
 /**
- * The account to create, prefilled with what KiraRoom already knows so the
- * salon fills fewer fields in Stripe's own form (identity, bank and tax
- * details are always collected by Stripe).
+ * The account to create (Accounts v2, POST /v2/core/accounts), prefilled with
+ * what KiraRoom already knows so the salon fills fewer fields in Stripe's own
+ * form (identity, bank and tax details are always collected by Stripe).
+ *
+ * Same account as before, in v2 terms: the salon's own full Stripe Dashboard,
+ * the merchant configuration with card payments (direct charges, the salon is
+ * the merchant of record), Stripe's fees paid by the account and Stripe
+ * answering for losses (so Stripe also collects the requirements). These
+ * responsibilities cannot be changed once set.
  */
-export function connectAccountParams(t: ConnectTenantIdentity): Stripe.AccountCreateParams {
-  const country = (t.country || 'ES').toUpperCase();
+export function connectAccountParams(t: ConnectTenantIdentity): ConnectAccountV2Params {
+  const country = (t.country || 'ES').toLowerCase();
   const url = usableWebsite(t.website);
+  const name = t.legalName || t.name;
   return {
-    controller: {
-      // The salon's own Stripe Dashboard, where it sees payments, payouts and disputes.
-      stripe_dashboard: { type: 'full' },
-      // Stripe collects identity, bank and tax details and keeps them up to date.
-      requirement_collection: 'stripe',
-      // The salon pays Stripe's fees and answers for its negative balances (direct charges).
-      fees: { payer: 'account' },
-      losses: { payments: 'stripe' },
+    ...(t.email ? { contact_email: t.email } : {}),
+    display_name: name,
+    dashboard: 'full',
+    identity: {
+      country,
+      ...(t.legalName ? { business_details: { registered_name: t.legalName } } : {}),
     },
-    country,
-    ...(t.email ? { email: t.email } : {}),
-    business_profile: {
-      name: t.legalName || t.name,
+    configuration: {
       // 7230: beauty and barber shops.
-      mcc: '7230',
-      ...(url ? { url } : {}),
+      merchant: { capabilities: { card_payments: { requested: true } }, mcc: '7230' },
     },
-    capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+    defaults: {
+      ...(country === 'es' ? { currency: 'eur', locales: ['es-ES'] } : {}),
+      responsibilities: { fees_collector: 'stripe', losses_collector: 'stripe' },
+      profile: { doing_business_as: t.name, ...(url ? { business_url: url } : {}) },
+    },
     metadata: { kiraroomTenantId: t.tenantId },
+  };
+}
+
+export interface ConnectAccountV2Params {
+  contact_email?: string;
+  display_name: string;
+  dashboard: 'full';
+  identity: { country: string; business_details?: { registered_name: string } };
+  configuration: { merchant: { capabilities: { card_payments: { requested: true } }; mcc: string } };
+  defaults: {
+    currency?: string;
+    locales?: string[];
+    responsibilities: { fees_collector: 'stripe'; losses_collector: 'stripe' };
+    profile: { doing_business_as: string; business_url?: string };
+  };
+  metadata: Record<string, string>;
+}
+
+/** The link to Stripe's onboarding form for the account (POST /v2/core/account_links). */
+export function connectAccountLinkParams(accountId: string, urls: { returnUrl: string; refreshUrl: string }) {
+  return {
+    account: accountId,
+    use_case: {
+      type: 'account_onboarding' as const,
+      account_onboarding: {
+        // Everything Stripe will need, asked once, so the salon is not stopped again later.
+        collection_options: { fields: 'eventually_due' as const },
+        return_url: urls.returnUrl,
+        refresh_url: urls.refreshUrl,
+      },
+    },
+  };
+}
+
+/**
+ * What to save for an account just created: its id and mode, and nothing it
+ * can do yet (Stripe still needs the salon's details). The real state comes
+ * with Stripe's account.updated events or the panel's «Comprobar».
+ */
+export function connectFieldsForNewAccount(accountId: string, livemode: boolean | null) {
+  return {
+    stripeConnectAccountId: accountId,
+    stripeConnectLivemode: livemode,
+    stripeConnectChargesEnabled: false,
+    stripeConnectPayoutsEnabled: false,
+    stripeConnectDetailsSubmitted: false,
+    stripeConnectRequirementsDue: [] as string[],
+    stripeConnectDisabledReason: null,
+    stripeConnectCheckedAt: new Date(),
   };
 }
 

@@ -7,11 +7,14 @@ import { PlatformStripeConfigService, redactStripe } from '../../platform/platfo
 import { livemodeOf } from '../../platform/stripe-settings';
 import {
   ConnectStatus,
+  connectAccountLinkParams,
   connectAccountParams,
+  connectFieldsForNewAccount,
   connectFieldsFromAccount,
   connectReturnUrls,
   connectStatusOf,
 } from './stripe-connect';
+import { stripeV2Post } from './stripe-v2';
 
 const SELECT = {
   id: true,
@@ -55,6 +58,8 @@ export interface ConnectSettings {
 @Injectable()
 export class ConnectAccountsService {
   private readonly logger = new Logger(ConnectAccountsService.name);
+  /** The v2 calls (account and onboarding link); replaced in tests. */
+  private v2Post = stripeV2Post;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -163,14 +168,20 @@ export class ConnectAccountsService {
   async startOnboarding(tenantId: string): Promise<{ url: string }> {
     const row = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: SELECT });
     if (!row) throw new BadRequestException('Salón no encontrado.');
-    const stripe = this.requireStripe();
+    this.requireStripe();
+    const secretKey = this.platformStripe.current().secretKey;
+    if (!secretKey) {
+      throw new ServiceUnavailableException('Los pagos de KiraRoom no están configurados todavía. Inténtalo más tarde.');
+    }
     const livemode = this.platformLivemode();
     const current = connectStatusOf(row, livemode);
 
     let accountId = current.otherMode ? null : row.stripeConnectAccountId;
     try {
       if (!accountId) {
-        const account = await stripe.accounts.create(
+        const account = await this.v2Post<{ id: string }>(
+          secretKey,
+          '/v2/core/accounts',
           connectAccountParams({
             tenantId: row.id,
             name: row.name,
@@ -180,27 +191,28 @@ export class ConnectAccountsService {
             country: row.country,
           }),
           // One account per salon even if the button is pressed twice.
-          { idempotencyKey: `connect-account-${row.id}-${livemode ? 'live' : 'test'}` },
+          { idempotencyKey: `connect-account-v2-${row.id}-${livemode ? 'live' : 'test'}` },
         );
+        if (!account?.id) throw new Error('Stripe did not return the new account');
         accountId = account.id;
         await this.prisma.tenant.update({
           where: { id: tenantId },
-          data: connectFieldsFromAccount(account, livemode),
+          data: connectFieldsForNewAccount(account.id, livemode),
         });
       }
-      const { returnUrl, refreshUrl } = connectReturnUrls(appBaseUrl((k) => this.config.get<string>(k)));
-      const link = await stripe.accountLinks.create({
-        account: accountId,
-        type: 'account_onboarding',
-        return_url: returnUrl,
-        refresh_url: refreshUrl,
-      });
+      const urls = connectReturnUrls(appBaseUrl((k) => this.config.get<string>(k)));
+      const link = await this.v2Post<{ url: string }>(
+        secretKey,
+        '/v2/core/account_links',
+        connectAccountLinkParams(accountId, urls),
+      );
+      if (!link?.url) throw new Error('Stripe did not return the onboarding link');
       return { url: link.url };
     } catch (err) {
       const message = redactStripe((err as Error).message ?? 'error desconocido');
       this.logger.error(`Connect onboarding failed for tenant ${tenantId}: ${message}`);
       throw new ServiceUnavailableException(
-        /connect/i.test(message)
+        /connect|accounts_v2_access/i.test(message)
           ? 'Los cobros online todavía no están disponibles en KiraRoom. Vuelve a intentarlo más tarde.'
           : 'No se ha podido abrir el alta en Stripe. Inténtalo de nuevo en un momento.',
       );

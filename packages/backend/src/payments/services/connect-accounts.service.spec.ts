@@ -29,7 +29,13 @@ const tenantRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function build(opts: { row?: any; mode?: 'test' | 'live' | 'none'; stripe?: any } = {}) {
+/** Stripe's v2 API as the service calls it: creates the account, then the link. */
+const v2Ok = () =>
+  jest.fn(async (_key: string, path: string, _body?: any, _opts?: any): Promise<any> =>
+    path === '/v2/core/accounts' ? { id: 'acct_new', object: 'v2.core.account' } : { url: 'https://accounts.stripe.com/r/acct_new#alu_test' },
+  );
+
+function build(opts: { row?: any; mode?: 'test' | 'live' | 'none'; stripe?: any; v2?: jest.Mock } = {}) {
   let row = opts.row === undefined ? tenantRow() : opts.row;
   const prisma = {
     tenant: {
@@ -60,11 +66,17 @@ function build(opts: { row?: any; mode?: 'test' | 'live' | 'none'; stripe?: any 
     accountLinks: { create: jest.fn(async () => ({ url: 'https://connect.stripe.com/setup/e/acct_new/xyz' })) },
   };
   const mode = opts.mode ?? 'test';
-  const platform = { mode: () => mode, client: () => (mode === 'none' ? null : stripe) };
+  const platform = {
+    mode: () => mode,
+    client: () => (mode === 'none' ? null : stripe),
+    current: () => ({ secretKey: mode === 'none' ? null : fakeKey }),
+  };
   const config = { get: (k: string) => (k === 'APP_BASE_URL' ? 'https://app.kiraroom.net' : undefined) };
   const service = new ConnectAccountsService(prisma as any, platform as any, config as any);
   (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-  return { service, prisma, stripe, getRow: () => row };
+  const v2 = opts.v2 ?? v2Ok();
+  (service as any).v2Post = v2;
+  return { service, prisma, stripe, v2, getRow: () => row };
 }
 
 describe('ConnectAccountsService', () => {
@@ -73,42 +85,74 @@ describe('ConnectAccountsService', () => {
     expect(await build({ mode: 'none' }).service.status('t1')).toMatchObject({ state: 'none', platformReady: false });
   });
 
-  it("starting creates the account once, prefilled, and returns Stripe's form link back to the panel", async () => {
-    const { service, stripe, getRow } = build();
+  it("starting creates the account once (Accounts v2), prefilled, and returns Stripe's form link back to the panel", async () => {
+    const { service, stripe, v2, getRow } = build();
     const out = await service.startOnboarding('t1');
-    expect(out.url).toBe('https://connect.stripe.com/setup/e/acct_new/xyz');
-    const [params, options] = stripe.accounts.create.mock.calls[0];
-    expect(params).toMatchObject({ country: 'ES', email: 'info@kira.test', metadata: { kiraroomTenantId: 't1' } });
-    expect(options.idempotencyKey).toBe('connect-account-t1-test');
-    expect(stripe.accountLinks.create).toHaveBeenCalledWith({
-      account: 'acct_new',
-      type: 'account_onboarding',
-      return_url: 'https://app.kiraroom.net/dashboard/settings/cobros-online?connect=return',
-      refresh_url: 'https://app.kiraroom.net/dashboard/settings/cobros-online?connect=refresh',
+    expect(out.url).toBe('https://accounts.stripe.com/r/acct_new#alu_test');
+    const [key, path, params, options] = v2.mock.calls[0];
+    expect(key).toBe(fakeKey);
+    expect(path).toBe('/v2/core/accounts');
+    expect(params).toMatchObject({
+      contact_email: 'info@kira.test',
+      dashboard: 'full',
+      identity: { country: 'es' },
+      metadata: { kiraroomTenantId: 't1' },
     });
-    expect(getRow()).toMatchObject({ stripeConnectAccountId: 'acct_new', stripeConnectLivemode: false });
+    expect(options.idempotencyKey).toBe('connect-account-v2-t1-test');
+    expect(v2.mock.calls[1].slice(1, 3)).toEqual([
+      '/v2/core/account_links',
+      {
+        account: 'acct_new',
+        use_case: {
+          type: 'account_onboarding',
+          account_onboarding: {
+            collection_options: { fields: 'eventually_due' },
+            return_url: 'https://app.kiraroom.net/dashboard/settings/cobros-online?connect=return',
+            refresh_url: 'https://app.kiraroom.net/dashboard/settings/cobros-online?connect=refresh',
+          },
+        },
+      },
+    ]);
+    // Never the v1 creation Stripe refuses for new platforms.
+    expect(stripe.accounts.create).not.toHaveBeenCalled();
+    expect(getRow()).toMatchObject({
+      stripeConnectAccountId: 'acct_new',
+      stripeConnectLivemode: false,
+      stripeConnectChargesEnabled: false,
+    });
   });
 
   it('coming back to finish reuses the account instead of creating another', async () => {
-    const { service, stripe } = build({ row: tenantRow({ stripeConnectAccountId: 'acct_old', stripeConnectLivemode: false }) });
+    const { service, v2 } = build({ row: tenantRow({ stripeConnectAccountId: 'acct_old', stripeConnectLivemode: false }) });
     await service.startOnboarding('t1');
-    expect(stripe.accounts.create).not.toHaveBeenCalled();
-    expect(stripe.accountLinks.create.mock.calls[0][0].account).toBe('acct_old');
+    expect(v2).toHaveBeenCalledTimes(1);
+    expect(v2.mock.calls[0][1]).toBe('/v2/core/account_links');
+    expect(v2.mock.calls[0][2].account).toBe('acct_old');
   });
 
   it('an account of the other Stripe mode is not reused: a new one is created for the mode in force', async () => {
-    const { service, stripe, getRow } = build({
+    const { service, v2, getRow } = build({
       mode: 'live',
       row: tenantRow({ stripeConnectAccountId: 'acct_test', stripeConnectLivemode: false, stripeConnectChargesEnabled: true }),
     });
     await service.startOnboarding('t1');
-    expect(stripe.accounts.create).toHaveBeenCalledTimes(1);
-    expect(stripe.accounts.create.mock.calls[0][1].idempotencyKey).toBe('connect-account-t1-live');
+    expect(v2.mock.calls.filter((c: any[]) => c[1] === '/v2/core/accounts')).toHaveLength(1);
+    expect(v2.mock.calls[0][3].idempotencyKey).toBe('connect-account-v2-t1-live');
     expect(getRow()).toMatchObject({
       stripeConnectAccountId: 'acct_new',
       stripeConnectLivemode: true,
       stripeConnectChargesEnabled: false,
     });
+  });
+
+  it('the account is saved even if the link then fails, so pressing again reuses it', async () => {
+    const v2 = jest.fn(async (_k: string, path: string): Promise<any> => {
+      if (path === '/v2/core/accounts') return { id: 'acct_new' };
+      throw new Error('api_error: try again');
+    });
+    const { service, getRow } = build({ v2 });
+    await expect(service.startOnboarding('t1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(getRow()).toMatchObject({ stripeConnectAccountId: 'acct_new' });
   });
 
   it('refresh reads the account from Stripe and saves what it says', async () => {
@@ -125,30 +169,27 @@ describe('ConnectAccountsService', () => {
   });
 
   it('Stripe failing is a clear 503 and never shows a key; Connect not enabled says so plainly', async () => {
-    const failing = {
-      accounts: {
-        create: jest.fn(async () => {
-          throw new Error(`Invalid API Key provided: ${fakeKey}`);
-        }),
-        retrieve: jest.fn(),
-      },
-      accountLinks: { create: jest.fn() },
-    };
-    const a = build({ stripe: failing });
+    const leaking = jest.fn(async () => {
+      throw new Error(`Invalid API Key provided: ${fakeKey}`);
+    });
+    const a = build({ v2: leaking });
     await expect(a.service.startOnboarding('t1')).rejects.toBeInstanceOf(ServiceUnavailableException);
     await expect(a.service.startOnboarding('t1')).rejects.not.toThrow(new RegExp(fakeKey));
-    const noConnect = {
-      accounts: {
-        create: jest.fn(async () => {
-          throw new Error('You can only create new accounts if you have signed up for Connect');
-        }),
-        retrieve: jest.fn(),
-      },
-      accountLinks: { create: jest.fn() },
-    };
-    await expect(build({ stripe: noConnect }).service.startOnboarding('t1')).rejects.toThrow(
-      /cobros online todavía no están disponibles/,
-    );
+    for (const message of [
+      'You can only create new accounts if you have signed up for Connect',
+      'accounts_v2_access_blocked: Accounts v2 is not available for this platform',
+    ]) {
+      const noConnect = jest.fn(async () => {
+        throw new Error(message);
+      });
+      await expect(build({ v2: noConnect }).service.startOnboarding('t1')).rejects.toThrow(
+        /cobros online todavía no están disponibles/,
+      );
+    }
+    const other = jest.fn(async () => {
+      throw new Error('mcc_invalid: The MCC is not valid');
+    });
+    await expect(build({ v2: other }).service.startOnboarding('t1')).rejects.toThrow(/No se ha podido abrir el alta/);
   });
 
   it("shows the salon's rules for online payments, and changes only what is sent", async () => {
@@ -163,8 +204,9 @@ describe('ConnectAccountsService', () => {
   });
 
   it('without keys, starting is refused before any call', async () => {
-    const { service } = build({ mode: 'none' });
+    const { service, v2 } = build({ mode: 'none' });
     await expect(service.startOnboarding('t1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(v2).not.toHaveBeenCalled();
   });
 });
 
