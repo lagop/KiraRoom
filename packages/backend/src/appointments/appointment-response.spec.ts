@@ -83,4 +83,22 @@ describe("publicBooking", () => {
     });
     expect(out.location).toEqual({ id: "l-norte", name: "Norte", address: "Av. Norte 5, 28035 Madrid" });
   });
+
+  it("passes on the payment page when she has to pay to confirm (it was dropped, so she was never sent to pay)", () => {
+    const payment = {
+      required: true,
+      kind: "deposit",
+      amountCents: 500,
+      currency: "eur",
+      checkoutUrl: "https://checkout.stripe.com/c/pay/cs_test_1",
+      holdUntil: "2026-11-13T16:27:11.935Z",
+    };
+    const out: any = publicBooking({ ...appointment(), payment: { ...payment, internal: "x" } });
+    expect(out.payment).toEqual(payment);
+  });
+
+  it("says nothing about payment when there is none to make", () => {
+    expect(publicBooking(appointment())).not.toHaveProperty("payment");
+    expect(publicBooking({ ...appointment(), payment: { required: false } })).not.toHaveProperty("payment");
+  });
 });

@@ -133,5 +133,24 @@ export function publicBooking(appointment: any) {
           address: formatLocationAddress(appointment.salonLocation),
         }
       : null,
+    // She has to pay to confirm it (señal / pago anticipado): Stripe's
+    // payment page and how long the slot is held. Without it the page showed
+    // a plain confirmation and never sent her to pay (2026-11-13).
+    ...publicPayment(appointment.payment),
+  };
+}
+
+/** The payment a held booking needs, field by field; nothing when there is none. */
+function publicPayment(payment: any) {
+  if (!payment || payment.required !== true || typeof payment.checkoutUrl !== "string") return {};
+  return {
+    payment: {
+      required: true as const,
+      kind: payment.kind,
+      amountCents: payment.amountCents,
+      currency: payment.currency,
+      checkoutUrl: payment.checkoutUrl,
+      holdUntil: payment.holdUntil,
+    },
   };
 }
