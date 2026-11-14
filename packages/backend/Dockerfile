@@ -54,7 +54,11 @@ WORKDIR /app
 
 # Copy the compiled artifacts.
 COPY --from=builder /repo/packages/backend/dist ./dist
-COPY --from=builder /repo/packages/backend/prisma ./prisma
+# Only what `prisma migrate deploy` and `prisma generate` read: the schema
+# and the migrations. The dev scripts beside them (seed.ts with demo
+# passwords, assign-services, link-professionals) stay out of production.
+COPY --from=builder /repo/packages/backend/prisma/schema.prisma ./prisma/schema.prisma
+COPY --from=builder /repo/packages/backend/prisma/migrations ./prisma/migrations
 COPY --from=builder /repo/packages/shared ./node_modules/@kira/shared
 COPY --from=builder /repo/packages/backend/package.json ./
 
