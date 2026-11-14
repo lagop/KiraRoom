@@ -32,6 +32,7 @@ import { InlineSpinner } from "./analytics/components/ui";
 import { IssuerDataBanner } from "@/components/invoices/issuer-data-banner";
 import { TerritoryTaxNotice } from "@/components/invoices/territory-tax-notice";
 import { ContactEmailNotice } from "@/components/onboarding/ContactEmailNotice";
+import { OnboardingRestoreLink } from "./_components/onboarding/OnboardingChecklist";
 
 export default function DashboardPage() {
   const t = useTranslations();
@@ -142,6 +143,8 @@ export default function DashboardPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <UnreadNotificationsBadge count={data.unreadNotificationsCount} />
+          {/* The closed "Optimiza tu salón" list, with steps still pending (owner and admins). */}
+          <OnboardingRestoreLink enabled={!!salonFigures} />
           {multiLocation && (
             <LocationSelector t={t} locations={locations} value={locationId} onChange={setLocationId} />
           )}
