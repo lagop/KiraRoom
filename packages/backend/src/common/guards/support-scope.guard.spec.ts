@@ -70,6 +70,8 @@ const BLOCKED_DURING_SUPPORT = [
   "POST /settings/salon-deletion",
   "DELETE /settings/salon-deletion",
   "PATCH /web-address",
+  // Copilot actions run in the owner's name: support may read, not approve (Copilot audit D7)
+  "POST /assistant/approvals/:id/resolve",
 ];
 
 interface Route {

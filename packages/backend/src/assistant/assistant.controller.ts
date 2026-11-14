@@ -10,6 +10,7 @@ import { AssistantService } from './assistant.service';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
 import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
+import { NotDuringSupport } from '../common/decorators/not-during-support.decorator';
 import { aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 import {
   SendAssistantMessageSchema,
@@ -252,6 +253,9 @@ export class AssistantController {
   }
 
   @Post('approvals/:id/resolve')
+  // D7 (Copilot audit): support may read the salon's copilot, never approve
+  // an action that would run in the owner's name.
+  @NotDuringSupport()
   @Feature('copilot_write' as any)
   // Sprint 15: 5 actions / minute / user (RFC §10.2).
   @Throttle({ default: { ttl: 60_000, limit: 5 } })

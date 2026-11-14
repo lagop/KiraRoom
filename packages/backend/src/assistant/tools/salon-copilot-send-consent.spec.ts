@@ -17,8 +17,13 @@ jest.mock('../../common/encryption/encryption.service', () => ({
 
 const TENANT_ID = 't-1';
 
-function makePrisma(opts: { optedIn?: boolean; phone?: string } = {}): any {
+function makePrisma(opts: { optedIn?: boolean; phone?: string; whatsappNotices?: boolean } = {}): any {
+  const on = opts.whatsappNotices ?? true;
+  const notices = Object.fromEntries(
+    ['appointment_confirmed', 'appointment_cancelled', 'appointment_reminder_24h', 'appointment_reminder_1h'].map((t) => [t, { whatsapp: on }]),
+  );
   return {
+    notificationPreference: { findUnique: jest.fn(async () => ({ preferences: notices })) },
     appointment: { findFirst: jest.fn(async () => ({ id: 'a-1' })) },
     client: {
       findFirst: jest.fn(async () => ({ id: 'c-1', tenantId: TENANT_ID, firstName: 'Carmen', phone: opts.phone ?? '600 111 222' })),
@@ -127,5 +132,31 @@ describe('send_message and WhatsApp promotion consent', () => {
     );
     expect(res.ok).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('M7: refuses an appointment notice to a client who does not get her notices by WhatsApp', async () => {
+    const fetch = mockMeta();
+    const prisma = makePrisma({ whatsappNotices: false });
+    const res: any = await new SalonCopilotToolsService(prisma).execute(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita' },
+      ctx(prisma),
+    );
+    expect(res.error).toBe('no_whatsapp_notices');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('sends the variables in Meta order: 2 before 10', async () => {
+    const fetch = mockMeta();
+    const prisma = makePrisma();
+    const vars: Record<string, string> = {};
+    for (let n = 1; n <= 10; n++) vars[String(n)] = `v${n}`;
+    await new SalonCopilotToolsService(prisma).execute(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita', templateVars: vars },
+      ctx(prisma),
+    );
+    const params = JSON.parse((fetch.mock.calls[0] as any[])[1].body).template.components[0].parameters;
+    expect(params.map((x: any) => x.text)).toEqual(['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v10']);
   });
 });

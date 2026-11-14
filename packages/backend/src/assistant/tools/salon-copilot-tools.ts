@@ -6,9 +6,14 @@ import { canTransition, transitionRefusal } from '../../appointments/appointment
 import { VISIT_ROW_ORDER, minutesUntilFree } from '../../appointments/visit-totals';
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
-import { STANDARD_TEMPLATES } from '../../whatsapp/whatsapp-templates';
+import { STANDARD_TEMPLATES, spanishDate, templateParam } from '../../whatsapp/whatsapp-templates';
+import { noticeChannelsOf } from '../../consent/client-notices';
+import { maskedPhone } from '../../clients/client-reach';
 import { addDays, salonToday } from '../../analytics/analytics-metrics';
 import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
+import { moneyOfCatalogueCents, salonTaxBasis } from '../../payments/appointment-charge';
+import { bookedServiceName } from '../../appointments/appointment-snapshot';
+import { clientReachWhere } from '../../clients/client-reach';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -241,18 +246,24 @@ export const COPILOT_TOOLS = [
   //  Sprint 15: 3 more write tools + tier gating (Premium+).
   // --------------------------------------------------------------------
 
+  // D6 (Copilot audit 2026-11-14): the no-show FEE was removed from this
+  // tool. It wrote `{ discount: { noShowFee } }` over the appointment's
+  // discount (wiping any real discount) and no part of KiraRoom ever
+  // charged it. RESTORE IT once there is a real no-show charge (an
+  // off-session charge of the saved card, or a line the till/invoice
+  // picks up): add `applyFee`/`feeAmount` back here, charge through that
+  // path (never through `discount`), and show the amount on the approval.
   {
     name: 'mark_no_show',
     description:
-      "Mark a confirmed appointment as a no-show. Optionally apply a no-show fee. " +
+      "Mark a confirmed appointment as a no-show. It does not charge any fee: " +
+      "KiraRoom has no no-show charge yet, so never promise or mention one. " +
       "Receptionist / manager / owner only — stylists cannot. Audit-logged. " +
-      "Always requires human approval because it changes payment state.",
+      "Always requires human approval.",
     input_schema: {
       type: 'object' as const,
       properties: {
         appointmentId: { type: 'string' },
-        applyFee: { type: 'boolean', description: 'Apply a no-show fee. Default false.' },
-        feeAmount: { type: 'number', description: 'Fee amount in salon currency. Required when applyFee=true.' },
       },
       required: ['appointmentId'],
     },
@@ -362,6 +373,114 @@ export class SalonCopilotToolsService {
     }
   }
 
+  /**
+   * The text of an approval card, built HERE from the database and never
+   * from the model's words: who it affects (client, masked phone), the
+   * appointment as it stands and what it becomes, the message as it will
+   * read. The card used to say "Mover la cita a 2026-11-20 16:00" with no
+   * client, so with two Carmens in the agenda, or a model misled by what a
+   * client typed in her booking, the salon approved blind.
+   *
+   * Something that does not exist in the salon says so: the action will
+   * fail anyway, and the card must not look like a valid one.
+   */
+  async approvalPreview(name: string, input: unknown, ctx: CopilotToolContext): Promise<string> {
+    const i = (input ?? {}) as Record<string, any>;
+    try {
+      switch (name) {
+        case 'draft_follow_up_message': {
+          const client = await this.previewClient(i.clientId, ctx);
+          if (!client) return 'Clienta no encontrada en tu salón: no se redactará nada.';
+          const channel = i.channel === 'email' ? 'un email' : 'un WhatsApp';
+          return `Redactar ${channel} para ${client} (solo el borrador: no se envía nada).`;
+        }
+        case 'send_message': {
+          const client = await this.previewClient(i.clientId, ctx, true);
+          if (!client) return 'Clienta no encontrada en tu salón: no se enviará nada.';
+          const vars = (i.templateVars ?? {}) as Record<string, unknown>;
+          const values = templateVarKeys(vars).map((k) => templateParam(String(vars[k] ?? '')));
+          const standard = STANDARD_TEMPLATES.find((t) => t.name === i.templateName);
+          const text = standard
+            ? standard.body.replace(/\{\{(\d+)\}\}/g, (_m, n) => values[Number(n) - 1] ?? `{{${n}}}`)
+            : `plantilla «${String(i.templateName ?? '')}»${values.length ? ` con: ${values.join(' · ')}` : ''}`;
+          return `Enviar un WhatsApp a ${client}: «${text}»`;
+        }
+        case 'reschedule_appointment': {
+          const appt = await this.previewAppointment(i.appointmentId, ctx);
+          if (!appt) return 'Cita no encontrada en tu salón: no se moverá nada.';
+          const to = /^\d{4}-\d{2}-\d{2}$/.test(String(i.newDate ?? ''))
+            ? spanishDate(new Date(`${i.newDate}T00:00:00.000Z`))
+            : String(i.newDate ?? '?');
+          return `Mover la cita de ${appt.who} con ${appt.professional}: ${appt.when} → ${to}, ${String(i.newTime ?? '?')}. Se avisa a la clienta.`;
+        }
+        case 'mark_no_show': {
+          const appt = await this.previewAppointment(i.appointmentId, ctx);
+          if (!appt) return 'Cita no encontrada en tu salón: no se marcará nada.';
+          // D6: no fee exists, so the card says nothing will be charged.
+          return `Marcar que ${appt.who} no se presentó a su cita del ${appt.when} con ${appt.professional}. No se cobra ninguna penalización.`;
+        }
+        case 'create_coupon': {
+          const pct = Number(i.discountPercent);
+          const days = Math.min(Math.max(Math.round(Number(i.expiresInDays ?? 30)) || 30, 1), 365);
+          return `Crear un código de descuento del ${Number.isFinite(pct) ? pct : '?'}% para cualquier clienta, de un solo uso y válido ${days === 1 ? 'hoy' : `${days} días`}. Se aplica al cobrar en caja (no en la reserva online).`;
+        }
+        case 'close_waitlist_slot': {
+          const service = typeof i.serviceId === 'string'
+            ? await this.prisma.service.findFirst({ where: { id: i.serviceId, tenantId: ctx.tenantId }, select: { name: true } })
+            : null;
+          if (!service) return 'Servicio no encontrado en tu salón: no se avisará a nadie.';
+          const n = Math.min(Math.max(Math.floor(Number(i.topN ?? 5)) || 5, 1), 10);
+          const range = i.windowStart === i.windowEnd ? `el ${String(i.windowStart)}${i.time ? ` a las ${String(i.time)}` : ''}` : `del ${String(i.windowStart)} al ${String(i.windowEnd)}`;
+          return `Avisar por email, WhatsApp o SMS a hasta ${n} clientes de la lista de espera de «${service.name}» del hueco ${range} (solo cuenta como avisado si le llega).`;
+        }
+        default:
+          return `Acción pendiente: ${name}`;
+      }
+    } catch (err) {
+      this.logger.warn(`Approval preview for ${name} failed: ${(err as Error).message}`);
+      return `Acción pendiente: ${name} (no se ha podido preparar el resumen; revísala antes de aprobar).`;
+    }
+  }
+
+  /** "Carmen G." (+ "· tel. ···· 222"), or null when not in the salon. */
+  private async previewClient(clientId: unknown, ctx: CopilotToolContext, withPhone = false): Promise<string | null> {
+    if (typeof clientId !== 'string' || !clientId) return null;
+    const c = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId: ctx.tenantId },
+      select: { firstName: true, lastName: true, phone: true },
+    });
+    if (!c) return null;
+    const name = `${c.firstName}${c.lastName?.trim() ? ` ${c.lastName.trim()[0]}.` : ''}`;
+    const phone = withPhone ? maskedPhone(c.phone) : null;
+    return phone ? `${name} (tel. ${phone})` : name;
+  }
+
+  /** Who, when and with whom an appointment of the salon is, or null. */
+  private async previewAppointment(
+    appointmentId: unknown,
+    ctx: CopilotToolContext,
+  ): Promise<{ who: string; when: string; professional: string } | null> {
+    if (typeof appointmentId !== 'string' || !appointmentId) return null;
+    const a = await this.prisma.appointment.findFirst({
+      where: { id: appointmentId, tenantId: ctx.tenantId },
+      select: {
+        scheduledDate: true,
+        scheduledTime: true,
+        client: { select: { firstName: true, lastName: true } },
+        professional: { select: { firstName: true } },
+      },
+    });
+    if (!a) return null;
+    const who = a.client
+      ? `${a.client.firstName}${a.client.lastName?.trim() ? ` ${a.client.lastName.trim()[0]}.` : ''}`
+      : 'la clienta';
+    return {
+      who,
+      when: `${spanishDate(a.scheduledDate)}, ${a.scheduledTime}`,
+      professional: a.professional?.firstName ?? 'sin profesional',
+    };
+  }
+
   // --------------------------------------------------------------------
   //  Implementations
   // --------------------------------------------------------------------
@@ -372,7 +491,7 @@ export class SalonCopilotToolsService {
    * ≥ 30 min are computed in JS (cheap; avoids another tool call).
    */
   private async getMyAgenda(args: Record<string, unknown>, ctx: CopilotToolContext) {
-    const date = this.parseDateOrToday(args.date);
+    const date = await this.parseDateOrToday(args.date, ctx);
     const requestedProfId = args.professionalId as string | undefined;
 
     if (ctx.role === 'staff') {
@@ -405,7 +524,7 @@ export class SalonCopilotToolsService {
         message: 'Esta vista solo está disponible para owner / admin / manager.',
       };
     }
-    const date = this.parseDateOrToday(args.date);
+    const date = await this.parseDateOrToday(args.date, ctx);
     const professionalId = args.professionalId as string | undefined;
     if (!professionalId) {
       return { error: 'missing_professionalId' };
@@ -424,13 +543,16 @@ export class SalonCopilotToolsService {
     const clientId = args.clientId as string | undefined;
     if (!clientId) return { error: 'missing_clientId' };
 
-    // Ownership check for `staff`.
+    // Ownership check for `staff`: the panel's reach rule (an appointment
+    // with her that is not cancelled), so a cancelled booking no longer
+    // opens the file here either.
+    let ownProfessionalId: string | null = null;
     if (ctx.role === 'staff') {
       // Their professional, not their user id (which never matched).
-      const own = await this.findStaffProfessionalId(ctx);
-      if (!own) return STAFF_NOT_LINKED;
-      const owns = await this.prisma.appointment.findFirst({
-        where: { clientId, professionalId: own },
+      ownProfessionalId = await this.findStaffProfessionalId(ctx);
+      if (!ownProfessionalId) return STAFF_NOT_LINKED;
+      const owns = await this.prisma.client.findFirst({
+        where: { id: clientId, tenantId: ctx.tenantId, ...clientReachWhere({ professionalId: ownProfessionalId }) },
         select: { id: true },
       });
       if (!owns) {
@@ -441,10 +563,11 @@ export class SalonCopilotToolsService {
       }
     }
 
-    const maxVisits = Math.min(Math.max(Number(args.maxVisits ?? 20), 1), 50);
-    const [client, appointments] = await Promise.all([
-      this.prisma.client.findUnique({
-        where: { id: clientId },
+    const maxVisits = Math.min(Math.max(Math.floor(Number(args.maxVisits ?? 20)) || 20, 1), 50);
+    const [client, appointments, tenant] = await Promise.all([
+      // Always within the caller's salon, whatever the role.
+      this.prisma.client.findFirst({
+        where: { id: clientId, tenantId: ctx.tenantId },
         select: {
           id: true,
           firstName: true,
@@ -454,14 +577,15 @@ export class SalonCopilotToolsService {
           dateOfBirth: true,
           gender: true,
           allergies: true,
-          // NEVER exposed: totalSpent, paymentMethod, commissionRate, internalNotes.
-          // These are queried separately and gated by role below.
+          // The lifetime spend, in euros (as Clientas shows it); only
+          // returned below to the roles that see money.
+          totalSpent: true,
         },
       }),
       this.prisma.appointment.findMany({
         // The wizard's test booking is left out of everything the copilot reads (D27).
-        where: { clientId, isTest: false },
-        orderBy: { scheduledDate: 'desc' },
+        where: { clientId, tenantId: ctx.tenantId, isTest: false },
+        orderBy: [{ scheduledDate: 'desc' }, { scheduledTime: 'desc' }],
         take: maxVisits,
         select: {
           id: true,
@@ -469,55 +593,72 @@ export class SalonCopilotToolsService {
           scheduledTime: true,
           status: true,
           totalAmount: true,
-          professional: { select: { id: true, firstName: true, userId: true } },
+          professional: { select: { id: true, firstName: true } },
           services: {
+            // The services as they were booked (their snapshot), not
+            // today's catalogue: a renamed service keeps its old name here.
             select: {
-              service: { select: { id: true, name: true, price: true } },
+              serviceName: true,
+              service: { select: { id: true, name: true } },
             },
+            orderBy: VISIT_ROW_ORDER as any,
           },
         },
       }),
+      this.prisma.tenant.findUnique({ where: { id: ctx.tenantId }, select: { fiscalSettings: true } }),
     ]);
 
     if (!client) return { error: 'client_not_found' };
+
+    // `totalAmount` is the visit in catalogue CENTS (tax inside or not,
+    // per the salon): turned into euros the client pays, as the till and
+    // the invoice read it. The model used to get the cents and say
+    // "12.000 €" for three 40 € visits.
+    const basis = salonTaxBasis(tenant?.fiscalSettings);
+    const euros = (cents: unknown) =>
+      Math.round(moneyOfCatalogueCents(Math.round(Number(cents ?? 0)), basis)) / 100;
 
     // `staff` users only see visits they personally attended.
     // Other roles see every visit on the client.
     const isStaff = ctx.role === 'staff';
     const allVisits = appointments
-      .filter((a) => (isStaff ? a.professional?.userId === ctx.userId : true))
+      .filter((a) => (isStaff ? a.professional?.id === ownProfessionalId : true))
       .map((a) => ({
         id: a.id,
-        date: a.scheduledDate,
+        date: a.scheduledDate.toISOString().slice(0, 10),
         time: a.scheduledTime,
         status: a.status,
-        professional: a.professional,
-        services: a.services.map((s) => s.service),
-        // Total amount is shown to non-staff roles only.
-        ...(isStaff ? {} : { totalAmount: a.totalAmount }),
+        professional: a.professional ? { id: a.professional.id, firstName: a.professional.firstName } : null,
+        services: a.services.map((s) => ({
+          id: s.service?.id ?? null,
+          name: bookedServiceName(s, 'Servicio'),
+        })),
+        // The visit's total in euros, shown to non-staff roles only.
+        ...(isStaff ? {} : { totalEur: euros(a.totalAmount) }),
       }));
 
-    // Stats (last 365d completed visits + spend) are restricted to
-    // owner / admin / manager / saas_owner / receptionist. Stylists
-    // never see aggregates.
+    // Stats (completed visits in the last 365 days, lifetime spend) are
+    // restricted to owner / admin / manager / saas_owner / receptionist.
+    // Stylists never see aggregates.
     const seesStats = ['owner', 'admin', 'manager', 'receptionist', 'saas_owner']
       .includes(ctx.role);
     const stats: Record<string, unknown> = {};
     if (seesStats) {
       const since = new Date();
-      since.setDate(since.getDate() - 365);
-      const agg = await this.prisma.appointment.aggregate({
+      since.setUTCDate(since.getUTCDate() - 365);
+      const completed = await this.prisma.appointment.count({
         where: {
           clientId,
+          tenantId: ctx.tenantId,
           isTest: false,
           status: 'completed',
           scheduledDate: { gte: since },
         },
-        _sum: { totalAmount: true },
-        _count: { _all: true },
       });
-      stats.totalVisitsLast365d = agg._count._all;
-      stats.totalSpentLast365d = agg._sum.totalAmount;
+      stats.completedVisitsLast365d = completed;
+      // Her total spend in euros: the same figure as her file in Clientas,
+      // not a sum of list prices.
+      stats.totalSpentEur = Math.round(Number(client.totalSpent ?? 0) * 100) / 100;
     }
 
     return {
@@ -564,10 +705,10 @@ export class SalonCopilotToolsService {
     date: Date,
     professionalId: string | null,
   ) {
+    // Dates are stored as their UTC midnight: the day is [date, date + 1).
     const dayStart = new Date(date);
-    dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(dayStart);
-    dayEnd.setDate(dayStart.getDate() + 1);
+    dayEnd.setUTCDate(dayStart.getUTCDate() + 1);
 
     const where: Record<string, unknown> = {
       tenantId: ctx.tenantId,
@@ -630,20 +771,29 @@ export class SalonCopilotToolsService {
     };
   }
 
-  private parseDateOrToday(input: unknown): Date {
-    if (typeof input !== 'string') {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return d;
+  /**
+   * The day asked for (YYYY-MM-DD) or the SALON's today, as the UTC midnight
+   * dates are stored at. It used the server's clock (UTC): between midnight
+   * and 01:00/02:00 in Madrid "today" was yesterday.
+   */
+  private async parseDateOrToday(input: unknown, ctx: CopilotToolContext): Promise<Date> {
+    if (typeof input === 'string' && /^d{4}-d{2}-d{2}$/.test(input)) {
+      const d = new Date(`${input}T00:00:00.000Z`);
+      if (!Number.isNaN(d.getTime())) return d;
     }
-    const d = new Date(`${input}T00:00:00`);
-    if (Number.isNaN(d.getTime())) {
-      const fallback = new Date();
-      fallback.setHours(0, 0, 0, 0);
-      return fallback;
+    return new Date(`${await this.salonDay(ctx)}T00:00:00.000Z`);
+  }
+
+  /** Today in the salon's time zone, YYYY-MM-DD. */
+  private async salonDay(ctx: CopilotToolContext): Promise<string> {
+    let timezone: string | null | undefined;
+    try {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: ctx.tenantId }, select: { timezone: true } });
+      timezone = tenant?.timezone;
+    } catch {
+      timezone = undefined; // the default zone (Spain)
     }
-    d.setHours(0, 0, 0, 0);
-    return d;
+    return salonToday(safeTimeZone(timezone));
   }
 
   /**
@@ -677,10 +827,10 @@ export class SalonCopilotToolsService {
     const minGap = Math.max(Number(args.minGapMinutes ?? 30), 15);
     const topN = Math.max(Number(args.topN ?? 5), 1);
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // The salon's today, at the UTC midnight dates are stored at.
+    const today = new Date(`${await this.salonDay(ctx)}T00:00:00.000Z`);
     const horizon = new Date(today);
-    horizon.setDate(today.getDate() + daysAhead);
+    horizon.setUTCDate(today.getUTCDate() + daysAhead);
 
     // Staff: their own professional's appointments (this compared with the
     // User id, which no appointment carries).
@@ -829,7 +979,7 @@ export class SalonCopilotToolsService {
         quantity: p.quantity,
         lowStockAlert: p.lowStockAlert,
         deficit: Math.max(0, p.lowStockAlert - p.quantity),
-        price: Number(p.price),
+        priceEur: Number(p.price),
         category: p.category,
       }));
     return { totalLowStock: low.length, items: low };
@@ -902,7 +1052,7 @@ export class SalonCopilotToolsService {
           noShows: c.count,
           lastNoShow: c.lastDate.toISOString().slice(0, 10),
           // Owner/manager/SAAS see total spent; receptionist does not.
-          ...(isSensitive ? { totalSpent: Number(c.client.totalSpent) } : {}),
+          ...(isSensitive ? { totalSpentEur: Number(c.client.totalSpent) } : {}),
         };
       });
     return {
@@ -965,7 +1115,7 @@ export class SalonCopilotToolsService {
         name: c.firstName,
         lastVisit: c.lastVisit?.toISOString().slice(0, 10) ?? null,
         visitCount: c.visitCount,
-        ...(isSensitive ? { totalSpent: Number(c.totalSpent) } : {}),
+        ...(isSensitive ? { totalSpentEur: Number(c.totalSpent) } : {}),
       })),
     };
   }
@@ -1044,7 +1194,7 @@ private async sendMessage(
   // Staff: can only send to clients they have an appointment with.
   if (ctx.role === 'staff') {
     const owns = await this.prisma.appointment.findFirst({
-      where: { clientId, professionalId: { in: await this.staffProfessionalIds(ctx) } },
+      where: { clientId, tenantId: ctx.tenantId, professionalId: { in: await this.staffProfessionalIds(ctx) } },
       select: { id: true },
     });
     if (!owns) {
@@ -1091,6 +1241,22 @@ private async sendMessage(
           'Solo puedes enviarle avisos de sus citas.',
       };
     }
+  } else {
+    // An appointment notice: only to a client who gets her notices by
+    // WhatsApp (off by default; the booking checkbox or the salon turns it
+    // on), as the reminders read it. Only the promotions consent used to be
+    // checked, so any client could get a WhatsApp she never asked for.
+    const prefs = await this.prisma.notificationPreference
+      .findUnique({ where: { clientId: client.id }, select: { preferences: true } })
+      .catch(() => null);
+    if (!noticeChannelsOf(prefs?.preferences).whatsapp) {
+      return {
+        error: 'no_whatsapp_notices',
+        message:
+          'Esta clienta no recibe los avisos de sus citas por WhatsApp. ' +
+          'Puedes activarlo en su ficha si ella lo pide, o avisarla por otro canal.',
+      };
+    }
   }
 
   token = token ?? decryptAes(conn.accessTokenEnc); // best-effort: see helper below
@@ -1105,9 +1271,7 @@ private async sendMessage(
   const components = [
     {
       type: 'body',
-      parameters: Object.keys(vars)
-        .sort()
-        .map((k) => ({ type: 'text', text: String(vars[k] ?? '') })),
+      parameters: templateVarKeys(vars).map((k) => ({ type: 'text', text: templateParam(String(vars[k] ?? '')) })),
     },
   ];
 
@@ -1236,7 +1400,7 @@ private async rescheduleAppointment(
 
   private async staffProfessionalIds(ctx: CopilotToolContext): Promise<string[]> {
   const prof = await this.prisma.professional.findFirst({
-    where: { user: { id: ctx.userId } },
+    where: { tenantId: ctx.tenantId, user: { id: ctx.userId } },
     select: { id: true },
   });
   return prof ? [prof.id] : [];
@@ -1245,9 +1409,7 @@ private async rescheduleAppointment(
   /**
    * Sprint 15: mark a confirmed/pending appointment as a no-show.
    * Receptionist / manager / owner only (stylists cannot).
-   * If applyFee=true, records the fee on the appointment discount
-   * block so the next invoice picks it up. We never mutate `totalAmount`
-   * here — billing reconciliation runs in its own pipeline.
+   * No fee (D6, see the tool definition): it only changes the status.
    */
   private async markNoShow(
     args: Record<string, unknown>,
@@ -1258,8 +1420,6 @@ private async rescheduleAppointment(
     }
     const appointmentId = args.appointmentId as string | undefined;
     if (!appointmentId) return { error: 'missing_appointmentId' };
-    const applyFee = Boolean(args.applyFee);
-    const feeAmount = Number(args.feeAmount ?? 0);
 
     const appt = await this.prisma.appointment.findUnique({
       where: { id: appointmentId },
@@ -1273,9 +1433,6 @@ private async rescheduleAppointment(
     if (!canTransition(appt.status, 'no_show')) {
       return { error: 'invalid_status', message: transitionRefusal(appt.status, 'no_show') };
     }
-    if (applyFee && (Number.isNaN(feeAmount) || feeAmount <= 0)) {
-      return { error: 'invalid_feeAmount' };
-    }
     if (!this.appointments) return { error: 'unavailable' };
 
     // The same path as the panel's "No se presentó": checked against the
@@ -1287,7 +1444,7 @@ private async rescheduleAppointment(
         { id: ctx.userId, tenantId: ctx.tenantId, role: ctx.role },
         appointmentId,
         'no_show',
-        applyFee ? { data: { discount: { noShowFee: feeAmount } } } : {},
+        {},
       );
     } catch (err) {
       if (err instanceof HttpException) {
@@ -1300,8 +1457,6 @@ private async rescheduleAppointment(
       ok: true,
       appointmentId: updated.id,
       status: updated.status,
-      feeApplied: applyFee,
-      feeAmount: applyFee ? feeAmount : 0,
       clientFirstName: appt.client?.firstName ?? null,
     };
   }
@@ -1588,6 +1743,15 @@ function decryptAes(cipher: string): string {
  */
 async function metaFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
+}
+
+/**
+ * A template's variable names in Meta's order: "1", "2", ... "10" by
+ * number (a plain sort put "10" before "2"), anything else after them.
+ */
+export function templateVarKeys(vars: Record<string, unknown>): string[] {
+  const num = (k: string) => (/^\d+$/.test(k) ? Number(k) : Number.POSITIVE_INFINITY);
+  return Object.keys(vars).sort((a, b) => num(a) - num(b) || a.localeCompare(b));
 }
 
 /**

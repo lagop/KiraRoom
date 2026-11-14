@@ -423,16 +423,16 @@ describe("the other callers", () => {
     }
   });
 
-  it("the copilot's no-show goes through it, fee included, and is refused on a finished visit", async () => {
+  it("the copilot's no-show goes through it, never touches the discount (D6), and is refused on a finished visit", async () => {
     const b = build(S.confirmed, { startsInMs: -3_600_000 });
     const copilot = new SalonCopilotToolsService(b.prisma, undefined, b.service);
     const ctx = { prisma: b.prisma, tenantId: "t1", userId: "u1", role: "owner" as any };
+    // A fee the model still asks for is ignored: no no-show charge exists yet.
     const res = await copilot.execute("mark_no_show", { appointmentId: "apt-1", applyFee: true, feeAmount: 15 }, ctx);
-    expect(res).toMatchObject({ ok: true, status: S.no_show, feeApplied: true });
-    expect(b.prisma.appointment.update.mock.calls[0][0].data).toMatchObject({
-      status: S.no_show,
-      discount: { noShowFee: 15 },
-    });
+    expect(res).toMatchObject({ ok: true, status: S.no_show });
+    const data = b.prisma.appointment.update.mock.calls[0][0].data;
+    expect(data).toMatchObject({ status: S.no_show });
+    expect(data).not.toHaveProperty("discount");
     expect(b.sent.sendAppointmentNoShowNotifications).toHaveBeenCalledTimes(1);
 
     const done = build(S.completed);
