@@ -1,4 +1,6 @@
 import { SalonCopilotToolsService } from './salon-copilot-tools';
+import { salonToday } from '../../analytics/analytics-metrics';
+import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
 
 /**
  * L-4 contract tests for the staff-side copilot tools.
@@ -15,13 +17,13 @@ const STAFF_USER_ID = 'staff-1';
 const STAFF_USER = { id: STAFF_USER_ID, role: 'staff' as const };
 const OWNER_USER = { id: 'owner-1', role: 'owner' as const };
 
-const today = new Date();
-today.setHours(0, 0, 0, 0);
+// Dates as stored: the UTC midnight of the salon's day (the default zone,
+// no tenant row in this mock).
+const today = new Date(`${salonToday(safeTimeZone(undefined))}T00:00:00.000Z`);
 const yesterday = new Date(today);
-yesterday.setDate(today.getDate() - 1);
+yesterday.setUTCDate(today.getUTCDate() - 1);
 const lastMonth = new Date(today);
-lastMonth.setMonth(today.getMonth() - 1);
-lastMonth.setDate(today.getDate());
+lastMonth.setUTCDate(today.getUTCDate() - 30);
 
 const SAMPLE_CLIENTS = [
   { id: 'c-1', firstName: 'Carmen', lastName: 'Ruiz', tenantId: TENANT_ID, status: 'active' as const },
@@ -64,6 +66,7 @@ function makePrisma(opts: {
   professionals?: any[];
   products?: any[];
   waitList?: any[];
+  tenant?: any;
 }): any {
   const appts = opts.appointments ?? [];
   const cls = opts.clients ?? [];
@@ -80,6 +83,7 @@ function makePrisma(opts: {
   }
 
   return {
+    tenant: { findUnique: jest.fn(async () => opts.tenant ?? null) },
     appointment: {
       findMany: jest.fn().mockImplementation(async ({ where }: any) => {
         const list = appts
@@ -118,6 +122,14 @@ function makePrisma(opts: {
           }) ?? null
         );
       }),
+      count: jest.fn().mockImplementation(async ({ where }: any) =>
+        appts.filter((a: any) =>
+          (!where?.clientId || a.clientId === where.clientId) &&
+          (!where?.tenantId || a.tenantId === where.tenantId) &&
+          (!where?.status || a.status === where.status) &&
+          (!where?.scheduledDate?.gte || a.scheduledDate >= where.scheduledDate.gte),
+        ).length,
+      ),
       aggregate: jest.fn().mockImplementation(async ({ where }: any) => {
         const matched = appts.filter((a: any) => {
           if (where?.clientId && a.clientId !== where.clientId) return false;
@@ -142,6 +154,26 @@ function makePrisma(opts: {
     client: {
       findUnique: jest.fn().mockImplementation(async ({ where }: any) => {
         return cls.find((c: any) => c.id === where?.id) ?? null;
+      }),
+      // By id within the salon; `appointments.some` is the staff reach rule
+      // (an appointment with that professional that is not cancelled).
+      findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
+        const reach = where?.appointments?.some;
+        return (
+          cls.find((c: any) => {
+            if (where?.id && c.id !== where.id) return false;
+            if (where?.tenantId && c.tenantId && c.tenantId !== where.tenantId) return false;
+            if (reach) {
+              return appts.some(
+                (a: any) =>
+                  a.clientId === c.id &&
+                  a.professionalId === reach.professionalId &&
+                  a.status !== 'cancelled',
+              );
+            }
+            return true;
+          }) ?? null
+        );
       }),
       findMany: jest.fn().mockImplementation(async ({ where, orderBy, take }: any) => {
         let list = cls.filter((c: any) => {
@@ -410,8 +442,54 @@ describe('SalonCopilotToolsService (L-4)', () => {
       // a-4 (yesterday, completed). a-2 is c-2 and a-5 is c-2 — excluded.
       expect(res.visits).toHaveLength(3);
       // Stats only count completed: only a-4. So 1.
-      expect((res.stats as any).totalVisitsLast365d).toBe(1);
-      expect(res.visits[0]).toHaveProperty('totalAmount');
+      expect((res.stats as any).completedVisitsLast365d).toBe(1);
+      expect((res.stats as any).totalSpentEur).toBe(0);
+      expect(res.visits[0]).toHaveProperty('totalEur');
+      expect(res.visits[0]).not.toHaveProperty('totalAmount');
+    });
+
+    it('A2: gives euros (catalogue cents, tax added when prices exclude it), and the service as booked', async () => {
+      const prisma = makePrisma({
+        appointments: [
+          {
+            id: 'v-1', tenantId: TENANT_ID, professionalId: 'staff-2', clientId: 'c-1', scheduledDate: yesterday,
+            scheduledTime: '10:00', status: 'completed', totalAmount: 4000,
+            services: [{ serviceName: 'Corte (precio antiguo)', service: { id: 's-1', name: 'Corte renombrado' } }],
+          },
+        ],
+        clients: [{ ...SAMPLE_CLIENT, tenantId: TENANT_ID, totalSpent: 120.5 }],
+        tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21 } },
+      });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res: any = await svc.execute('get_client_360', { clientId: 'c-1' }, {
+        prisma, tenantId: TENANT_ID, userId: OWNER_USER.id, role: 'owner',
+      });
+      // 40,00 base + 21 % = 48,40 EUR, not "4000".
+      expect(res.visits[0].totalEur).toBe(48.4);
+      expect(res.visits[0].services).toEqual([{ id: 's-1', name: 'Corte (precio antiguo)' }]);
+      expect(res.stats.totalSpentEur).toBe(120.5);
+    });
+
+    it('B2: a client of another salon is not found, even for the platform owner', async () => {
+      const prisma = makePrisma({ clients: [{ ...SAMPLE_CLIENT, tenantId: 'other-salon' }] });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
+        prisma, tenantId: TENANT_ID, userId: 'saas-1', role: 'saas_owner',
+      });
+      expect(res).toEqual({ error: 'client_not_found' });
+    });
+
+    it('B3: a cancelled booking does not open the file to the professional', async () => {
+      const prisma = makePrisma({
+        appointments: [{ id: 'x-1', tenantId: TENANT_ID, professionalId: 'staff-1', clientId: 'c-1', scheduledDate: today, scheduledTime: '09:00', status: 'cancelled', services: [] }],
+        clients: [{ ...SAMPLE_CLIENT, tenantId: TENANT_ID }],
+        professionals: SAMPLE_PROFESSIONALS,
+      });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
+        prisma, tenantId: TENANT_ID, userId: STAFF_USER_ID, role: 'staff',
+      });
+      expect(res).toMatchObject({ error: 'forbidden' });
     });
 
     it('staff sees only their own visits', async () => {
@@ -446,6 +524,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         role: 'staff',
       });
       expect(res.visits[0]).not.toHaveProperty('totalAmount');
+      expect(res.visits[0]).not.toHaveProperty('totalEur');
       expect(res.stats).toEqual({});
     });
 
@@ -635,10 +714,10 @@ describe('SalonCopilotToolsService (L-4)', () => {
       expect(res.windowDays).toBe(90);
       expect(res.minNoShows).toBe(2);
       expect(res.flagged).toHaveLength(1);
-      const entry = (res.flagged as Array<{ firstName: string; noShows: number; totalSpent?: number }>)[0];
+      const entry = (res.flagged as Array<{ firstName: string; noShows: number; totalSpentEur?: number }>)[0];
       expect(entry.firstName).toBe('Carmen');
       expect(entry.noShows).toBe(3);
-      expect(entry.totalSpent).toBe(200);
+      expect(entry.totalSpentEur).toBe(200);
     });
 
     it('redacts totalSpent for receptionist and manager', async () => {
@@ -654,7 +733,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         role: 'receptionist',
       });
       const entry = (res.flagged as Array<{ totalSpent?: number }>)[0];
-      expect(entry).not.toHaveProperty('totalAmount');
+      expect(entry).not.toHaveProperty('totalSpentEur');
     });
 
     it('forbids staff role', async () => {
@@ -692,7 +771,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
       expect(res.metric).toBe('spend');
       const names = (res.top as Array<{ name: string }>).map((c) => c.name);
       expect(names).toEqual(['B', 'C', 'A']);
-      expect((res.top as Array<{ totalSpent: number }>)[0].totalSpent).toBe(300);
+      expect((res.top as Array<{ totalSpentEur: number }>)[0].totalSpentEur).toBe(300);
     });
 
     it('redacts totalSpent for receptionist', async () => {
@@ -704,7 +783,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         userId: 'r-1',
         role: 'receptionist',
       });
-      expect(res.top[0]).not.toHaveProperty('totalSpend');
+      expect(res.top[0]).not.toHaveProperty('totalSpentEur');
     });
 
     it('ranks by visitCount when metric=visits', async () => {

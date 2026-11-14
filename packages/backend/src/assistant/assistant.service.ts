@@ -58,41 +58,9 @@ const WRITE_TOOLS = new Set<string>([
   'close_waitlist_slot',
 ]);
 
-/**
- * Tool-specific preview copy. Keep these short (one sentence) so the
- * panel can render them inline. The LLM still gets to add its own
- * wording on top of the preview; the preview is just the canonical
- * "what will happen" line.
- */
-export const TOOL_PREVIEW: Record<string, (input: any) => string> = {
-  draft_follow_up_message: (i) => {
-    const channel = (i?.channel as string) ?? 'whatsapp';
-    const occasion = (i?.occasion as string) ?? 'confirmation';
-    return `Redactar un ${channel === 'email' ? 'email' : 'WhatsApp'} de ${occasion} para la clienta (no se envía hasta tu aprobación).`;
-  },
-  send_message: (i) => {
-    const name = i?.templateName ?? 'plantilla';
-    return `Enviar WhatsApp usando la plantilla "${name}". El envío queda registrado en la auditoría.`;
-  },
-  reschedule_appointment: (i) => {
-    const d = i?.newDate ?? '';
-    const t = i?.newTime ?? '';
-    return `Mover la cita a ${d} ${t}.`;
-  },
-  mark_no_show: (i) => {
-    const fee = i?.applyFee ? ` y aplicar ${i.feeAmount}€ de penalización` : '';
-    return `Marcar la cita como no-show${fee}.`;
-  },
-  create_coupon: (i) => {
-    const pct = i?.discountPercent ?? '?';
-    const days = Math.min(Math.max(Math.round(Number(i?.expiresInDays ?? 30)) || 30, 1), 365);
-    return `Crear un código de descuento del ${pct}% para cualquier clienta, de un solo uso y válido ${days === 1 ? 'hoy' : `${days} días`}. Se aplica al cobrar en caja (no en la reserva online).`;
-  },
-  close_waitlist_slot: (i) => {
-    const n = i?.topN ?? 5;
-    return `Avisar por email, WhatsApp o SMS a los ${n} primeros clientes de la lista de espera que encajen con el hueco (solo cuenta como avisado si le llega).`;
-  },
-};
+// The approval card's text is built from the database by
+// SalonCopilotToolsService.approvalPreview, never from the model's words
+// (Copilot audit A1).
 
 /**
  * P2A-staff-copilot: the orchestrator for the in-app copilot.
@@ -349,9 +317,6 @@ export class AssistantService {
       },
     });
 
-    // 4. Build context: salon's name + user's role + today's briefing
-    const ctx = await this.buildPromptContext(user);
-
     // P2A-staff-copilot-sprint15: per-tenant tool filter. A Pro tenant
     // never sees write tools in the schema (so the LLM can't even try
     // to call them), a Premium tenant sees the full set. On top of the
@@ -365,6 +330,11 @@ export class AssistantService {
     const roleWrite = new Set(this.writeToolsForRole(this.normaliseRole(user.role)));
     const allowedRead = tierRead;
     const allowedWriteSet = new Set(tierWrite.filter((t) => roleWrite.has(t)));
+
+    // 4. Build context: salon's name + user's role + today's briefing. The
+    // actions the prompt lists are the ones this plan AND role allow: a Pro
+    // salon was told it had all six, and the model offered them.
+    const ctx = await this.buildPromptContext(user, [...allowedWriteSet]);
     const tierFilteredTools = (COPILOT_TOOLS as readonly any[]).filter((t) => {
       const name = (t as any).name as string;
       if (WRITE_TOOLS.has(name)) return allowedWriteSet.has(name);
@@ -394,7 +364,12 @@ export class AssistantService {
         };
       }
       if (WRITE_TOOLS.has(name)) {
-        const preview = (TOOL_PREVIEW[name] ?? (() => `Acción pendiente: ${name}`))(input);
+        const preview = await this.salonTools.approvalPreview(name, input, {
+          prisma: this.prisma,
+          tenantId: user.tenantId,
+          userId: user.id,
+          role: user.role as any,
+        });
         // P2A-staff-copilot-sprint16: action-approval creation is
         // also billable (the tool re-runs at approve-time, which
         // costs another LLM call in the worst case). Increment
@@ -518,11 +493,14 @@ export class AssistantService {
    * - today's one-line briefing (so the LLM can answer "what's
    *   up today?" without a separate tool call)
    */
-  private async buildPromptContext(user: {
-    id: string;
-    tenantId: string;
-    role: string;
-  }): Promise<CopilotPromptContext> {
+  private async buildPromptContext(
+    user: {
+      id: string;
+      tenantId: string;
+      role: string;
+    },
+    availableWriteTools: string[],
+  ): Promise<CopilotPromptContext> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: user.tenantId },
       select: { name: true },
@@ -533,15 +511,17 @@ export class AssistantService {
     });
 
     const role = this.normaliseRole(user.role);
-    const briefing = await this.computeTodayBriefing(user.tenantId);
+    const briefing = await this.computeTodayBriefing(user.tenantId, role === 'staff' ? user.id : null);
 
+    // Same order as the role list, so the prompt reads the same each time.
+    const allowed = new Set(availableWriteTools);
     return {
       salonName: tenant?.name ?? 'Kira Room',
       assistantName: 'Kira',
       role,
       professionalFirstName: userRow?.firstName,
       todayBriefingSummary: briefing,
-      availableWriteTools: this.writeToolsForRole(role),
+      availableWriteTools: this.writeToolsForRole(role).filter((t) => allowed.has(t)),
       language: 'es',
     };
   }
@@ -783,7 +763,7 @@ export class AssistantService {
    * The LLM uses this to start a fresh conversation with a useful
    * opening instead of a generic "Hola, ¿en qué puedo ayudarte?".
    */
-  private async computeTodayBriefing(tenantId: string): Promise<string | undefined> {
+  private async computeTodayBriefing(tenantId: string, staffUserId: string | null = null): Promise<string | undefined> {
     try {
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
@@ -793,12 +773,25 @@ export class AssistantService {
       const today = new Date(`${todayDay}T00:00:00.000Z`);
       const tomorrow = new Date(`${addDays(todayDay, 1)}T00:00:00.000Z`);
 
+      // A professional's own day, not the whole salon's (as her briefing
+      // card): the salon's totals used to reach the model for staff too.
+      let professionalId: string | undefined;
+      if (staffUserId) {
+        const prof = await this.prisma.professional.findFirst({
+          where: { tenantId, user: { id: staffUserId } },
+          select: { id: true },
+        });
+        if (!prof) return undefined;
+        professionalId = prof.id;
+      }
+
       const appts = await this.prisma.appointment.findMany({
         where: {
           tenantId,
           isTest: false,
           scheduledDate: { gte: today, lt: tomorrow },
           status: { in: ['confirmed', 'pending'] },
+          ...(professionalId ? { professionalId } : {}),
         },
         select: { scheduledTime: true, status: true, professionalId: true },
       });
@@ -806,7 +799,9 @@ export class AssistantService {
 
       const confirmed = appts.filter((a) => a.status === 'confirmed').length;
       const pending = appts.filter((a) => a.status === 'pending').length;
-      return `Hoy ${confirmed} citas confirmadas y ${pending} pendientes de confirmar.`;
+      return professionalId
+        ? `Hoy tienes ${confirmed} citas confirmadas y ${pending} pendientes de confirmar.`
+        : `Hoy ${confirmed} citas confirmadas y ${pending} pendientes de confirmar.`;
     } catch (err) {
       this.logger.warn(`Briefing fetch failed: ${(err as Error).message}`);
       return undefined;
