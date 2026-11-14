@@ -227,6 +227,18 @@ check("prices as numbers (euros)", [drawerAppointment.price, drawerAppointment.s
 check("empty notes are empty, not null", drawerAppointment.notes, "");
 check("add-ons resolved when the catalog is there", drawerAppointment.addons.map((a) => [a.name, a.quantity]), [["Mascarilla", 2]]);
 check("no English fallback for a missing specialty", drawerAppointment.professional.specialty, "");
+const taxOnTopAppointment = toDrawerAppointment({
+  ...apiAppointment,
+  totalAmount: 4500,
+  chargeTotal: 5445,
+  amountDue: 4945,
+  amountPaid: "500",
+});
+check(
+  "the money total and what is due reach the card (tax-excluded salon)",
+  [taxOnTopAppointment.chargeTotal, taxOnTopAppointment.amountDue],
+  [5445, 4945],
+);
 check(
   "no override is null",
   toDrawerAppointment({ ...apiAppointment, commissionRate: null }).commissionRate,
