@@ -141,7 +141,10 @@ export class MessageBundlesService {
     // The WHERE > 0 guard means a tenant can't go negative under
     // concurrent senders; instead the second concurrent sender sees
     // 0 rows updated and gets rejected.
-    const result = await this.prisma.$executeRaw`
+    // $queryRaw, not $executeRaw: the latter returns only the row count, so
+    // result[0] was undefined and a consumed credit ended in a TypeError (the
+    // SMS caller then skipped the send: credit gone, nothing sent).
+    const result = await this.prisma.$queryRaw<Array<{ creditsRemaining: number | string }>>`
       UPDATE "message_credit_wallet"
       SET "creditsRemaining" = "creditsRemaining" - 1,
           "creditsUsedTotal" = "creditsUsedTotal" + 1,
@@ -150,15 +153,13 @@ export class MessageBundlesService {
         AND "creditsRemaining" > 0
       RETURNING "creditsRemaining"
     `;
-    if (!result || (Array.isArray(result) && result.length === 0)) {
+    if (!Array.isArray(result) || result.length === 0) {
       this.metrics
         .counter(COUNTERS.MESSAGE_BUNDLE_CONSUMED, 'Message-bundle credit consumption (per channel × result)')
         .inc({ channel: args.channel, result: 'no_credits' });
       return { ok: false, remaining: 0, reason: 'no_credits' };
     }
-    const remaining = Number(
-      (result[0] as { creditsRemaining: number | string }).creditsRemaining,
-    );
+    const remaining = Number(result[0].creditsRemaining);
 
     // M-1: bump the per-channel Prometheus counter on every successful
     // consume. Operators can graph consumption by channel/result and

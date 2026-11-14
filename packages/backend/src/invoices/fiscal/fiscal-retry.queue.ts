@@ -3,6 +3,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { EmailService } from "../../notifications/services/email.service";
 import { appBaseUrl } from "../../common/app-base-url";
 import { OpsAlertService } from "../../common/ops-alerts/ops-alert.service";
+import { escapeHtml } from "../../common/html-escape";
 
 /**
  * In-process retry scheduler for fiscal Spain dispatches.
@@ -151,8 +152,8 @@ export class FiscalRetryQueue {
       await email.sendEmail({
         to: invoice.tenant.email,
         subject: `Factura ${invoice.series}${invoice.number} rechazada por AEAT`,
-        html: `<p>Tu factura <strong>${invoice.series}${invoice.number}</strong> de ${invoice.tenant.name} fue rechazada tras ${FISCAL_RETRY_MAX_ATTEMPTS} intentos.</p>
-<p>Detalle: ${lastError ?? ""}</p>
+        html: `<p>Tu factura <strong>${escapeHtml(`${invoice.series}${invoice.number}`)}</strong> de ${escapeHtml(invoice.tenant.name)} fue rechazada tras ${FISCAL_RETRY_MAX_ATTEMPTS} intentos.</p>
+<p>Detalle: ${escapeHtml(lastError ?? "")}</p>
 <p>Resolver desde el panel: <a href="${appBaseUrl()}/dashboard/billing/invoices">abrir Facturas</a></p>`,
       });
     } catch (err) {

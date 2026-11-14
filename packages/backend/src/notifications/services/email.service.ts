@@ -560,7 +560,7 @@ export class EmailService {
       return { success: false, skipped: true, error: "email_bounced" };
     }
 
-    const greeting = data.firstName ? `Hola ${data.firstName},` : "Hola,";
+    const greeting = data.firstName ? `Hola ${this.escapeHtml(data.firstName)},` : "Hola,";
     const expiresInDays = Math.max(
       1,
       Math.ceil(
@@ -636,7 +636,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      greeting,
+      data.firstName ? `Hola ${data.firstName},` : "Hola,",
       ``,
       `Has sido invitado/a a configurar ${data.tenantName} en KiraRoom.`,
       `Para crear tu cuenta y empezar tu prueba gratuita de 14 días:`,
@@ -1489,7 +1489,7 @@ export class EmailService {
     }
 
     const firstName = data.ownerName?.split(" ")[0] ?? "";
-    const greeting = firstName ? `Hola ${firstName},` : "Hola,";
+    const greeting = firstName ? `Hola ${this.escapeHtml(firstName)},` : "Hola,";
     const subject = `Multicanal ya está activo en tu cuenta de KiraRoom`;
 
     const html = `
@@ -1520,7 +1520,7 @@ export class EmailService {
     `;
 
     const text = [
-      greeting,
+      firstName ? `Hola ${firstName},` : "Hola,",
       "",
       `Confirmamos la activación del add-on Multicanal en ${data.tenantName}.`,
       "Ya puedes conectar Messenger, Instagram y Telegram a tu recepcionista virtual.",
@@ -2025,7 +2025,7 @@ export class EmailService {
 </html>`.trim();
 
     const text = [
-      greeting,
+      data.ownerName ? `Hola ${data.ownerName},` : "Hola,",
       ``,
       `${data.tenantName} ya está creado en KiraRoom. Tienes 14 días con todo el plan Pro incluido, sin tarjeta.`,
       ``,
