@@ -8,7 +8,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useTranslations } from "@/lib/use-translation";
-import { X, Send, Loader2, Sparkles, AlertCircle, Trash2, Lock } from "lucide-react";
+import { X, Send, Loader2, Sparkles, AlertCircle, MessageSquarePlus, Lock } from "lucide-react";
+import type { AssistantConversation } from "@/lib/api";
 import { useCopilotConversation } from "./use-copilot-conversation";
 import { BriefingCard } from "./briefing-card";
 import { ApprovalChip } from "./approval-chip";
@@ -25,7 +26,8 @@ export interface CopilotPanelProps {
 
 export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
   const t = useTranslations();
-  const { state, send, clear, tier, costCapReached } = useCopilotConversation();
+  const { state, send, clear, refresh, openConversation, conversations, tier, costCapReached } =
+    useCopilotConversation();
   // Read after mount, as in the dashboard header: the server has no
   // localStorage, and /dashboard/copilot is rendered there first.
   const [user, setUser] = useState<ReturnType<typeof getCurrentUser>>(null);
@@ -69,8 +71,14 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
             </div>
           </div>
           {onClose && (
-            <button onClick={onClose} className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg">
-              <X className="w-5 h-5" />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t("copilot.close")}
+              title={t("copilot.close")}
+              className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
           )}
         </header>
@@ -105,19 +113,41 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {/* B12: the earlier conversations, to go back to one. */}
+          {conversations.length > 1 && (
+            <select
+              aria-label={t("copilot.history")}
+              title={t("copilot.history")}
+              value={state.conversation?.id ?? ""}
+              onChange={(e) => openConversation(e.target.value)}
+              disabled={state.sending}
+              className="max-w-[9rem] text-xs border border-gray-300 rounded-md px-1.5 py-1 bg-white text-gray-700"
+            >
+              {conversations.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {conversationLabel(c)}
+                </option>
+              ))}
+            </select>
+          )}
           <button
+            type="button"
             onClick={clear}
             title={t("copilot.clear")}
+            aria-label={t("copilot.clear")}
             className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
           >
-            <Trash2 className="w-4 h-4" />
+            <MessageSquarePlus className="w-4 h-4" aria-hidden="true" />
           </button>
           {onClose && (
             <button
+              type="button"
               onClick={onClose}
+              aria-label={t("copilot.close")}
+              title={t("copilot.close")}
               className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
           )}
         </div>
@@ -159,13 +189,15 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
                 approvalId={m.pendingActionId}
                 toolName={m.toolName}
                 preview={m.content}
-                // expiresAt isn't on AssistantMessage in the public
-                // shape — the panel polls /approvals separately for
-                // the canonical expiry. Default to 5 minutes from
-                // message creation so the chip doesn't show as
-                // already-expired on a slow refresh.
-                expiresAt={new Date(new Date(m.createdAt).getTime() + 5 * 60 * 1000).toISOString()}
-                conversationId={state.conversation?.id ?? ""}
+                // The action's real state (M9). A message sent just now
+                // and not refetched yet has none: pending for 5 minutes.
+                approval={
+                  m.approval ?? {
+                    status: "pending",
+                    expiresAt: new Date(new Date(m.createdAt).getTime() + 5 * 60 * 1000).toISOString(),
+                  }
+                }
+                onResolved={refresh}
               />
             );
           }
@@ -208,6 +240,7 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
               }
             }}
             placeholder={t("copilot.placeholder")}
+            aria-label={t("copilot.input_label")}
             rows={2}
             disabled={state.sending || state.loading}
             className="flex-1 resize-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
@@ -217,6 +250,7 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
             disabled={state.sending || !input.trim()}
             className="bg-purple-600 text-white p-2.5 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             title={t("copilot.send")}
+            aria-label={t("copilot.send")}
           >
             {state.sending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -231,6 +265,15 @@ export function CopilotPanel({ fullPage = false, onClose }: CopilotPanelProps) {
       </form>
     </div>
   );
+}
+
+/** A conversation in the history: its title, or when it was last used. */
+function conversationLabel(c: AssistantConversation): string {
+  if (c.title) return c.title;
+  const d = new Date(c.updatedAt);
+  return Number.isNaN(d.getTime())
+    ? "Conversación"
+    : d.toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 function UserBubble({ content }: { content: string }) {

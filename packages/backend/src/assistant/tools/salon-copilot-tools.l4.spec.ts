@@ -1,6 +1,7 @@
 import { SalonCopilotToolsService } from './salon-copilot-tools';
 import { salonToday } from '../../analytics/analytics-metrics';
 import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
+import { salonNowMinutes } from '../briefing-gaps';
 
 /**
  * L-4 contract tests for the staff-side copilot tools.
@@ -19,7 +20,23 @@ const OWNER_USER = { id: 'owner-1', role: 'owner' as const };
 
 // Dates as stored: the UTC midnight of the salon's day (the default zone,
 // no tenant row in this mock).
-const today = new Date(`${salonToday(safeTimeZone(undefined))}T00:00:00.000Z`);
+const TZ = safeTimeZone(undefined);
+const TODAY = salonToday(TZ);
+const today = new Date(`${TODAY}T00:00:00.000Z`);
+
+/** The instant the salon's clock reads `hhmm` on `day` (default: today). */
+function atSalonTime(hhmm: string, day = TODAY): Date {
+  const [h, m] = hhmm.split(':').map(Number);
+  const offset = salonNowMinutes(TZ, new Date(`${day}T12:00:00.000Z`)) - 720;
+  return new Date(Date.parse(`${day}T00:00:00.000Z`) + (h * 60 + m - offset) * 60_000);
+}
+
+/** The service with its clock pinned (gaps before "now" are gone): 06:00 by default. */
+function newSvc(prisma: any, now: Date = atSalonTime('06:00')): SalonCopilotToolsService {
+  const svc = new SalonCopilotToolsService(prisma);
+  svc.now = () => now;
+  return svc;
+}
 const yesterday = new Date(today);
 yesterday.setUTCDate(today.getUTCDate() - 1);
 const lastMonth = new Date(today);
@@ -67,6 +84,9 @@ function makePrisma(opts: {
   products?: any[];
   waitList?: any[];
   tenant?: any;
+  timeOff?: any[];
+  services?: any[];
+  locations?: any[];
 }): any {
   const appts = opts.appointments ?? [];
   const cls = opts.clients ?? [];
@@ -90,7 +110,9 @@ function makePrisma(opts: {
           .filter((a: any) => {
             if (where?.tenantId && a.tenantId !== where.tenantId) return false;
             if (where?.clientId && a.clientId !== where.clientId) return false;
-            if (where?.professionalId && a.professionalId !== where.professionalId) {
+            if (where?.professionalId?.in) {
+              if (!where.professionalId.in.includes(a.professionalId)) return false;
+            } else if (where?.professionalId && a.professionalId !== where.professionalId) {
               return false;
             }
             if (where?.scheduledDate?.gte && a.scheduledDate < where.scheduledDate.gte) {
@@ -218,7 +240,23 @@ function makePrisma(opts: {
           }) ?? null
         );
       }),
+      findMany: jest.fn().mockImplementation(async ({ where }: any) =>
+        pros.filter((p: any) => {
+          if (where?.isActive === true && p.isActive === false) return false;
+          if (where?.id?.in && !where.id.in.includes(p.id)) return false;
+          const loc = where?.locations?.some?.locationId;
+          if (loc && !(p.locationIds ?? []).includes(loc)) return false;
+          return true;
+        }),
+      ),
     },
+    timeOff: { findMany: jest.fn(async () => opts.timeOff ?? []) },
+    service: {
+      findMany: jest.fn(async ({ where }: any) =>
+        (opts.services ?? []).filter((x: any) => !where?.id?.in || where.id.in.includes(x.id)),
+      ),
+    },
+    location: { findMany: jest.fn(async () => opts.locations ?? []) },
     product: {
       findMany: jest.fn().mockImplementation(async ({ where, orderBy, take }: any) => {
         let list = prods.filter((p: any) => {
@@ -241,53 +279,22 @@ function makePrisma(opts: {
     },
     waitList: {
       findMany: jest.fn().mockImplementation(async (args: any) => {
-        const w: any = args?.where;
-        const ob: any = args?.orderBy;
+        const w: any = args?.where ?? {};
         const take: number | undefined = args?.take;
-        let list = wls.filter((x: any) => {
-          if (w?.tenantId && x.tenantId !== w.tenantId) return false;
-          if (w?.status && x.status !== w.status) return false;
-          if (w?.OR) {
-            const m = w.OR.some((c: any) => {
-              if (c.earliestDate === null && x.earliestDate === null) return true;
-              if (c.earliestDate === null) return false;
-              if (x.earliestDate === null) return false;
-              return x.earliestDate <= c.earliestDate;
-            });
-            if (!m) return false;
-          }
-          if (w?.AND) {
-            const m = w.AND.every((c: any) => {
-              if (c.OR) {
-                return c.OR.some((cc: any) => {
-                  if (cc.latestDate === null && x.latestDate === null) return true;
-                  if (cc.latestDate === null) return false;
-                  if (x.latestDate === null) return false;
-                  return x.latestDate >= cc.latestDate;
-                });
-              }
-              return true;
-            });
-            if (!m) return false;
-          }
-          return true;
-        });
-        list = list.map((x: any) => ({
-          ...x,
-          client: cls.find((c: any) => c.id === x.clientId) ?? null,
-        }));
-        if (ob?.client?.lastVisit) {
-          const dir = ob.client.lastVisit === 'asc' ? 1 : -1;
-          list = list.slice().sort(
-            (a: any, b: any) =>
-              dir *
-              (new Date(a.client?.lastVisit ?? 0).getTime() -
-                new Date(b.client?.lastVisit ?? 0).getTime()),
-          );
-        }
-        if (typeof take === 'number') {
-          list = list.slice(0, take);
-        }
+        const [early, late] = (w.AND ?? []).map((c: any) => c.OR?.[1]);
+        let list = wls
+          .filter((x: any) => {
+            if (w.tenantId && x.tenantId !== w.tenantId) return false;
+            if (w.status?.in && !w.status.in.includes(x.status)) return false;
+            const client = cls.find((c: any) => c.id === x.clientId) ?? x.client;
+            if (w.client?.status && client?.status !== w.client.status) return false;
+            if (early?.earliestDate?.lte && x.earliestDate && x.earliestDate > early.earliestDate.lte) return false;
+            if (late?.latestDate?.gte && x.latestDate && x.latestDate < late.latestDate.gte) return false;
+            return true;
+          })
+          .map((x: any) => ({ ...x, client: cls.find((c: any) => c.id === x.clientId) ?? x.client ?? null }));
+        list = list.slice().sort((p: any, q: any) => new Date(p.createdAt ?? 0).getTime() - new Date(q.createdAt ?? 0).getTime());
+        if (typeof take === 'number') list = list.slice(0, take);
         return list;
       }),
     },
@@ -302,7 +309,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_my_agenda', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -325,7 +332,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute(
         'get_my_agenda',
         { professionalId: 'staff-2' },
@@ -343,7 +350,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute(
         'get_my_agenda',
         { professionalId: 'staff-2' },
@@ -360,7 +367,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_my_agenda', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -379,7 +386,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute(
         'get_salon_agenda',
         { professionalId: 'staff-1' },
@@ -397,7 +404,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute(
         'get_salon_agenda',
         {},
@@ -412,7 +419,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         professionals: SAMPLE_PROFESSIONALS,
         clients: SAMPLE_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute(
         'get_salon_agenda',
         { professionalId: 'staff-2' },
@@ -429,7 +436,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: SAMPLE_APPOINTMENTS,
         clients: [SAMPLE_CLIENT],
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -463,7 +470,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: [{ ...SAMPLE_CLIENT, tenantId: TENANT_ID, totalSpent: 120.5 }],
         tenant: { fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21 } },
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res: any = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma, tenantId: TENANT_ID, userId: OWNER_USER.id, role: 'owner',
       });
@@ -475,7 +482,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('B2: a client of another salon is not found, even for the platform owner', async () => {
       const prisma = makePrisma({ clients: [{ ...SAMPLE_CLIENT, tenantId: 'other-salon' }] });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma, tenantId: TENANT_ID, userId: 'saas-1', role: 'saas_owner',
       });
@@ -488,7 +495,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: [{ ...SAMPLE_CLIENT, tenantId: TENANT_ID }],
         professionals: SAMPLE_PROFESSIONALS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma, tenantId: TENANT_ID, userId: STAFF_USER_ID, role: 'staff',
       });
@@ -501,7 +508,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: [SAMPLE_CLIENT],
         professionals: SAMPLE_PROFESSIONALS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -519,7 +526,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: [SAMPLE_CLIENT],
         professionals: SAMPLE_PROFESSIONALS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-1' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -536,7 +543,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: SAMPLE_APPOINTMENTS,
         clients: [SAMPLE_CLIENT],
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_client_360', { clientId: 'c-404' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -567,9 +574,10 @@ describe('SalonCopilotToolsService (L-4)', () => {
     const YESTERDAY = new Date(today);
     YESTERDAY.setDate(today.getDate() - 1);
     const WL_ENTRIES = [
-      { id: 'w-1', tenantId: TENANT_ID, clientId: 'c-mar', status: 'waiting', earliestDate: null, latestDate: null, client: { id: 'c-mar', firstName: 'Mar', lastVisit: THREE_MONTHS_AGO, totalSpent: 200 } },
-      { id: 'w-2', tenantId: TENANT_ID, clientId: 'c-ana', status: 'waiting', earliestDate: null, latestDate: null, client: { id: 'c-ana', firstName: 'Ana', lastVisit: YESTERDAY, totalSpent: 50 } },
+      { id: 'w-1', tenantId: TENANT_ID, clientId: 'c-mar', serviceId: 's-corte', professionalId: null, status: 'waiting', earliestDate: null, latestDate: null, createdAt: THREE_MONTHS_AGO },
+      { id: 'w-2', tenantId: TENANT_ID, clientId: 'c-ana', serviceId: 's-corte', professionalId: null, status: 'waiting', earliestDate: null, latestDate: null, createdAt: YESTERDAY },
     ];
+    const SERVICES = [{ id: 's-corte', name: 'Corte', duration: 30, professionals: [] }];
 
     it('returns gaps ≥ 30 min between staff-1\'s today appointments', async () => {
       const prisma = makePrisma({
@@ -578,7 +586,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: SAMPLE_CLIENTS,
         professionals: SAMPLE_PROFESSIONALS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -590,13 +598,15 @@ describe('SalonCopilotToolsService (L-4)', () => {
       expect(res.gaps).toHaveLength(1);
     });
 
-    it('attaches wait-list candidates for owner/manager, oldest first', async () => {
+    it('attaches wait-list candidates for owner/manager, longest waiting first', async () => {
       const prisma = makePrisma({
         appointments: SAMPLE_APPOINTMENTS,
         waitList: WL_ENTRIES,
         clients: SAMPLE_CLIENTS,
+        professionals: SAMPLE_PROFESSIONALS,
+        services: SERVICES,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -614,14 +624,17 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: SAMPLE_APPOINTMENTS,
         waitList: WL_ENTRIES,
         clients: SAMPLE_CLIENTS,
+        professionals: SAMPLE_PROFESSIONALS,
+        services: SERVICES,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
         prisma,
         tenantId: TENANT_ID,
         userId: 'r-1',
         role: 'receptionist',
       });
+      expect((res.gaps as unknown[]).length).toBeGreaterThan(0);
       for (const g of res.gaps as Array<{ suggestions: unknown[] }>) {
         expect(g.suggestions).toEqual([]);
       }
@@ -633,7 +646,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         clients: SAMPLE_CLIENTS,
         professionals: SAMPLE_PROFESSIONALS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('find_filling_opportunities', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -658,7 +671,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('returns only products with quantity ≤ alert, tracked and active', async () => {
       const prisma = makePrisma({ products: PRODUCTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_low_stock', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -676,7 +689,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('forbids staff and client roles', async () => {
       const prisma = makePrisma({ products: PRODUCTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_low_stock', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -707,7 +720,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: NS_APPOINTMENTS,
         clients: NS_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_no_show_history', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -728,7 +741,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: NS_APPOINTMENTS,
         clients: NS_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_no_show_history', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -744,7 +757,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
         appointments: NS_APPOINTMENTS,
         clients: NS_CLIENTS,
       });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_no_show_history', {}, {
         prisma,
         tenantId: TENANT_ID,
@@ -764,7 +777,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('ranks by spend desc for owner/manager/saas_owner', async () => {
       const prisma = makePrisma({ clients: TC_CLIENTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_top_clients', { metric: 'spend' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -779,7 +792,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('redacts totalSpent for receptionist', async () => {
       const prisma = makePrisma({ clients: TC_CLIENTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_top_clients', { metric: 'spend' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -791,7 +804,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('ranks by visitCount when metric=visits', async () => {
       const prisma = makePrisma({ clients: TC_CLIENTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_top_clients', { metric: 'visits' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -804,7 +817,7 @@ describe('SalonCopilotToolsService (L-4)', () => {
 
     it('ranks by oldest lastVisit when metric=recency', async () => {
       const prisma = makePrisma({ clients: TC_CLIENTS });
-      const svc = new SalonCopilotToolsService(prisma);
+      const svc = newSvc(prisma);
       const res = await svc.execute('get_top_clients', { metric: 'recency' }, {
         prisma,
         tenantId: TENANT_ID,
@@ -834,7 +847,7 @@ describe('SalonCopilotToolsService: staff user id vs professional id', () => {
   const ctxFor = (prisma: any, userId: string) => ({ prisma, tenantId: TENANT_ID, userId, role: 'staff' as const });
   const setup = (professionals = [MARIA, JORGE]) => {
     const prisma = makePrisma({ appointments: APPTS, clients: [...SAMPLE_CLIENTS, SAMPLE_CLIENT], professionals });
-    return { prisma, svc: new SalonCopilotToolsService(prisma) };
+    return { prisma, svc: newSvc(prisma) };
   };
 
   it('a professional can ask for their own agenda by their professional id', async () => {
@@ -876,3 +889,169 @@ describe('SalonCopilotToolsService: staff user id vs professional id', () => {
     expect(res.error).toBe('forbidden');
   });
 });
+
+
+/**
+ * Copilot audit M6: the gaps are per professional, inside her working hours
+ * and the salon's, minus closures, time off and her appointments, never in
+ * the past; and the wait list offered for a gap is the one that fits it.
+ */
+describe('M6: free gaps per professional', () => {
+  const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const shifts = (...ranges: Array<[string, string]>) =>
+    WEEK.flatMap((day) => ranges.map(([openTime, closeTime]) => ({ day, openTime, closeTime })));
+  // The salon opens 10-14 and 16-20 (lunch closed); Ana works both shifts, Lucía only afternoons.
+  const TENANT = { timezone: TZ, openingHours: shifts(['10:00', '14:00'], ['16:00', '20:00']) };
+  const ANA = { id: 'p-ana', userId: 'u-ana', firstName: 'Ana', workingHours: shifts(['10:00', '14:00'], ['16:00', '20:00']), locationIds: ['l-centro'] };
+  const LUCIA = { id: 'p-lucia', userId: 'u-lucia', firstName: 'Lucía', workingHours: shifts(['16:00', '20:00']), locationIds: ['l-gracia'] };
+  // Ana is booked all morning.
+  const APPTS = [
+    { id: 'x-1', tenantId: TENANT_ID, professionalId: 'p-ana', clientId: 'c-1', scheduledDate: today, scheduledTime: '10:00', duration: 240, status: 'confirmed', services: [{ service: { name: 'Mechas' } }] },
+  ];
+  const owner = (prisma: any) => ({ prisma, tenantId: TENANT_ID, userId: 'owner-1', role: 'owner' as const });
+  const setup = (extra: Record<string, unknown> = {}, now = atSalonTime('06:00')) => {
+    const prisma = makePrisma({ tenant: TENANT, professionals: [ANA, LUCIA], appointments: APPTS, clients: SAMPLE_CLIENTS, ...extra });
+    return { prisma, svc: newSvc(prisma, now) };
+  };
+  const brief = (gaps: any[]) => gaps.map((g) => `${g.professionalFirstName} ${g.start}-${g.end}`);
+
+  it('one row per professional inside her hours: the lunch closure is not a gap, a free afternoon is', async () => {
+    const { prisma, svc } = setup();
+    const res: any = await svc.execute('get_my_agenda', {}, owner(prisma));
+    expect(brief(res.gaps)).toEqual(['Ana 16:00-20:00', 'Lucía 16:00-20:00']);
+    expect(res.gaps[0]).toMatchObject({ professionalId: 'p-ana', minutes: 240 });
+  });
+
+  it('a whole-day closure leaves no gaps; a partial one takes its hours out', async () => {
+    const closed = setup({ timeOff: [{ professionalId: null, kind: 'closure', startDate: today, endDate: today, status: 'approved' }] });
+    expect((await closed.svc.execute('get_my_agenda', {}, owner(closed.prisma)) as any).gaps).toEqual([]);
+
+    const partial = setup({ timeOff: [{ professionalId: null, kind: 'closure', startDate: today, endDate: today, startTime: '16:00', endTime: '18:00', status: 'approved' }] });
+    expect(brief((await partial.svc.execute('get_my_agenda', {}, owner(partial.prisma)) as any).gaps)).toEqual([
+      'Ana 18:00-20:00',
+      'Lucía 18:00-20:00',
+    ]);
+  });
+
+  it('time off (ausencias) takes the professional out; a pending request does not', async () => {
+    const off = setup({ timeOff: [{ professionalId: 'p-lucia', kind: 'vacation', startDate: today, endDate: today, status: 'approved' }] });
+    expect(brief((await off.svc.execute('get_my_agenda', {}, owner(off.prisma)) as any).gaps)).toEqual(['Ana 16:00-20:00']);
+
+    const pending = setup({ timeOff: [{ professionalId: 'p-lucia', kind: 'vacation', startDate: today, endDate: today, status: 'pending' }] });
+    expect(brief((await pending.svc.execute('get_my_agenda', {}, owner(pending.prisma)) as any).gaps)).toContain('Lucía 16:00-20:00');
+  });
+
+  it('time already gone today is not a gap', async () => {
+    const { prisma, svc } = setup({}, atSalonTime('17:30'));
+    const res: any = await svc.execute('get_my_agenda', {}, owner(prisma));
+    expect(brief(res.gaps)).toEqual(['Ana 17:30-20:00', 'Lucía 17:30-20:00']);
+    expect(res.gaps[0].minutes).toBe(150);
+  });
+
+  it('reads the date asked for, not always today', async () => {
+    const { prisma, svc } = setup();
+    const tomorrow = addDaysIso(TODAY, 1);
+    const res: any = await svc.execute('get_my_agenda', { date: tomorrow }, owner(prisma));
+    expect(res.date).toBe(tomorrow);
+    // Nobody is booked tomorrow: Ana's two shifts and Lucía's afternoon.
+    expect(brief(res.gaps)).toEqual(['Ana 10:00-14:00', 'Ana 16:00-20:00', 'Lucía 16:00-20:00']);
+  });
+
+  it('a professional only gets her own gaps', async () => {
+    const { prisma, svc } = setup();
+    const ctx = { prisma, tenantId: TENANT_ID, userId: 'u-lucia', role: 'staff' as const };
+    expect(brief((await svc.execute('get_my_agenda', {}, ctx) as any).gaps)).toEqual(['Lucía 16:00-20:00']);
+    const week: any = await svc.execute('find_filling_opportunities', { daysAhead: 2 }, ctx);
+    expect(week.gaps.every((g: any) => g.professionalId === 'p-lucia')).toBe(true);
+    expect(week.gaps).toHaveLength(2);
+  });
+
+  it('a location: only the professionals who work there', async () => {
+    const { prisma, svc } = setup({ locations: [{ id: 'l-centro', name: 'Centro' }, { id: 'l-gracia', name: 'Local Gràcia' }] });
+    const res: any = await svc.execute('get_my_agenda', { location: 'gracia' }, owner(prisma));
+    expect(res.location).toBe('Local Gràcia');
+    expect(brief(res.gaps)).toEqual(['Lucía 16:00-20:00']);
+    const unknown: any = await svc.execute('find_filling_opportunities', { location: 'Sants' }, owner(prisma));
+    expect(unknown.error).toBe('location_not_found');
+    expect(unknown.message).toContain('Centro');
+  });
+
+  it('find_filling_opportunities: per professional and day, in date order, from now on', async () => {
+    const { prisma, svc } = setup();
+    const res: any = await svc.execute('find_filling_opportunities', { daysAhead: 2 }, owner(prisma));
+    expect(res.from).toBe(TODAY);
+    expect(res.totalGaps).toBe(5); // today: Ana pm, Lucía pm; tomorrow: Ana am+pm, Lucía pm
+    expect(res.gaps.map((g: any) => `${g.date === TODAY ? 'hoy' : 'mañana'} ${g.professionalFirstName} ${g.start}`)).toEqual([
+      'hoy Ana 16:00',
+      'hoy Lucía 16:00',
+      'mañana Ana 10:00',
+      'mañana Ana 16:00',
+      'mañana Lucía 16:00',
+    ]);
+  });
+
+  describe('wait-list suggestions', () => {
+    const CLIENTS = [
+      ...SAMPLE_CLIENTS,
+      { id: 'c-blocked', firstName: 'Bea', lastName: 'B', tenantId: TENANT_ID, status: 'blocked' as const },
+      { id: 'c-later', firstName: 'Eva', lastName: 'E', tenantId: TENANT_ID, status: 'active' as const },
+      { id: 'c-long', firstName: 'Olga', lastName: 'O', tenantId: TENANT_ID, status: 'active' as const },
+    ];
+    const SERVICES = [
+      { id: 's-corte', name: 'Corte', duration: 30, professionals: [] },
+      { id: 's-largo', name: 'Alisado', duration: 300, professionals: [] },
+      { id: 's-color', name: 'Color', duration: 60, professionals: [{ professionalId: 'p-ana', professional: { isActive: true } }] },
+    ];
+    const t = (days: number) => new Date(`${addDaysIso(TODAY, days)}T00:00:00.000Z`);
+    let seq = 0;
+    const wl = (id: string, clientId: string, serviceId: string, extra: Record<string, unknown> = {}) => ({
+      id, tenantId: TENANT_ID, clientId, serviceId, professionalId: null, status: 'waiting', earliestDate: null, latestDate: null,
+      createdAt: new Date(Date.UTC(2026, 0, 1) + (seq++) * 60_000), ...extra,
+    });
+    const run = async (waitList: any[], args: Record<string, unknown> = {}) => {
+      const { prisma, svc } = setup({ clients: CLIENTS, services: SERVICES, waitList });
+      return (await svc.execute('find_filling_opportunities', { daysAhead: 1, ...args }, owner(prisma))) as any;
+    };
+    const names = (res: any, who: string) =>
+      res.gaps.find((g: any) => g.professionalFirstName === who).suggestions.map((s: any) => s.firstName);
+
+    it('never offers a blocked client', async () => {
+      const res = await run([wl('w-b', 'c-blocked', 's-corte'), wl('w-c', 'c-1', 's-corte')]);
+      expect(res.gaps).toHaveLength(2);
+      for (const g of res.gaps) expect(g.suggestions.map((s: any) => s.firstName)).toEqual(['Carmen']);
+    });
+
+    it('matches the professional she asked for and who performs the service', async () => {
+      const res = await run([
+        wl('w-1', 'c-1', 's-corte', { professionalId: 'p-lucia' }),
+        wl('w-2', 'c-2', 's-color'), // only Ana does colour
+      ]);
+      expect(names(res, 'Ana')).toEqual(['Lucía']);
+      expect(names(res, 'Lucía')).toEqual(['Carmen']);
+      const first = res.gaps.find((g: any) => g.professionalFirstName === 'Lucía').suggestions[0];
+      expect(first).toMatchObject({ service: 'Corte', askedForThisProfessional: true });
+    });
+
+    it('matches her dates and leaves out a service longer than the gap', async () => {
+      const res = await run([
+        wl('w-1', 'c-later', 's-corte', { earliestDate: t(3) }),
+        wl('w-2', 'c-long', 's-largo'),
+        wl('w-3', 'c-3', 's-corte', { earliestDate: t(-5), latestDate: t(0) }),
+      ]);
+      expect(res.gaps).toHaveLength(2);
+      for (const g of res.gaps) expect(g.suggestions.map((s: any) => s.firstName)).toEqual(['Pablo']);
+    });
+
+    it('does not offer the same client first in every gap when another fits', async () => {
+      const res = await run([wl('w-1', 'c-1', 's-corte'), wl('w-2', 'c-2', 's-corte')], { topN: 1 });
+      expect(res.gaps).toHaveLength(2);
+      expect(res.gaps.map((g: any) => g.suggestions[0].firstName).sort()).toEqual(['Carmen', 'Lucía']);
+    });
+  });
+});
+
+function addDaysIso(day: string, n: number): string {
+  const d = new Date(`${day}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}

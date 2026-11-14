@@ -1,4 +1,5 @@
 import { Injectable, Logger, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { LLMService } from '../virtual-receptionist/services/llm.service';
 import type { TokenCounts } from '../virtual-receptionist/providers/anthropic-models';
@@ -47,7 +48,6 @@ class CopilotTimeoutError extends Error {
  * envelope instead of executing the tool synchronously.
  */
 const WRITE_TOOLS = new Set<string>([
-  'draft_follow_up_message',
   'send_message',
   'reschedule_appointment',
   'mark_no_show',
@@ -224,6 +224,9 @@ export class AssistantService {
     const rows = await this.prisma.assistantMessage.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },
+      // M9: the card shows what really happened to the action after a
+      // reload (it guessed from the message's age: everything "caducada").
+      include: { pendingAction: { select: { status: true, expiresAt: true, resultSnapshot: true } } },
     });
     return rows.map(toPublicMessage);
   }
@@ -277,6 +280,7 @@ export class AssistantService {
       where: { conversationId: conversation.id },
       orderBy: { createdAt: 'desc' },
       take: 10,
+      include: { pendingAction: { select: { status: true, resultSnapshot: true } } },
     });
     const historyForLlm = history.reverse().flatMap((m) => {
       if (m.role === 'assistant' || m.role === 'user') {
@@ -286,11 +290,12 @@ export class AssistantService {
         return [{ role: 'user' as const, content: m.content }];
       }
       if (m.role === 'approval') {
-        // Surface the pending action as a user-side observation so the
-        // LLM knows the user saw it. Only do this if the approval has
-        // already been resolved (otherwise we'd be re-feeding the
-        // PENDING card back to the LLM as if the user typed it).
-        return [];
+        // The model never learnt what became of an action it proposed
+        // (Copilot audit M8/M9): it could not say "hecho" or carry on. A
+        // resolved one is told as an observation; a pending one is not
+        // (it would read as if the user had typed it).
+        const observation = approvalObservation(m.content, m.pendingAction?.status, m.pendingAction?.resultSnapshot);
+        return observation ? [{ role: 'user' as const, content: observation }] : [];
       }
       return [];
     });
@@ -477,7 +482,10 @@ export class AssistantService {
     // What the turn cost, in money, on the Copilot's own counter.
     await this.tiers.recordCost(user.tenantId, generation.model, generation.usage as TokenCounts | undefined);
 
-    const reply = generation.text;
+    // B14: a refusal by the model came back with the receptionist's line
+    // ("no puedo responder a eso por aquí"), written for clients.
+    const reply =
+      (generation as { finishReason?: string }).finishReason === 'refusal' ? COPILOT_REFUSAL_REPLY : generation.text;
     const latencyMs = Date.now() - start;
 
     // 7. Persist the assistant message + the tools it ran
@@ -608,13 +616,13 @@ export class AssistantService {
 
   /**
    * Per-role list of write tools. Mirrors RFC §5.
-   *  - staff: draft + send (own clients only), reschedule (own)
+   *  - staff: send (own clients only), reschedule (own); drafting is a
+   *    read tool (Copilot audit M8)
    *  - receptionist / manager: all except create_coupon
    *  - owner / admin / saas_owner: all
    */
   private writeToolsForRole(role: CopilotPromptContext['role']): string[] {
     const all = [
-      'draft_follow_up_message',
       'send_message',
       'reschedule_appointment',
       'mark_no_show',
@@ -626,7 +634,7 @@ export class AssistantService {
       return all.filter((t) => t !== 'create_coupon');
     }
     if (role === 'staff') {
-      return ['draft_follow_up_message', 'send_message', 'reschedule_appointment'];
+      return ['send_message', 'reschedule_appointment'];
     }
     return [];
   }
@@ -747,8 +755,11 @@ export class AssistantService {
         take: 50,
         select: { id: true, name: true, quantity: true, lowStockAlert: true },
       });
-      lowStockSample = products
-        .filter((p) => p.quantity <= p.lowStockAlert)
+      // B9: the count is every low product (of the 50 lowest), the sample
+      // five; both were five, so the card's "+N" never showed.
+      const low = products.filter((p) => p.quantity <= p.lowStockAlert);
+      lowStockCount = low.length;
+      lowStockSample = low
         .slice(0, 5)
         .map((p) => ({
           id: p.id,
@@ -756,30 +767,34 @@ export class AssistantService {
           quantity: p.quantity,
           lowStockAlert: p.lowStockAlert,
         }));
-      lowStockCount = lowStockSample.length;
     }
 
     // 5. At-risk clients — clients whose last completed visit is ≥ 60d
-    // ago, capped at 5. One who never came is not at risk of being lost.
+    // ago: the five longest gone, and how many there are in all (B9).
+    // One who never came is not at risk of being lost.
     let clientsAtRiskCount = 0;
     let clientsAtRisk: Array<{ id: string; firstName: string; daysSinceLastVisit: number | null }> = [];
     if (['owner', 'admin', 'manager', 'receptionist', 'staff', 'saas_owner'].includes(role)) {
       const cutoff = new Date(today);
       cutoff.setUTCDate(cutoff.getUTCDate() - 60);
-      const stale = await this.prisma.client.findMany({
-        where: {
-          tenantId: user.tenantId,
-          status: 'active',
-          isTest: false,
-          lastVisit: { lt: cutoff },
-          // Staff: only their own clients, as in Clientas. It was the whole
-          // salon's list.
-          ...(staffProfessionalId ? clientScopeWhere({ professionalId: staffProfessionalId }) : {}),
-        },
-        orderBy: { lastVisit: 'asc' },
-        take: 5,
-        select: { id: true, firstName: true, lastVisit: true, createdAt: true },
-      });
+      const staleWhere: Prisma.ClientWhereInput = {
+        tenantId: user.tenantId,
+        status: 'active',
+        isTest: false,
+        lastVisit: { lt: cutoff },
+        // Staff: only their own clients, as in Clientas. It was the whole
+        // salon's list.
+        ...(staffProfessionalId ? clientScopeWhere({ professionalId: staffProfessionalId }) : {}),
+      };
+      const [stale, staleCount] = await Promise.all([
+        this.prisma.client.findMany({
+          where: staleWhere,
+          orderBy: { lastVisit: 'asc' },
+          take: 5,
+          select: { id: true, firstName: true, lastVisit: true, createdAt: true },
+        }),
+        this.prisma.client.count({ where: staleWhere }),
+      ]);
       clientsAtRisk = stale.map((c) => {
         const ref = c.lastVisit ?? c.createdAt;
         const days = ref
@@ -791,7 +806,7 @@ export class AssistantService {
           daysSinceLastVisit: days,
         };
       });
-      clientsAtRiskCount = stale.length;
+      clientsAtRiskCount = staleCount;
     }
 
     return {
@@ -930,6 +945,7 @@ function toPublicMessage(
     toolResult: unknown;
     pendingActionId: string | null;
     createdAt: Date;
+    pendingAction?: { status: string; expiresAt: Date; resultSnapshot: unknown } | null;
   },
 ): AssistantMessagePublic {
   return {
@@ -942,7 +958,49 @@ function toPublicMessage(
     toolResult: m.toolResult,
     pendingActionId: m.pendingActionId,
     createdAt: m.createdAt.toISOString(),
+    approval: m.pendingAction
+      ? {
+          status: m.pendingAction.status as NonNullable<AssistantMessagePublic['approval']>['status'],
+          expiresAt: m.pendingAction.expiresAt.toISOString(),
+          result: m.pendingAction.resultSnapshot ?? null,
+        }
+      : null,
   };
+}
+
+/** What the Copilot says when the model declines a request (B14). */
+export const COPILOT_REFUSAL_REPLY =
+  'No puedo ayudarte con esa petición. Si es algo del salón, prueba a preguntarlo de otra forma.';
+
+/**
+ * A resolved action, told to the model on the next turn: what it was, what
+ * became of it and, in a few words, the result (the coupon code, the
+ * tool's own message). Null while it is pending.
+ */
+export function approvalObservation(preview: string, status: string | undefined, result: unknown): string | null {
+  if (!status || status === 'pending') return null;
+  const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
+  let outcome: string;
+  if (status === 'executed' || status === 'approved') {
+    outcome = r.error ? `aprobada, pero falló (${String(r.message ?? r.error)})` : 'aprobada y hecha';
+  } else if (status === 'rejected') {
+    outcome =
+      r.error === 'forbidden'
+        ? 'no se hizo: la usuaria no tiene permiso'
+        : r.error
+          ? `no se hizo (${String(r.message ?? r.error)})`
+          : 'cancelada por la usuaria';
+  } else {
+    outcome = 'caducada sin respuesta (no se hizo)';
+  }
+  const details = [
+    typeof r.code === 'string' ? `código ${r.code}` : null,
+    typeof r.message === 'string' && !r.error ? r.message : null,
+  ]
+    .filter(Boolean)
+    .join('. ');
+  const text = `[Acción propuesta: «${preview}». Estado: ${outcome}${details ? `. ${details}` : ''}.]`;
+  return text.length > 600 ? text.slice(0, 597) + '…]' : text;
 }
 
 // ----------------------------------------------------------------------

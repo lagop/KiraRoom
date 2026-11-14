@@ -193,8 +193,10 @@ export class AssistantController {
           where: { conversation: { tenantId }, createdAt: { gte: start } },
           _count: { _all: true },
         }),
+        // B11: only the actions really carried out (it counted rejected
+        // and expired ones too).
         this.assistantService['prisma'].actionApproval.count({
-          where: { tenantId, createdAt: { gte: start } },
+          where: { tenantId, createdAt: { gte: start }, status: 'executed' },
         }),
         this.assistantService['prisma'].assistantMessage.groupBy({
           by: ['conversationId'],
@@ -214,6 +216,21 @@ export class AssistantController {
         this.tiers.dailyQuestionCap(tenantId),
       ]);
 
+    // B11: the busiest conversations were shown as bare ids. Who had them
+    // and the title (never their content).
+    const conversations = topUsers.length
+      ? await this.assistantService['prisma'].assistantConversation.findMany({
+          where: { tenantId, id: { in: topUsers.map((u: any) => u.conversationId) } },
+          select: {
+            id: true,
+            title: true,
+            updatedAt: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
+        })
+      : [];
+    const conversationById = new Map(conversations.map((c) => [c.id, c]));
+
     return {
       month: start.toISOString().slice(0, 7),
       messages: messageCount.reduce(
@@ -225,10 +242,16 @@ export class AssistantController {
         (acc: any, r: any) => ({ ...acc, [r.status]: r._count._all }),
         {} as Record<string, number>,
       ),
-      topConversations: topUsers.map((u: any) => ({
-        conversationId: u.conversationId,
-        messages: u._count._all,
-      })),
+      topConversations: topUsers.map((u: any) => {
+        const c = conversationById.get(u.conversationId);
+        return {
+          conversationId: u.conversationId,
+          messages: u._count._all,
+          userName: c ? [c.user?.firstName, c.user?.lastName].filter(Boolean).join(' ') || null : null,
+          title: c?.title ?? null,
+          lastAt: c?.updatedAt.toISOString() ?? null,
+        };
+      }),
       overCostCap: overCap,
       questionsToday,
       dailyQuestionCap,

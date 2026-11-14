@@ -116,10 +116,11 @@ describe('AssistantTierService (L-4)', () => {
       const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({ 't-1': PRO }) as any, makeConfig() as any);
       expect(await svc.allowedWriteTools('t-1')).toEqual([]);
     });
-    it('premium → 6 tools', async () => {
+    it('premium → 5 tools; a draft is not an action (Copilot audit M8)', async () => {
       const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({ 't-1': PREMIUM }) as any, makeConfig() as any);
       const tools = await svc.allowedWriteTools('t-1');
-      expect(tools).toHaveLength(6);
+      expect(tools).toHaveLength(5);
+      expect(tools).not.toContain('draft_follow_up_message');
       expect(tools).toContain('create_coupon');
       expect(tools).toContain('mark_no_show');
       expect(tools).toContain('close_waitlist_slot');
@@ -137,6 +138,8 @@ describe('AssistantTierService (L-4)', () => {
       expect(tools).toContain('get_my_agenda');
       expect(tools).toContain('get_low_stock');
       expect(tools).toContain('get_client_360');
+      // M8: drafting reads and writes nothing; Pro has it too.
+      expect(tools).toContain('draft_follow_up_message');
     });
   });
 

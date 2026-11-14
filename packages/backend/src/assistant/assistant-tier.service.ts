@@ -99,6 +99,8 @@ export class AssistantTierService {
       'get_no_show_history',
       'get_top_clients',
       'get_wait_list',
+      // M8: a draft is text for her to copy; nothing is sent, no approval.
+      'draft_follow_up_message',
     ];
     if (tier === 'premium' || tier === 'pro') return all;
     return [];
@@ -112,7 +114,6 @@ export class AssistantTierService {
     const tier = await this.resolveTier(tenantId);
     if (tier !== 'premium') return [];
     const all = [
-      'draft_follow_up_message',
       'send_message',
       'reschedule_appointment',
       'mark_no_show',

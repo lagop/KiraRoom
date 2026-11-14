@@ -50,6 +50,15 @@ export const AssistantMessagePublicSchema = z.object({
   toolResult: z.unknown().nullable().optional(),
   pendingActionId: z.string().nullable().optional(),
   createdAt: z.string(),  // ISO 8601
+  /** role=approval: what became of the action (Copilot audit M9). */
+  approval: z
+    .object({
+      status: z.enum(['pending', 'approved', 'rejected', 'expired', 'executed']),
+      expiresAt: z.string(),
+      result: z.unknown().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type AssistantMessagePublic = z.infer<typeof AssistantMessagePublicSchema>;
 

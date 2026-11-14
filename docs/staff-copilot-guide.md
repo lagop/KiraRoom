@@ -38,14 +38,19 @@ con tus clientas). El copiloto habla **contigo, el equipo**.
 
 Todas las acciones **requieren tu confirmación** — el copiloto nunca ejecuta
 nada sin que pulses **Aprobar** en la tarjeta que aparece en el chat. Tienes
-5 minutos para aprobar; si no, la tarjeta caduca.
+5 minutos para aprobar; si no, la tarjeta caduca. La tarjeta dice siempre qué
+pasó (hecho, cancelada, caducada, sin permiso), también al volver más tarde, y
+el Copiloto lo sabe en la siguiente pregunta.
+
+**Redactar un mensaje** no es una acción: el Copiloto te escribe el texto en el
+chat y tú lo copias y lo envías. No envía borradores; solo puede enviar
+WhatsApp con las plantillas aprobadas.
 
 | Acción | Quién puede | Para qué sirve |
 |---|---|---|
-| **Redactar un WhatsApp** | dueño, manager, recepcionista, profesional | Te prepara el texto. Tú lo apruebas y se envía. |
-| **Enviar un WhatsApp** | mismo | Igual, pero sin paso de borrador. Requiere WhatsApp conectado. |
+| **Enviar un WhatsApp** | dueño, manager, recepcionista, profesional (sus clientas) | Con una plantilla aprobada por Meta. Requiere WhatsApp conectado. |
 | **Mover una cita** | manager / recepcionista (cualquier cita) o el propio profesional (sus citas) | Cambia fecha/hora sin abrir el detalle. |
-| **Marcar como no-show** | manager / recepcionista | Marca la cita como ausente, opcionalmente con penalización. |
+| **Marcar como no-show** | manager / recepcionista | Marca la cita como ausente (sin penalización: el Copiloto no cobra nada). |
 | **Crear un cupón** | **solo dueño** | Genera un código único (ej. `KIRA-AB12CD`, 1 uso, X% descuento). |
 | **Avisar a la lista de espera** | manager / recepcionista | Cuando se libera un hueco, el copiloto propone a quién llamar primero. |
 
@@ -90,10 +95,10 @@ sepas qué pasa antes de empezar a responder preguntas.
 
 - `Ctrl/Cmd + K` — abre/cierra el panel.
 - `Esc` — cierra el panel.
-- **Borra la conversación** con el icono de papelera arriba a la derecha cuando
-  quieras empezar de cero (no afecta a la auditoría).
-- **Historial** — el panel siempre te muestra los últimos mensajes; para ver
-  más, desplázate hacia arriba.
+- **Nueva conversación** con el icono de arriba a la derecha cuando quieras
+  empezar de cero. La anterior no se borra.
+- **Historial** — el desplegable de arriba te deja volver a una conversación
+  anterior. Las conversaciones se borran solas a los 90 días sin usarse.
 
 ## Si el copiloto se equivoca
 
