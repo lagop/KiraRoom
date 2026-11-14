@@ -175,17 +175,30 @@ export function OnboardingChecklist() {
   );
 }
 
-export function OnboardingRestoreButton() {
+/**
+ * The way back to a closed checklist that still has steps pending: a button
+ * in the dashboard home's header, beside "Actualizar". It used to float in
+ * the bottom-right corner of every page, with no background, over whatever
+ * was underneath, and its "Restaurar checklist" said nothing to the owner.
+ */
+export function OnboardingRestoreLink({ enabled }: { enabled: boolean }) {
   const t = useTranslations();
+  const { data } = useOnboardingState({ enabled });
   const restore = useRestoreOnboardingChecklist();
+  if (!enabled || !data || !showChecklistRestore(data)) return null;
   return (
     <button
       type="button"
-      onClick={() => restore.mutate()}
-      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+      onClick={() => {
+        // Reopened from the home: it shows open, not as the folded pill.
+        writeFolded(false);
+        restore.mutate();
+      }}
+      disabled={restore.isPending}
+      className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-violet-700 bg-white border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-60"
     >
-      <RotateCcw className="h-3 w-3" />
-      {t("onboarding.checklist.restore")}
+      <RotateCcw className="h-4 w-4" />
+      {t("onboarding.checklist.restore", { count: pendingChecklistSteps(data) })}
     </button>
   );
 }
@@ -200,14 +213,7 @@ export function OnboardingChecklistOrLoader() {
     );
   }
   if (!data) return null;
-  if (data.checklistDismissed) {
-    // Nothing would come back: no button left in the corner for ever.
-    if (!showChecklistRestore(data)) return null;
-    return (
-      <div className={CORNER}>
-        <OnboardingRestoreButton />
-      </div>
-    );
-  }
+  // Closed: nothing in the corner. The way back is on the home (OnboardingRestoreLink).
+  if (data.checklistDismissed) return null;
   return <OnboardingChecklist />;
 }

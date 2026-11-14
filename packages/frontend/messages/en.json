@@ -440,7 +440,7 @@
       "title": "Optimize your salon",
       "subtitle": "Recommendations to unlock the full power of Kira.",
       "dismiss": "Close checklist",
-      "restore": "Restore checklist",
+      "restore": "See pending recommendations ({count})",
       "skip": "Skip",
       "done": "Done",
       "pending": "Pending",

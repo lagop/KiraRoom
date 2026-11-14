@@ -440,7 +440,7 @@
       "title": "Optimiza tu salón",
       "subtitle": "Recomendaciones para activar todo el potencial de Kira.",
       "dismiss": "Cerrar checklist",
-      "restore": "Restaurar checklist",
+      "restore": "Ver recomendaciones pendientes ({count})",
       "skip": "Omitir",
       "done": "Hecho",
       "pending": "Pendiente",
