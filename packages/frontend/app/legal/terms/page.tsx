@@ -1,10 +1,5 @@
 import type { Metadata } from "next";
-import {
-  CONVERSATION_RETENTION_MONTHS,
-  COPILOT_CONVERSATION_RETENTION_DAYS,
-  KIRAROOM_OWNER,
-  SUB_PROCESSORS,
-} from "@/lib/salon-legal";
+import { CONVERSATION_RETENTION_MONTHS, KIRAROOM_OWNER, SUB_PROCESSORS } from "@/lib/salon-legal";
 
 // Its own title: it showed the root layout's, in English.
 export const metadata: Metadata = { title: "Términos del servicio · KiraRoom" };
@@ -16,7 +11,7 @@ export default function TermsPage() {
         Términos del Servicio
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 14 de noviembre de 2026
+        Última actualización: 5 de noviembre de 2026
       </p>
 
       <Section title="1. Aceptación">
@@ -213,8 +208,7 @@ export default function TermsPage() {
             salón puede exportar sus datos durante los 30 días de lectura;
             30 días después KiraRoom los anonimiza, salvo los que la ley
             obligue a conservar (las facturas emitidas). Las conversaciones de la recepcionista virtual se
-            borran a los {CONVERSATION_RETENTION_MONTHS} meses, y las del
-            Copiloto, a los {COPILOT_CONVERSATION_RETENTION_DAYS} días.
+            borran a los {CONVERSATION_RETENTION_MONTHS} meses.
           </li>
           <li>
             <strong>Auditoría</strong>: KiraRoom pondrá a disposición del

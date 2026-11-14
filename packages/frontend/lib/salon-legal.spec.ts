@@ -110,7 +110,10 @@ for (const [label, src] of [
   check(`${label}: no Sage / A3 / NCS`, /\bSage\b|\bA3\b|\bNCS\b/.test(src), false);
   check(`${label}: no WAF, WAL, HS256 nor 'inmutables'`, /\bWAF\b|WAL archiving|HS256|inmutables/.test(src), false);
   check(`${label}: no European online-dispute platform`, /ec\.europa\.eu\/consumers\/odr|524\/2013/.test(src), false);
-  check(`${label}: says 5 de noviembre de 2026`, src.includes("Última actualización: 5 de noviembre de 2026"), true);
+  // Terms: TERMS_VERSION (backend) is that date, and salons accept it again
+  // when it changes. The privacy policy is information only (Copilot audit A4).
+  const date = label === "terms" ? "5 de noviembre de 2026" : "14 de noviembre de 2026";
+  check(`${label}: says ${date}`, src.includes(`Última actualización: ${date}`), true);
 }
 check("privacy: the rate limit is the real one (300)", /300 por minuto/.test(platform) && !/100 req/.test(platform), true);
 check("privacy: backups say 35 days and 400 days", /35 días/.test(platform) && /400 días/.test(platform), true);
