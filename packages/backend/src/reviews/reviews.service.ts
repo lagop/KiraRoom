@@ -33,6 +33,7 @@ import {
   withinSendingHours,
 } from "./review-rules";
 import { MonitoredJob } from "../common/ops-alerts/ops-alert-sink";
+import { publicNameOf } from "../public-site/public-professional";
 import { MARKETING_SENDS_TENANT_WHERE } from "../common/tenancy/send-policy";
 
 /** The add-on that pays for automatic review requests. */
@@ -419,7 +420,7 @@ export class ReviewsService {
             select: {
               scheduledDate: true,
               serviceName: true,
-              professional: { select: { firstName: true } },
+              professional: { select: { firstName: true, lastName: true, webNameDisplay: true } },
               service: { select: { name: true } },
             },
           })
@@ -433,7 +434,11 @@ export class ReviewsService {
     const serviceName = appointment?.serviceName ?? appointment?.service?.name ?? null;
     return {
       tenant,
-      professional: appointment?.professional ?? null,
+      // As the salon's public page names her ("Profesional" when hidden):
+      // this page is public, reached by a link anyone can forward.
+      professional: appointment?.professional
+        ? { firstName: publicNameOf(appointment.professional).firstName }
+        : null,
       service: serviceName ? { name: serviceName } : null,
       visitDate: appointment?.scheduledDate ?? null,
       googleReviewLink: googleWriteReviewLink(profile),

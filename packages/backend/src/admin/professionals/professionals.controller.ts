@@ -1,4 +1,5 @@
-import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Logger } from "@nestjs/common";
+import { ParseUUIDPipe, Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Logger, Optional } from "@nestjs/common";
+import { AuditLogService } from "../../saas/audit-log.service";
 import {
   ApiTags,
   ApiOperation,
@@ -30,7 +31,25 @@ export class AdminProfessionalsController {
 
   constructor(
     private readonly adminProfessionalsService: AdminProfessionalsService,
+    @Optional() private readonly auditLog?: AuditLogService,
   ) {}
+
+  /**
+   * Who gave, changed or took away a team member's way into the panel, kept
+   * in the audit log (it was not: an ex-employee's access had no trail).
+   * After the change succeeded; a failure to write it never undoes it.
+   */
+  private async audit(user: any, action: string, professionalId: string, metadata: Record<string, unknown> = {}) {
+    if (!this.auditLog) return;
+    await this.auditLog
+      .record(action, {
+        actorId: user.id,
+        actorRole: user.role,
+        tenantId: user.tenantId,
+        metadata: { professionalId, ...metadata },
+      })
+      .catch((err) => this.logger.warn(`audit ${action} for ${professionalId} not written: ${(err as Error).message}`));
+  }
 
   @Post()
   @ApiOperation({ summary: "Create a new professional" })
@@ -109,7 +128,13 @@ export class AdminProfessionalsController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() updateProfessionalDto: UpdateProfessionalDto,
   ) {
-    return this.adminProfessionalsService.update(user.tenantId, id, updateProfessionalDto);
+    const updated = await this.adminProfessionalsService.update(user.tenantId, id, updateProfessionalDto);
+    if ((updateProfessionalDto as any)?.isActive === false) {
+      await this.audit(user, "team.deactivated", id);
+    } else if ((updateProfessionalDto as any)?.isActive === true) {
+      await this.audit(user, "team.reactivated", id);
+    }
+    return updated;
   }
 
   /**
@@ -124,7 +149,9 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 200, description: "Professional deactivated" })
   @ApiResponse({ status: 404, description: "Professional not found" })
   async deactivate(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.update(user.tenantId, id, { isActive: false } as any);
+    const updated = await this.adminProfessionalsService.update(user.tenantId, id, { isActive: false } as any);
+    await this.audit(user, "team.deactivated", id);
+    return updated;
   }
 
   @Delete(":id")
@@ -136,7 +163,9 @@ export class AdminProfessionalsController {
   @ApiResponse({ status: 404, description: "Professional not found" })
   @ApiResponse({ status: 403, description: "Forbidden" })
   async remove(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.remove(user.tenantId, id);
+    const removed = await this.adminProfessionalsService.remove(user.tenantId, id);
+    await this.audit(user, "team.deleted", id);
+    return removed;
   }
 
   @Get("search/:query")
@@ -168,7 +197,9 @@ export class AdminProfessionalsController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() changePasswordDto: ChangeProfessionalPasswordDto,
   ) {
-    return this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
+    const result = await this.adminProfessionalsService.changePassword(user.tenantId, id, changePasswordDto);
+    await this.audit(user, "team.password_reset", id);
+    return result;
   }
 
   @NotDuringSupport()
@@ -181,13 +212,17 @@ export class AdminProfessionalsController {
     @Param("id", ParseUUIDPipe) id: string,
     @Body() dto: GrantPanelAccessDto,
   ) {
-    return this.adminProfessionalsService.grantPanelAccess(user.tenantId, id, dto.password);
+    const result = await this.adminProfessionalsService.grantPanelAccess(user.tenantId, id, dto.password);
+    await this.audit(user, "team.access_granted", id);
+    return result;
   }
 
   @NotDuringSupport()
   @Delete(":id/access")
   @ApiOperation({ summary: "Remove a professional's login (deactivated, sessions ended)" })
   async revokeAccess(@CurrentUser() user: any, @Param("id", ParseUUIDPipe) id: string) {
-    return this.adminProfessionalsService.revokePanelAccess(user.tenantId, id);
+    const result = await this.adminProfessionalsService.revokePanelAccess(user.tenantId, id);
+    await this.audit(user, "team.access_revoked", id);
+    return result;
   }
 }

@@ -86,6 +86,9 @@ export function webhookRefused(metaMessage: string): string {
 /** A token shorter-lived than this is refused: it is the 24-hour one from "API Setup". */
 const MIN_TOKEN_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** The wait list's "free slot" notice type (wait-list.service.ts NOTICE_TYPE). */
+const WAIT_LIST_NOTICE_TYPE = "waitlist_slot_available";
+
 /** The value in .env.example, public: a verify token equal to it proves nothing. */
 export const EXAMPLE_VERIFY_TOKEN = "change_me_webhook_verify_token";
 
@@ -439,6 +442,27 @@ export class WhatsAppService implements OnModuleInit {
   }
 
   async disconnect(tenantId: string) {
+    // Best effort, before the token is deleted: unsubscribe KiraRoom's app
+    // from the account's webhooks, so Meta stops sending this salon's
+    // messages here. A token the salon already revoked, or Meta not
+    // answering within 5 s, never blocks the disconnection.
+    const conn = await this.prisma.whatsAppConnection
+      .findUnique({ where: { tenantId }, select: { wabaId: true, accessTokenEnc: true } })
+      .catch(() => null);
+    if (conn?.wabaId && conn.accessTokenEnc) {
+      try {
+        const token = this.meta.decryptToken(conn.accessTokenEnc);
+        const res = await Promise.race([
+          this.meta.unsubscribeApp(token, conn.wabaId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (!res || !res.ok) {
+          this.logger.warn(`WhatsApp disconnect of tenant ${tenantId}: webhook not unsubscribed (${res ? res.error.message : "timeout"})`);
+        }
+      } catch (err) {
+        this.logger.warn(`WhatsApp disconnect of tenant ${tenantId}: webhook not unsubscribed (${(err as Error).message})`);
+      }
+    }
     await this.prisma.whatsAppConnection
       .delete({ where: { tenantId } })
       .catch(() => null);
@@ -766,6 +790,7 @@ export class WhatsAppService implements OnModuleInit {
           where: { clientId: id, status: WhatsAppRecipientStatus.pending },
           data: { status: WhatsAppRecipientStatus.opted_out },
         });
+        await this.stopWaitListWhatsApp(tenantId, id);
       }
       // Done. The number is kept only for the confirmation (confirmOptOut
       // wipes it); the consent record keeps the proof.
@@ -785,6 +810,26 @@ export class WhatsAppService implements OnModuleInit {
         .catch(() => undefined);
       return false;
     }
+  }
+
+  /**
+   * BAJA also stops the wait list's WhatsApp notice ("se ha liberado un
+   * hueco"): its Meta template has no leave link, so this reply was her only
+   * way to stop it. She keeps her place on the list, and its email (with
+   * its "Ya no me interesa" link) or SMS still tell her of a free slot.
+   */
+  private async stopWaitListWhatsApp(tenantId: string, clientId: string): Promise<void> {
+    const stored = await this.prisma.notificationPreference.findUnique({
+      where: { clientId },
+      select: { preferences: true },
+    });
+    const prefs = { ...((stored?.preferences as Record<string, Record<string, boolean>> | null) ?? {}) };
+    prefs[WAIT_LIST_NOTICE_TYPE] = { ...(prefs[WAIT_LIST_NOTICE_TYPE] ?? {}), whatsapp: false };
+    await this.prisma.notificationPreference.upsert({
+      where: { clientId },
+      create: { clientId, tenantId, preferences: prefs as any },
+      update: { preferences: prefs as any },
+    });
   }
 
   /** Opt-outs written but not applied (the database failed half-way): tried again. */
