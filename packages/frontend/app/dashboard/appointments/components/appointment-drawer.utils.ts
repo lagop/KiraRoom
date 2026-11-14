@@ -698,6 +698,8 @@ export function toDrawerAppointment(
     depositPaid: !!data.depositPaid,
     totalAmount: numberOrNull(data.totalAmount) ?? undefined,
     amountPaid: numberOrNull(data.amountPaid) ?? undefined,
+    chargeTotal: numberOrNull(data.chargeTotal) ?? undefined,
+    amountDue: numberOrNull(data.amountDue) ?? undefined,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
     activity: [{ timestamp: data.createdAt, action: CREATED_ACTIVITY, details: undefined }],
