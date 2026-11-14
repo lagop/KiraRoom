@@ -2083,7 +2083,7 @@ export class AppointmentsService {
         await this.commissionAfterChange(user.tenantId, id);
       }
 
-      return this.enrichAppointment(updatedAppointment);
+      return this.enrichAppointment(updatedAppointment, await this.chargeBasisOf(updatedAppointment.tenantId));
     } catch (error) {
       console.error("Error updating appointment:", error);
       // A refusal (consent missing, forbidden) keeps its status and message.
@@ -2471,7 +2471,7 @@ export class AppointmentsService {
               return null;
             })
         : null;
-    const enriched = this.enrichAppointment(updated);
+    const enriched = this.enrichAppointment(updated, await this.chargeBasisOf(updated.tenantId));
     return onlineRefund ? Object.assign(enriched, { onlineRefund }) : enriched;
   }
 
@@ -2889,7 +2889,7 @@ export class AppointmentsService {
     await this.loyaltyAfterStatus(updatedAppointment.tenantId, id);
     await this.commissionAfterChange(updatedAppointment.tenantId, id);
 
-    return this.enrichAppointment(updatedAppointment);
+    return this.enrichAppointment(updatedAppointment, await this.chargeBasisOf(updatedAppointment.tenantId));
   }
 
   /**

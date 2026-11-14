@@ -47,6 +47,15 @@ export function PaymentSummaryCard({
   const total = editMode ? formatEuros(editedTotalEuros) : formatCents(appointmentTotalCents(appointment));
   const paid = Number(appointment.amountPaid) || 0;
   const deposit = Number(appointment.depositAmount) || 0;
+  // A salon whose prices are the base: the visit is charged base + tax, and
+  // what is paid is money. Show that total, so "Pagado" is not above it.
+  const catalogueCents = appointmentTotalCents(appointment);
+  const chargeCents = Number(appointment.chargeTotal) || 0;
+  const taxOnTop = !editMode && chargeCents > catalogueCents;
+  const dueCents =
+    typeof appointment.amountDue === "number"
+      ? appointment.amountDue
+      : Math.max(0, (taxOnTop ? chargeCents : catalogueCents) - paid);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
@@ -85,14 +94,28 @@ export function PaymentSummaryCard({
           <span className="font-medium text-gray-900">{calculateTotalDuration(appointment)} min</span>
         </div>
         <div className="border-t border-gray-200 pt-3">
+          {taxOnTop && (
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-gray-600">{t("appointments.price_before_tax")}</span>
+              <span className="font-medium text-gray-900">{total}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-gray-900">{t("appointments.total")}</span>
-            <span className="text-xl font-bold text-gray-900">{total}</span>
+            <span className="font-semibold text-gray-900">
+              {taxOnTop ? t("appointments.total_with_tax") : t("appointments.total")}
+            </span>
+            <span className="text-xl font-bold text-gray-900">{taxOnTop ? formatCents(chargeCents) : total}</span>
           </div>
           {!editMode && paid > 0 && (
             <div className="flex items-center justify-between text-sm mt-2">
               <span className="text-gray-600">{t("appointments.amount_paid")}</span>
               <span className="font-medium text-green-700">{formatCents(paid)}</span>
+            </div>
+          )}
+          {!editMode && paid > 0 && dueCents > 0 && (
+            <div className="flex items-center justify-between text-sm mt-2">
+              <span className="text-gray-600">{t("appointments.amount_pending")}</span>
+              <span className="font-medium text-amber-700">{formatCents(dueCents)}</span>
             </div>
           )}
           {!editMode && appointment.depositRequired && deposit > 0 && (

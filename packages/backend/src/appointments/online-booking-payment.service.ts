@@ -18,6 +18,7 @@ import {
 import { clientEmailFilter, findClientIdByPhone, normalizeClientEmail } from '../clients/client-contact';
 import { deleteAppointmentRow } from './appointment-delete';
 import { appointmentCancelUrl } from './public-cancel-link';
+import { moneyOfCatalogueCents, salonTaxBasis } from '../payments/appointment-charge';
 
 /** Stripe keeps a Checkout Session open for at least 30 minutes. */
 export const CHECKOUT_MINUTES = 31;
@@ -250,7 +251,7 @@ export class OnlineBookingPaymentService {
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: meta.tenantId },
-      select: { stripeConnectAccountId: true },
+      select: { stripeConnectAccountId: true, fiscalSettings: true },
     });
     // Only the salon's own account can pay its bookings.
     if (!tenant?.stripeConnectAccountId || (eventAccount && eventAccount !== tenant.stripeConnectAccountId)) {
@@ -289,7 +290,8 @@ export class OnlineBookingPaymentService {
 
     const paidCents = session.amount_total ?? 0;
     const kind = appointment.onlinePaymentKind === 'full' ? 'full' : 'deposit';
-    const total = Math.round(Number(appointment.totalAmount ?? 0));
+    // The visit in money (tax included), as amountPaid and the till count it (payments/appointment-charge.ts).
+    const total = moneyOfCatalogueCents(Math.round(Number(appointment.totalAmount ?? 0)), salonTaxBasis(tenant.fiscalSettings));
     const paymentIntent =
       typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent?.id ?? null);
 

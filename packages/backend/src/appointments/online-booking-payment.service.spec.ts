@@ -245,6 +245,14 @@ describe('complete: Stripe says it was paid', () => {
     });
   });
 
+  it('at a salon whose prices are the base, what is left after the señal is in money (tax included)', async () => {
+    const t = build({ tenant: connectRow({ fiscalSettings: { pricesIncludeTax: false, defaultTaxRate: 21 } }) });
+    t.setAppointment(heldAppointment());
+    await t.service.complete(paidSession(), ACCOUNT);
+    // 60,00 base = 72,60 with tax; 15,00 paid: 57,60 left (not 45,00).
+    expect(t.calls.paymentCreate[0].data).toMatchObject({ amount: 1500, remainingAmount: 5760 });
+  });
+
   it('a booking the salon approves itself stays pending after payment', async () => {
     const t = build();
     t.setAppointment(heldAppointment({ statusAfterPayment: 'pending' }));

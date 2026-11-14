@@ -159,7 +159,15 @@ export interface Appointment {
   depositPaid?: boolean;
   /** Cents: what the visit adds up to (the server's sum). */
   totalAmount?: number;
-  /** Cents. */
+  /**
+   * Cents of money, tax included: what the visit is charged. Equal to
+   * totalAmount when the salon's prices include the tax; base + tax when
+   * they are the base (payments/appointment-charge.ts on the server).
+   */
+  chargeTotal?: number;
+  /** Cents of money still to pay (chargeTotal - amountPaid). */
+  amountDue?: number;
+  /** Cents of money (tax included). */
   amountPaid?: number;
   createdAt: string;
   updatedAt: string;
