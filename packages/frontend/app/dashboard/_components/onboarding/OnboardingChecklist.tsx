@@ -195,7 +195,7 @@ export function OnboardingRestoreLink({ enabled }: { enabled: boolean }) {
         restore.mutate();
       }}
       disabled={restore.isPending}
-      className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-violet-700 bg-white border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-60"
+      className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-violet-600 border border-violet-600 rounded-lg shadow-sm hover:bg-violet-700 transition-colors disabled:opacity-60"
     >
       <RotateCcw className="h-4 w-4" />
       {t("onboarding.checklist.restore", { count: pendingChecklistSteps(data) })}
