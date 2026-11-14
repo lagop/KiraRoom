@@ -30,6 +30,13 @@ export const KIRAROOM_OWNER = {
 /** How long the receptionist's conversations are kept (backend retention job). */
 export const CONVERSATION_RETENTION_MONTHS = 12;
 
+/**
+ * How long the Copilot's conversations (the salon team's internal AI
+ * assistant) are kept after their last message, in days. Same number as
+ * COPILOT_CONVERSATION_RETENTION_DAYS in the backend retention job.
+ */
+export const COPILOT_CONVERSATION_RETENTION_DAYS = 90;
+
 export interface SubProcessor {
   name: string;
   /** What it does for the salon, in Spanish. */
@@ -49,7 +56,7 @@ export interface SubProcessor {
 /**
  * Who KiraRoom relies on to run the salon's booking page, widget and chat,
  * and to charge its own subscription. The AI is Anthropic's (the
- * receptionist runs on Claude); nothing else.
+ * receptionist and the team's Copilot run on Claude); nothing else.
  */
 export const SUB_PROCESSORS: SubProcessor[] = [
   {
@@ -59,7 +66,8 @@ export const SUB_PROCESSORS: SubProcessor[] = [
   },
   {
     name: "Anthropic",
-    purpose: "Inteligencia artificial de la recepcionista virtual (chat y mensajes)",
+    purpose:
+      "Inteligencia artificial de la recepcionista virtual (chat y mensajes) y del Copiloto, el asistente interno del equipo del salón (consulta la agenda y la ficha de los clientes, con sus alergias, sin datos de contacto)",
     location: "Estados Unidos, con el Marco de Privacidad de Datos UE-EE. UU.",
   },
   {

@@ -69,16 +69,22 @@ sepas qué pasa antes de empezar a responder preguntas.
 - **Las acciones pasan siempre por aprobación humana.** Ningún tool se ejecuta
   sin tu clic en "Aprobar". Si el copiloto se equivoca, simplemente rechaza la
   tarjeta.
-- **Las conversaciones se eliminan a los 90 días** (salvo que las fijes).
-  El log de auditoría de tools se conserva 1 año para compliance.
+- **Las conversaciones se eliminan a los 90 días sin actividad.** El registro
+  de las acciones aprobadas o rechazadas se conserva 1 año.
+- **Datos que ve la IA**: la agenda y, de cada clienta, nombre, alergias,
+  historial de citas e importes. Nunca su teléfono, email, fecha de nacimiento
+  ni sexo.
 
 ## Límites de uso
 
-- **60 mensajes/minuto** por usuario (rate limit).
-- **5 acciones/minuto** por usuario (los Aprobar/Rechazar cuentan).
-- **Tope mensual**: si tu salón consume más de 3× la cuota Premium, el copiloto
-  se pausa automáticamente hasta el día 1 del mes siguiente. Si llegas a ese
-  límite, escríbenos a soporte.
+- **20 mensajes/minuto** por persona.
+- **5 acciones/minuto** por persona (los Aprobar/Rechazar cuentan).
+- **Tope diario**: 300 preguntas al día por salón (30 durante la prueba
+  gratuita). Vuelve a estar disponible al día siguiente.
+- **Tope mensual de gasto**: si el gasto real de IA del Copiloto en tu salón
+  pasa del tope del mes, se pausa hasta el día 1. Si llegas, escríbenos.
+- El Copiloto tiene **su propio contador**: no gasta los mensajes de la
+  recepcionista virtual de tus clientas.
 
 ## Atajos y tips
 

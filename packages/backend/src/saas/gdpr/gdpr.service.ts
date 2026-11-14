@@ -206,6 +206,7 @@ export const TENANT_MODEL_ON_ERASURE: Readonly<Record<string, "deleted" | "clean
   EmailPackPurchase: "kept",
   MessageCreditWallet: "kept",
   TenantLlmUsage: "kept",
+  CopilotUsageDay: "kept", // the Copilot's daily counts and cost, no personal data
   TrialNotificationLog: "kept",
   // The salon's catalogue and settings.
   Service: "kept",

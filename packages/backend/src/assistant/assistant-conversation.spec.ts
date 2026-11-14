@@ -80,10 +80,58 @@ function setup(opts: { conversations?: any[]; messages?: any[]; feedback?: any[]
       }),
     },
   };
-  const tiers: any = { isOverCostCap: jest.fn(async () => opts.overCap ?? true) };
-  const svc = new AssistantService(prisma, {} as any, {} as any, {} as any, tiers);
-  return { svc, prisma, conversations, feedback };
+  // Over the cap by default: the reply is stored without calling the model.
+  const tiers: any = {
+    claimQuestion: jest.fn(async () =>
+      opts.overCap ?? true ? { ok: false, reason: 'monthly', message: 'Límite del mes.' } : { ok: true },
+    ),
+    releaseQuestion: jest.fn(async () => undefined),
+    recordCost: jest.fn(async () => undefined),
+    allowedReadTools: jest.fn(async () => []),
+    allowedWriteTools: jest.fn(async () => []),
+  };
+  // The model fails: B6's honest reply.
+  const llm: any = {
+    generateResponse: jest.fn(async () => {
+      throw Object.assign(new Error('overloaded'), { usage: { promptTokens: 1000 }, model: 'claude-haiku-5-5' });
+    }),
+  };
+  prisma.assistantMessage.findMany = jest.fn(async () => []);
+  prisma.tenant = { findUnique: jest.fn(async () => ({ name: 'Salón', timezone: 'Europe/Madrid' })) };
+  prisma.user = { findUnique: jest.fn(async () => ({ firstName: 'Ana' })) };
+  prisma.appointment = { findMany: jest.fn(async () => []) };
+  const svc = new AssistantService(prisma, llm, {} as any, {} as any, tiers);
+  return { svc, prisma, conversations, feedback, tiers, llm };
 }
+
+describe('AssistantService: limits and failures (Copilot audit M2, B5, B6)', () => {
+  it('a limit reached is answered in the thread without calling the model', async () => {
+    const { svc, llm } = setup();
+    const res: any = await svc.sendMessage(USER, { content: 'hola' });
+    expect(res.message.content).toBe('Límite del mes.');
+    expect(res.costCapReached).toBe(true);
+    expect(llm.generateResponse).not.toHaveBeenCalled();
+  });
+
+  it('a model failure gives an honest reply, the question back, and counts what it spent', async () => {
+    const { svc, tiers } = setup({ overCap: false });
+    const res: any = await svc.sendMessage({ ...USER, id: 'u-fail' }, { content: 'hola' });
+    expect(res.message.content).toMatch(/servicio de IA ha fallado/);
+    expect(tiers.releaseQuestion).toHaveBeenCalledWith('t-1');
+    expect(tiers.recordCost).toHaveBeenCalledWith('t-1', 'claude-haiku-5-5', { promptTokens: 1000 });
+  });
+
+  it('one person is limited per minute, not the whole salon behind one address', async () => {
+    const { svc, tiers } = setup();
+    for (let i = 0; i < 20; i++) await svc.sendMessage({ ...USER, id: 'u-fast' }, { content: 'hola' });
+    const res: any = await svc.sendMessage({ ...USER, id: 'u-fast' }, { content: 'hola' });
+    expect(res.message.content).toMatch(/espera un minuto/);
+    expect(tiers.claimQuestion).toHaveBeenCalledTimes(20);
+    // A colleague is not affected.
+    await svc.sendMessage({ ...USER, id: 'u-other' }, { content: 'hola' });
+    expect(tiers.claimQuestion).toHaveBeenCalledTimes(21);
+  });
+});
 
 describe('AssistantService: the conversation a message goes to', () => {
   it('uses the conversation the panel names, when it is the caller\'s', async () => {

@@ -65,13 +65,7 @@ We run a slim **git-flow** tailored for a small SaaS team:
 | `feat/<name>` | Short-lived (1-5 days). Off `develop`. Rebase before merge. | — |
 | `hotfix/<name>` | Off `main`, fast-merge back. For security + incidents. | Production hotfix |
 
-Soft-launch controls (sprint 16) — close to GA:
-
-```bash
-# .env (backend) — only listed tenant IDs can access Kira Copilot.
-# Empty = GA mode; non-empty = closed-beta whitelist.
-COPILOT_SOFT_LAUNCH_TENANT_IDS=tenant_a,tenant_b,tenant_c
-```
+Kira Copilot is open to every plan that includes it (the soft-launch list was removed on 2026-11-14). Its spend is capped per salon and month with `COPILOT_MONTHLY_COST_CAP_USD` (default 25).
 
 ## Quickstart (local dev)
 
@@ -126,7 +120,7 @@ For DNS + HTTPS, see [docs/runbook.md](docs/runbook.md) "Deploy flow" and "Failu
 | `OAUTH_STATE_SECRET` | **≥ 16 random chars.** Boot validator refuses to start in production without it. Generate with `openssl rand -base64 48`. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins. **No wildcards.** |
 | `NODE_ENV` | Must be `production` |
-| `COPILOT_SOFT_LAUNCH_TENANT_IDS` | Optional. Whitelist for closed-beta. Empty = Kira Copilot off for everyone. |
+| `COPILOT_MONTHLY_COST_CAP_USD` | Optional. Kira Copilot spend cap per salon and month, in USD (default 25). |
 | `FISCAL_MODE` | `sandbox` until the AEAT cert is uploaded and `docs/runbook.md` §11 signed off; flip to `real` only after. |
 
 ### Secondary LLM providers (optional)

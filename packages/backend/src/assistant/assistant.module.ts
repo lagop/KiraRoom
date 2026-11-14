@@ -12,7 +12,7 @@ import { AssistantGateway } from './assistant.gateway';
 import { SalonCopilotToolsService } from './tools/salon-copilot-tools';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
-import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
+import { CopilotRetentionScheduler } from './copilot-retention.scheduler';
 
 /**
  * P2A-staff-copilot: the in-app assistant module.
@@ -36,7 +36,7 @@ import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
     SalonCopilotToolsService,
     ActionApprovalService,
     AssistantTierService,
-    AssistantSoftLaunchGuard,
+    CopilotRetentionScheduler,
   ],
   exports: [AssistantService, SalonCopilotToolsService, ActionApprovalService, AssistantTierService],
 })

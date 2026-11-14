@@ -22,27 +22,17 @@ Por defecto (sin flag), el copiloto está controlado por las feature keys
 `copilot_read` / `copilot_write` — los planes Free no lo ven, Pro ven
 lectura, Premium ven todo.
 
-Para el **soft-launch** (sprint 16) sobre 10 salones controlados, hay una
-variable de entorno:
+La lista de soft-launch (`COPILOT_SOFT_LAUNCH_TENANT_IDS`) se quitó el
+2026-11-14 (auditoría del Copiloto, decisión D5): el copiloto está abierto
+a todos los planes que lo incluyen. Los límites ahora son:
 
-```bash
-# CSV de tenantIds permitidos durante el soft-launch.
-# Si está vacía o no se define, todos los tenants con el plan
-# adecuado pueden usar el copiloto.
-COPILOT_SOFT_LAUNCH_TENANT_IDS=tenant_a,tenant_b,tenant_c
-```
-
-- Si la env var está definida y el tenant NO está en la lista → 403 con
-  `code: COPILOT_NOT_IN_SOFT_LAUNCH`.
-- Si la env var está vacía → comportamiento normal (todos los planes).
-- El equipo de plataforma puede rotar la lista sin redeploy (lectura en
-  cada request, sin caché).
-
-### Salir del soft-launch
-
-1. Confirmar que las métricas del sprint 16 están en verde (ver §"Métricas").
-2. Vaciar `COPILOT_SOFT_LAUNCH_TENANT_IDS` y redeploy.
-3. Anunciar el GA en el changelog público.
+- 20 preguntas por minuto por usuario;
+- 300 preguntas al día por salón (30 durante la prueba gratuita);
+- un tope de gasto real por salón y mes (`COPILOT_MONTHLY_COST_CAP_USD`,
+  25 USD por defecto), con su propio contador (`copilot_usage_days`),
+  separado del de la recepcionista;
+- las conversaciones se borran a los 90 días sin actividad y los registros
+  de acciones al año.
 
 ## Endpoints internos
 
@@ -59,7 +49,7 @@ COPILOT_SOFT_LAUNCH_TENANT_IDS=tenant_a,tenant_b,tenant_c
 
 | Flag | Efecto | Default |
 |---|---|---|
-| `COPILOT_SOFT_LAUNCH_TENANT_IDS` | Whitelist de tenants (vacío = todos) | vacío |
+| `COPILOT_MONTHLY_COST_CAP_USD` | Tope de gasto real del copiloto por salón y mes | 25 |
 | `COPILOT_DISABLED` (en plan_matrix) | Desactiva `copilot_read` globalmente | false |
 | `COPILOT_WRITE_DISABLED` (en plan_matrix) | Desactiva `copilot_write` globalmente | false |
 | Tenant `aiFairUseAction='block'` | Auto-pausa el LLM cuando se supera el cap | degrade |
@@ -92,7 +82,7 @@ UPDATE tenants SET "aiFairUseAction" = 'degrade' WHERE true;
 ### "¿Por qué este tenant no ve el copiloto?"
 
 1. ¿Está en Free? → No lo verá nunca. Upgrade a Pro.
-2. ¿Está en soft-launch whitelist? → Comprobar `COPILOT_SOFT_LAUNCH_TENANT_IDS`.
+2. ¿Ha llegado al límite del día o al tope de gasto del mes? → Ver `copilot_usage_days`.
 3. ¿Tiene `subscriptionStatus='cancelled'` o `'suspended'`? → El
    `FeatureGuard` lo bloquea. Reactivar la suscripción.
 4. ¿Tiene `aiFairUseAction='block'`? → Limpiar el campo.

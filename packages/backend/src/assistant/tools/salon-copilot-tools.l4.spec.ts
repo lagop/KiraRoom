@@ -438,6 +438,9 @@ describe('SalonCopilotToolsService (L-4)', () => {
       });
       expect(res.id).toBe('c-1');
       expect(res.name).toBe('Carmen Ruiz');
+      // A4 / D1: no contact details, birth date or gender reach the AI; allergies do.
+      for (const k of ['email', 'phone', 'birthDate', 'dateOfBirth', 'gender']) expect(res).not.toHaveProperty(k);
+      expect(res).toMatchObject({ hasEmail: true, hasPhone: true, allergies: ['PPD', 'lanolina'] });
       // c-1 has 3 visits: a-1 (today, confirmed), a-3 (today, confirmed),
       // a-4 (yesterday, completed). a-2 is c-2 and a-5 is c-2 — excluded.
       expect(res.visits).toHaveLength(3);

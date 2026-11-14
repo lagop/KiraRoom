@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import {
   CONVERSATION_RETENTION_MONTHS,
+  COPILOT_CONVERSATION_RETENTION_DAYS,
   KIRAROOM_DOMAIN,
   KIRAROOM_OWNER,
   KIRAROOM_PRIVACY_EMAIL,
@@ -18,7 +19,7 @@ export default function PrivacyPage() {
         Política de Privacidad
       </h1>
       <p style={{ color: "#64748b", marginBottom: 16 }}>
-        Última actualización: 5 de noviembre de 2026
+        Última actualización: 14 de noviembre de 2026
       </p>
       {/* This page is the only source of the privacy policy: docs/privacy.md
           just points here. Keep it, the terms and SUB_PROCESSORS
@@ -82,6 +83,13 @@ export default function PrivacyPage() {
             <strong>Conversaciones con la recepcionista virtual</strong>:
             lo que escribe el cliente del salón y lo que se le responde, por
             la web del salón o por los canales que el salón conecte.
+          </li>
+          <li>
+            <strong>Conversaciones con el Copiloto</strong>: lo que el equipo
+            del salón pregunta a su asistente interno y lo que se le responde.
+            Para contestar, el Copiloto consulta la agenda y la ficha de los
+            clientes (nombre, alergias, historial de citas e importes), sin
+            sus datos de contacto ni su fecha de nacimiento.
           </li>
           <li>
             <strong>Dirección IP y fecha de aceptación</strong>: al aceptar
@@ -185,6 +193,10 @@ export default function PrivacyPage() {
           <li>
             Conversaciones con la recepcionista virtual: se borran cuando
             llevan {CONVERSATION_RETENTION_MONTHS} meses sin actividad.
+          </li>
+          <li>
+            Conversaciones con el Copiloto: se borran cuando llevan{" "}
+            {COPILOT_CONVERSATION_RETENTION_DAYS} días sin actividad.
           </li>
           <li>Versión aceptada, fecha e IP de la aceptación de los Términos: mientras dure la cuenta; al anonimizarla se borra la IP y queda constancia de la aceptación.</li>
           <li>Correos que nos envías: el tiempo necesario para atender tu consulta.</li>

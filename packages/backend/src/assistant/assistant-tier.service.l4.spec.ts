@@ -1,4 +1,9 @@
-import { AssistantTierService, CopilotTier } from './assistant-tier.service';
+import {
+  AssistantTierService,
+  COPILOT_DAILY_QUESTIONS,
+  COPILOT_TRIAL_DAILY_QUESTIONS,
+  CopilotTier,
+} from './assistant-tier.service';
 
 /**
  * L-4 contract tests for the copilot tier-gating service. We mock the
@@ -16,13 +21,46 @@ function makeFlags(ctxByTenant: Record<string, any>) {
   };
 }
 
-function makePrisma(opts: { messages?: number; actions?: number }) {
+/** copilot_usage_days in memory, and the tenant's trial state. */
+function makePrisma(opts: { rows?: Array<{ tenantId: string; day: string; messages?: number; costMicroUsd?: bigint }>; trialing?: boolean } = {}) {
+  const rows = (opts.rows ?? []).map((r) => ({ messages: 0, costMicroUsd: 0n, ...r }));
+  const find = (tenantId: string, day: string) => rows.find((r) => r.tenantId === tenantId && r.day === day);
   return {
-    assistantMessage: {
-      count: jest.fn().mockResolvedValue(opts.messages ?? 0),
+    rows,
+    tenant: {
+      findUnique: jest.fn(async () =>
+        opts.trialing
+          ? { subscriptionStatus: 'trialing', trialEnd: new Date(Date.now() + 86_400_000) }
+          : { subscriptionStatus: 'active', trialEnd: null },
+      ),
     },
-    actionApproval: {
-      count: jest.fn().mockResolvedValue(opts.actions ?? 0),
+    copilotUsageDay: {
+      aggregate: jest.fn(async ({ where }: any) => ({
+        _sum: {
+          costMicroUsd: rows
+            .filter((r) => r.tenantId === where.tenantId && r.day.startsWith(where.day.startsWith))
+            .reduce((a, r) => a + r.costMicroUsd, 0n),
+        },
+      })),
+      findUnique: jest.fn(async ({ where }: any) => find(where.tenantId_day.tenantId, where.tenantId_day.day) ?? null),
+      upsert: jest.fn(async ({ where, create, update }: any) => {
+        const { tenantId, day } = where.tenantId_day;
+        let row = find(tenantId, day);
+        if (!row) {
+          row = { messages: 0, costMicroUsd: 0n, ...create };
+          rows.push(row as any);
+          return row;
+        }
+        if (update.messages?.increment) row.messages += update.messages.increment;
+        if (update.costMicroUsd?.increment) row.costMicroUsd += update.costMicroUsd.increment;
+        return row;
+      }),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const row = find(where.tenantId, where.day);
+        if (!row || row.messages <= 0) return { count: 0 };
+        row.messages -= data.messages.decrement;
+        return { count: 1 };
+      }),
     },
   };
 }
@@ -32,13 +70,8 @@ describe('AssistantTierService (L-4)', () => {
   const PRO = { planFeatures: ['copilot_read'] };
   const PREMIUM = { planFeatures: ['copilot_read', 'copilot_write'] };
 
-  function makeConfig(softLaunchCsv?: string): any {
-    return {
-      get: jest.fn().mockImplementation((key: string) => {
-        if (key === 'COPILOT_SOFT_LAUNCH_TENANT_IDS') return softLaunchCsv ?? '';
-        return undefined;
-      }),
-    };
+  function makeConfig(env: Record<string, string> = {}): any {
+    return { get: jest.fn().mockImplementation((key: string) => env[key]) };
   }
 
   describe('resolveTier', () => {
@@ -107,46 +140,62 @@ describe('AssistantTierService (L-4)', () => {
     });
   });
 
-  describe('isOverCostCap', () => {
-    it('low usage → under cap', async () => {
-      const svc = new AssistantTierService(
-        makePrisma({ messages: 100, actions: 10 }) as any,
-        makeFlags({}) as any,
-        makeConfig() as any,
-      );
-      expect(await svc.isOverCostCap('t-1')).toBe(false);
-    });
-    it('20 000 messages + 1 000 actions → over cap', async () => {
-      const svc = new AssistantTierService(
-        makePrisma({ messages: 20_000, actions: 1_000 }) as any,
-        makeFlags({}) as any,
-        makeConfig() as any,
-      );
-      expect(await svc.isOverCostCap('t-1')).toBe(true);
-    });
-    it('zero usage → under cap', async () => {
-      const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({}) as any, makeConfig() as any);
-      expect(await svc.isOverCostCap('t-1')).toBe(false);
-    });
-  });
+  describe("the copilot's own counter (M2/M3, D3/D4)", () => {
+    const NOW = new Date('2026-11-14T12:00:00Z');
+    const svcWith = (prisma: any, env: Record<string, string> = {}) =>
+      new AssistantTierService(prisma, makeFlags({}) as any, makeConfig(env));
 
-  describe('soft-launch whitelist (sprint 16)', () => {
-    it('GA mode (empty whitelist) allows every tenant', () => {
-      const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({}) as any, makeConfig() as any);
-      expect(svc.isSoftLaunchAllowed('any-tenant')).toBe(true);
-      expect(svc.isSoftLaunchAllowed('other-tenant')).toBe(true);
+    it('counts the question on its own row, not the receptionist counter', async () => {
+      const prisma = makePrisma();
+      const svc = svcWith(prisma);
+      expect(await svc.claimQuestion('t-1', NOW)).toEqual({ ok: true });
+      expect(prisma.rows).toEqual([expect.objectContaining({ tenantId: 't-1', day: '2026-11-14', messages: 1 })]);
     });
-    it('whitelist restricts to listed tenants only', () => {
-      const cfg = makeConfig('tenant-a,tenant-b');
-      const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({}) as any, cfg as any);
-      expect(svc.isSoftLaunchAllowed('tenant-a')).toBe(true);
-      expect(svc.isSoftLaunchAllowed('tenant-b')).toBe(true);
-      expect(svc.isSoftLaunchAllowed('tenant-c')).toBe(false);
+
+    it('refuses past the daily questions and gives the refused one back', async () => {
+      const prisma = makePrisma({ rows: [{ tenantId: 't-1', day: '2026-11-14', messages: COPILOT_DAILY_QUESTIONS }] });
+      const res = await svcWith(prisma).claimQuestion('t-1', NOW);
+      expect(res).toMatchObject({ ok: false, reason: 'daily' });
+      expect(prisma.rows[0].messages).toBe(COPILOT_DAILY_QUESTIONS);
     });
-    it('trims whitespace and ignores empty entries', () => {
-      const cfg = makeConfig(' tenant-a , , tenant-b ');
-      const svc = new AssistantTierService(makePrisma({}) as any, makeFlags({}) as any, cfg as any);
-      expect(svc.softLaunchWhitelist().size).toBe(2);
+
+    it('a salon in its free trial has the lower daily cap (D4)', async () => {
+      const prisma = makePrisma({ trialing: true, rows: [{ tenantId: 't-1', day: '2026-11-14', messages: COPILOT_TRIAL_DAILY_QUESTIONS }] });
+      expect(await svcWith(prisma).claimQuestion('t-1', NOW)).toMatchObject({ ok: false, reason: 'daily' });
+    });
+
+    it('records the real cost from the tokens and the model price', async () => {
+      const prisma = makePrisma();
+      const svc = svcWith(prisma);
+      // Haiku 5.5: 0,10 $ / M input, 0,50 $ / M output → 10 000 in + 2 000 out = 0,002 $.
+      await svc.recordCost('t-1', 'claude-haiku-5-5', { promptTokens: 10_000, completionTokens: 2_000 }, NOW);
+      expect(prisma.rows[0].costMicroUsd).toBe(2000n);
+      expect(await svc.costThisMonthUsd('t-1', NOW)).toBeCloseTo(0.002);
+    });
+
+    it('stops at the month cost cap, counting only this month', async () => {
+      const prisma = makePrisma({
+        rows: [
+          { tenantId: 't-1', day: '2026-10-31', costMicroUsd: 99_000_000n },
+          { tenantId: 't-1', day: '2026-11-02', costMicroUsd: 24_000_000n },
+        ],
+      });
+      const svc = svcWith(prisma);
+      expect(await svc.isOverCostCap('t-1', NOW)).toBe(false);
+      await svc.recordCost('t-1', 'claude-haiku-5-5', { completionTokens: 2_000_000 }, NOW); // +1 $
+      expect(await svc.isOverCostCap('t-1', NOW)).toBe(true);
+      expect(await svc.claimQuestion('t-1', NOW)).toMatchObject({ ok: false, reason: 'monthly' });
+    });
+
+    it('the cap can be set in the environment', async () => {
+      const prisma = makePrisma({ rows: [{ tenantId: 't-1', day: '2026-11-02', costMicroUsd: 6_000_000n }] });
+      expect(await svcWith(prisma, { COPILOT_MONTHLY_COST_CAP_USD: '5' }).isOverCostCap('t-1', NOW)).toBe(true);
+    });
+
+    it('a model with no price adds nothing (and does not crash)', async () => {
+      const prisma = makePrisma();
+      await svcWith(prisma).recordCost('t-1', 'some-gateway-model', { promptTokens: 1000 }, NOW);
+      expect(prisma.rows).toEqual([]);
     });
   });
 });

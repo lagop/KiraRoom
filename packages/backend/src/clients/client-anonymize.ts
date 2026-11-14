@@ -244,6 +244,27 @@ export async function anonymizeClients(
       });
     }
 
+    // The team's Copilot actions about her (a message, a move, a no-show):
+    // their inputs and approval cards carry her id and name. The rest of the
+    // Copilot's conversations go at 90 days (CopilotRetentionScheduler). Her
+    // appointments are matched only for one client (the panel's
+    // "Anonimizar"); a whole salon's anonymisation deletes every Copilot row
+    // anyway.
+    const herAppointments =
+      ids.length === 1
+        ? await tx.appointment.findMany({ where: { tenantId, clientId: inIds }, select: { id: true } })
+        : [];
+    const aboutHer: Prisma.JsonNullableFilter[] = [
+      ...ids.map((id) => ({ path: ["clientId"], equals: id })),
+      ...herAppointments.map((a) => ({ path: ["appointmentId"], equals: a.id })),
+    ];
+    await tx.assistantMessage.deleteMany({
+      where: { role: "approval", conversation: { tenantId }, OR: aboutHer.map((f) => ({ toolInput: f })) },
+    });
+    await tx.actionApproval.deleteMany({
+      where: { tenantId, OR: aboutHer.map((f) => ({ toolInput: f })) },
+    });
+
     await tx.clientProfile.deleteMany({ where: { tenantId, clientId: inIds } });
     await tx.waitList.deleteMany({ where: { tenantId, clientId: inIds } });
     await tx.clientCadence.deleteMany({ where: { tenantId, clientId: inIds } });
