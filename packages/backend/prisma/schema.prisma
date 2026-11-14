@@ -3968,6 +3968,31 @@ model TenantLlmUsage {
   @@map("tenant_llm_usage")
 }
 
+/// The Copilot's own usage per salon and UTC day (Copilot audit M2/M3,
+/// decisions D3/D4). It used to add to Tenant.aiConversationsUsed, the
+/// counter that cuts the clients' virtual receptionist off at the plan's
+/// cap, so a team using the Copilot a lot could leave the clients without a
+/// receptionist. And its cost cap counted messages, not money.
+///
+/// `messages`: questions asked that day (the daily cap). `costMicroUsd`:
+/// what the model calls cost, in millionths of a US dollar, from the tokens
+/// and the model's price (anthropic-models.ts); the month's sum is the cost
+/// cap. Counts only, no personal data: kept when a salon is anonymised,
+/// like TenantLlmUsage.
+model CopilotUsageDay {
+  tenantId     String
+  /// YYYY-MM-DD, UTC.
+  day          String
+  messages     Int      @default(0)
+  costMicroUsd BigInt   @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@id([tenantId, day])
+  @@index([day])
+  @@map("copilot_usage_days")
+}
+
 // ---- VERI*FACTU (RD 1007/2023, Orden HAC/1177/2024) -------------------------
 
 /// One record chain per salon (each salon is its own taxpayer), plus the

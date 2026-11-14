@@ -1,7 +1,7 @@
 import { Injectable, Logger, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { incrementAiUsage } from '../common/ai-usage/ai-monthly-usage';
 import { LLMService } from '../virtual-receptionist/services/llm.service';
+import type { TokenCounts } from '../virtual-receptionist/providers/anthropic-models';
 import {
   buildCopilotSystemPrompt,
   type CopilotPromptContext,
@@ -23,25 +23,22 @@ import { briefingGaps, salonNowMinutes } from './briefing-gaps';
 import { clientScopeWhere } from '../clients/clients.service';
 
 /**
- * P2A-staff-copilot sprint 16 — billing hook.
- *
- * Each LLM-driven assistant turn increments `Tenant.aiConversationsUsed`
- * by 1 (the same counter the customer chatbot uses, so a single
- * `Tenant` row aggregates all AI usage for billing / fair-use
- * dashboards). Each `ActionApproval` creation also increments by 1
- * (write actions cost the salon more than reads, both in LLM tokens
- * and in the audit-log work they generate downstream).
- *
- * The increment uses Prisma's atomic `increment` operator so it's
- * safe under concurrent calls. We do NOT call the virtual-receptionist
- * `AiConversationCounterService` directly — that module is wired for
- * the chatbot and uses Redis shadowing we don't need here. For the
- * soft-launch (≤10 tenants) Postgres-only is fine; we can graduate to
- * the shared counter when the volume justifies it.
+ * The Copilot's usage is counted on its own (copilot_usage_days, through
+ * AssistantTierService.claimQuestion / recordCost). It used to add to
+ * Tenant.aiConversationsUsed, the counter that cuts the clients' virtual
+ * receptionist off at the plan's cap (Copilot audit M2, decision D3).
  */
-async function bumpUsageCounter(prisma: PrismaService, tenantId: string, by = 1): Promise<number> {
-  // This month's count: a new month starts again from 0.
-  return incrementAiUsage(prisma, tenantId, by);
+
+/** The longest a Copilot turn may take, tool calls included (Copilot audit B6). */
+export const COPILOT_TURN_TIMEOUT_MS = 60_000;
+
+/** Questions one person may ask per minute (Copilot audit B5). */
+export const COPILOT_QUESTIONS_PER_MINUTE = 20;
+
+class CopilotTimeoutError extends Error {
+  constructor() {
+    super('copilot_turn_timeout');
+  }
 }
 
 /**
@@ -243,36 +240,26 @@ export class AssistantService {
   ): Promise<AssistantSendResponse> {
     const start = Date.now();
 
-    // P2A-staff-copilot-sprint15: cost-protection (RFC §15.7). If the
-    // tenant has blown past 3× the Premium fee in the current month,
-    // we short-circuit with an explanatory reply — never let the bill
-    // run away.
-    if (await this.tiers.isOverCostCap(user.tenantId)) {
-      this.logger.warn(`Copilot cost cap reached for tenant=${user.tenantId}`);
-      const conversation = await this.resolveConversation(user, dto);
-      const reply =
-        'Has alcanzado el límite de uso mensual del copiloto. Lo reactivamos automáticamente el día 1 del próximo mes. Si necesitas más capacidad antes, escríbenos a soporte.';
-      const msg = await this.prisma.assistantMessage.create({
-        data: { conversationId: conversation.id, role: 'assistant', content: reply },
-      });
-      await this.prisma.assistantConversation.update({
-        where: { id: conversation.id },
-        data: { updatedAt: new Date() },
-      });
-      return {
-        conversation: toPublicConversation(conversation),
-        message: toPublicMessage(msg),
-        pendingApprovals: [],
-        toolsExecuted: [],
-        costCapReached: true,
-      } as AssistantSendResponse & { costCapReached: boolean };
+    // Per person, not per address (Copilot audit B5): the route's
+    // @Throttle counts by IP, and a whole salon behind one router shared it.
+    if (!this.withinUserRate(user.id)) {
+      return this.replyWithoutModel(
+        user,
+        dto,
+        'Vas muy rápido: espera un minuto antes de la siguiente pregunta.',
+        false,
+      );
     }
 
-    // P2A-staff-copilot-sprint16: billing hook. One increment per
-    // assistant turn (NOT per tool call — that would double-count
-    // multi-tool turns). The cost-protection check above already
-    // gated us, so the counter increment here is safe.
-    await bumpUsageCounter(this.prisma, user.tenantId, 1);
+    // The Copilot's own counter (Copilot audit M2/M3, D3/D4): questions per
+    // day (fewer in the free trial) and the month's real model cost. It
+    // used to add to Tenant.aiConversationsUsed, the counter that cuts the
+    // clients' virtual receptionist off, and to cap an estimate of messages.
+    const limit = await this.tiers.claimQuestion(user.tenantId);
+    if (limit.ok === false && "reason" in limit) {
+      this.logger.warn(`Copilot ${limit.reason} cap reached for tenant=${user.tenantId}`);
+      return this.replyWithoutModel(user, dto, limit.message, true);
+    }
 
     // 1. The conversation the panel is showing (conversationId), else the
     // persistent one (keyed by sessionId when the caller provided one —
@@ -351,7 +338,12 @@ export class AssistantService {
       expiresAt: string;
     }> = [];
 
+    // Set once the turn has been answered with the timeout message: a model
+    // call still running must not add approval cards nobody will see.
+    let abandoned = false;
+
     const toolExecutor = async (name: string, input: unknown) => {
+      if (abandoned) return { error: 'turn_abandoned' };
       // Defense-in-depth: even if the LLM hallucinates a write tool
       // name not in `tierFilteredTools`, refuse here instead of
       // letting it through.
@@ -370,12 +362,6 @@ export class AssistantService {
           userId: user.id,
           role: user.role as any,
         });
-        // P2A-staff-copilot-sprint16: action-approval creation is
-        // also billable (the tool re-runs at approve-time, which
-        // costs another LLM call in the worst case). Increment
-        // BEFORE the approval row exists so the counter never lies
-        // about the work the copilot did.
-        await bumpUsageCounter(this.prisma, user.tenantId, 1);
         const { id, expiresAt } = await this.approvals.createPending({
           tenantId: user.tenantId,
           userId: user.id,
@@ -427,19 +413,69 @@ export class AssistantService {
     // responds as if it were talking to a customer (`¡Hola! Soy
     // Kira, puedo ayudarte a reservar una cita…`) instead of an
     // internal staff assistant.
-    const generation = await this.llmService.generateResponse(
-      dto.content,
-      historyForLlm,
-      user.tenantId,
-      undefined,  // no fallback provider
-      {
-        tools: tierFilteredTools as any,
-        executeTool: toolExecutor as any,
-        maxToolIterations: 5,
-        toolChoice: 'auto',
-        systemPromptOverride: buildCopilotSystemPrompt(ctx),
-      },
-    );
+    //
+    // Today's briefing goes as the turn's server notes, after the cached
+    // system prompt (Copilot audit B10): inside the prompt, every new
+    // booking changed it and the cache was never hit.
+    const briefing = ctx.todayBriefingSummary;
+    const promptCtx = { ...ctx, todayBriefingSummary: undefined };
+    let generation: Awaited<ReturnType<LLMService['generateResponse']>>;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      generation = await Promise.race([
+        this.llmService.generateResponse(
+          dto.content,
+          historyForLlm,
+          user.tenantId,
+          undefined,  // no fallback provider
+          {
+            tools: tierFilteredTools as any,
+            executeTool: toolExecutor as any,
+            maxToolIterations: 5,
+            toolChoice: 'auto',
+            systemPromptOverride: buildCopilotSystemPrompt(promptCtx),
+            ...(briefing ? { systemNotes: `Resumen de hoy: ${briefing}` } : {}),
+          },
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new CopilotTimeoutError()), COPILOT_TURN_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      // The model failed or took too long (Copilot audit B6): an honest
+      // reply in the thread, the question given back, and what the failed
+      // call had already spent still counted. It used to be a generic
+      // error, the question left unanswered and counted.
+      abandoned = true;
+      const timedOut = err instanceof CopilotTimeoutError;
+      this.logger.error(
+        `Copilot turn failed for tenant=${user.tenantId}: ${timedOut ? 'timeout' : (err as Error)?.message ?? err}`,
+      );
+      const spent = err as { usage?: TokenCounts; model?: string };
+      if (spent?.usage) await this.tiers.recordCost(user.tenantId, spent.model, spent.usage);
+      await this.tiers.releaseQuestion(user.tenantId);
+      const msg = await this.prisma.assistantMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: 'assistant',
+          content: timedOut
+            ? 'He tardado demasiado en responder y lo he dejado. Prueba otra vez o haz una pregunta más concreta.'
+            : 'Ahora mismo no puedo responder: el servicio de IA ha fallado. Prueba otra vez en un momento.',
+        },
+      });
+      await this.prisma.assistantConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+      return {
+        conversation: toPublicConversation(conversation),
+        message: toPublicMessage(msg),
+        pendingApprovals,
+        toolsExecuted: [],
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    // What the turn cost, in money, on the Copilot's own counter.
+    await this.tiers.recordCost(user.tenantId, generation.model, generation.usage as TokenCounts | undefined);
 
     const reply = generation.text;
     const latencyMs = Date.now() - start;
@@ -485,6 +521,50 @@ export class AssistantService {
   // ------------------------------------------------------------------
   //  Internals
   // ------------------------------------------------------------------
+
+  /** When each person's recent questions were asked (one API instance: memory is enough). */
+  private readonly recentQuestions = new Map<string, number[]>();
+
+  /** True while this person has asked fewer than COPILOT_QUESTIONS_PER_MINUTE in the last minute. */
+  private withinUserRate(userId: string, now = Date.now()): boolean {
+    const recent = (this.recentQuestions.get(userId) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= COPILOT_QUESTIONS_PER_MINUTE) {
+      this.recentQuestions.set(userId, recent);
+      return false;
+    }
+    recent.push(now);
+    this.recentQuestions.set(userId, recent);
+    if (this.recentQuestions.size > 5_000) {
+      for (const [id, times] of this.recentQuestions) {
+        if (times.every((t) => now - t >= 60_000)) this.recentQuestions.delete(id);
+      }
+    }
+    return true;
+  }
+
+  /** A reply that never reached the model (a limit): kept in the thread so the panel shows it. */
+  private async replyWithoutModel(
+    user: { id: string; tenantId: string },
+    dto: SendAssistantMessageDto,
+    reply: string,
+    costCapReached: boolean,
+  ): Promise<AssistantSendResponse> {
+    const conversation = await this.resolveConversation(user, dto);
+    const msg = await this.prisma.assistantMessage.create({
+      data: { conversationId: conversation.id, role: 'assistant', content: reply },
+    });
+    await this.prisma.assistantConversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+    return {
+      conversation: toPublicConversation(conversation),
+      message: toPublicMessage(msg),
+      pendingApprovals: [],
+      toolsExecuted: [],
+      ...(costCapReached ? { costCapReached: true } : {}),
+    } as AssistantSendResponse & { costCapReached?: boolean };
+  }
 
   /**
    * Build the prompt context for the calling user:

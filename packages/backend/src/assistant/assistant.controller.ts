@@ -9,7 +9,6 @@ import { Feature } from '../common/decorators/feature.decorator';
 import { AssistantService } from './assistant.service';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
-import { AssistantSoftLaunchGuard } from './assistant-soft-launch.guard';
 import { NotDuringSupport } from '../common/decorators/not-during-support.decorator';
 import { aiUsageThisMonth } from '../common/ai-usage/ai-monthly-usage';
 import {
@@ -33,7 +32,7 @@ interface AuthedRequest {
  */
 @ApiTags('staff-copilot')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard, AssistantSoftLaunchGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 // P2A-staff-copilot: allow all non-client roles. The `manager` and
 // `receptionist` values come from the JWT payload and are mapped to
 // `admin` / `staff` at the service layer (these positions are not in
@@ -187,7 +186,7 @@ export class AssistantController {
     start.setDate(1);
     start.setHours(0, 0, 0, 0);
 
-    const [messageCount, actionCount, topUsers, approvalRate, overCap] =
+    const [messageCount, actionCount, topUsers, approvalRate, overCap, questionsToday, dailyQuestionCap] =
       await Promise.all([
         this.assistantService['prisma'].assistantMessage.groupBy({
           by: ['role'],
@@ -210,6 +209,9 @@ export class AssistantController {
           _count: { _all: true },
         }),
         this.tiers.isOverCostCap(tenantId),
+        // The Copilot's own counter (copilot_usage_days), apart from the receptionist's.
+        this.tiers.questionsToday(tenantId),
+        this.tiers.dailyQuestionCap(tenantId),
       ]);
 
     return {
@@ -228,6 +230,8 @@ export class AssistantController {
         messages: u._count._all,
       })),
       overCostCap: overCap,
+      questionsToday,
+      dailyQuestionCap,
     };
   }
 
@@ -329,7 +333,7 @@ export class AssistantController {
       return { month: yyyymm, totalTenants: 0, tenants: [] };
     }
 
-    const [tenants, msgAggs, actionAggs] = await Promise.all([
+    const [tenants, msgAggs, actionAggs, costAggs] = await Promise.all([
       this.assistantService['prisma'].tenant.findMany({
         where: { id: { in: ids } },
         select: {
@@ -354,6 +358,12 @@ export class AssistantController {
         by: ['tenantId'],
         where: { tenantId: { in: ids }, createdAt: { gte: start, lt: end } },
         _count: { _all: true },
+      }),
+      // The real model cost, from the Copilot's own counter.
+      this.assistantService['prisma'].copilotUsageDay.groupBy({
+        by: ['tenantId'],
+        where: { tenantId: { in: ids }, day: { startsWith: `${yyyymm}-` } },
+        _sum: { costMicroUsd: true, messages: true },
       }),
     ]);
 
@@ -380,12 +390,17 @@ export class AssistantController {
       actionsByTenant.set(a.tenantId, a._count._all);
     }
 
-    // Approx cost: same model as AssistantTierService.isOverCostCap.
-    const PREMIUM_FEE_EUR = 99;
+    const costByTenant = new Map<string, { usd: number; questions: number }>(
+      costAggs.map((c: any) => [
+        c.tenantId,
+        { usd: Number(c._sum.costMicroUsd ?? 0n) / 1_000_000, questions: c._sum.messages ?? 0 },
+      ]),
+    );
+    const capUsd = this.tiers.monthlyCostCapUsd();
     const tenantRows = tenants.map((t: any) => {
       const messages = messagesByTenant.get(t.id) ?? 0;
       const actions = actionsByTenant.get(t.id) ?? 0;
-      const approxCostEur = messages * 0.02 + actions * 0.05;
+      const cost = costByTenant.get(t.id) ?? { usd: 0, questions: 0 };
       return {
         tenantId: t.id,
         name: t.name,
@@ -394,11 +409,12 @@ export class AssistantController {
         activeConversations: (convTenantMap.get(t.id) ?? []).length,
         messages,
         actions,
-        approxCostEur: Number(approxCostEur.toFixed(2)),
-        costCapTriggered: approxCostEur > PREMIUM_FEE_EUR * 3,
-        // This month's AI message count (receptionist and copilot), the
-        // number the fair-use cap is checked against.
-        cumulativeCounter: aiUsageThisMonth(t),
+        questions: cost.questions,
+        costUsd: Number(cost.usd.toFixed(4)),
+        costCapTriggered: cost.usd >= capUsd,
+        // The receptionist's AI message count this month (the copilot no
+        // longer adds to it).
+        receptionistCounter: aiUsageThisMonth(t),
       };
     });
     tenantRows.sort((a, b) => b.messages - a.messages);
@@ -408,9 +424,7 @@ export class AssistantController {
       totalTenants: tenantRows.length,
       totalMessages: tenantRows.reduce((s, r) => s + r.messages, 0),
       totalActions: tenantRows.reduce((s, r) => s + r.actions, 0),
-      totalApproxCostEur: Number(
-        tenantRows.reduce((s, r) => s + r.approxCostEur, 0).toFixed(2),
-      ),
+      totalCostUsd: Number(tenantRows.reduce((s, r) => s + r.costUsd, 0).toFixed(4)),
       tenants: tenantRows,
     };
   }

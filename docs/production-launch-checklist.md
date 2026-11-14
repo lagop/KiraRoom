@@ -154,7 +154,6 @@ All items below landed in the repo. Tick the box once the SHA on `develop` is me
 **Goal:** 3-5 paying (or free-trial) tenants on `app.kiraroom.net`, Kira Copilot active for them.
 
 - [ ] Pick 3-5 tenants from your network / waitlist.
-- [ ] Set `COPILOT_SOFT_LAUNCH_TENANT_IDS=<comma-separated-tenant-ids>` env var in Hostinger → redeploy.
 - [ ] Flip Stripe from `sk_test_*` to `sk_live_*` keys + update webhook endpoint in Stripe dashboard to `https://api.kiraroom.net/api/v1/webhooks/stripe`.
 - [ ] Set `FISCAL_MODE=real` **only after** AEAT sandbox cert uploaded and `docs/saas-admin-runbook.md` §11 signed off.
 - [ ] Write a one-page "How to join KiraRoom closed beta" doc for the tenants.

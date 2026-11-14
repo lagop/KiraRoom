@@ -133,12 +133,27 @@ describe("anonymizeClients", () => {
     for (const m of CLIENT_LINKED_MODELS_KEPT) expect(touched.has(lowerFirst(m))).toBe(false);
   });
 
+  it("deletes the team's Copilot actions about her and her appointments (Copilot audit M4)", async () => {
+    const { calls } = await run({ client: [her], appointment: [{ id: "apt-1" }] });
+    const approvals = calls.find((c) => c.model === "actionApproval" && c.method === "deleteMany")!;
+    expect(approvals.args.where).toEqual({
+      tenantId: TENANT,
+      OR: [
+        { toolInput: { path: ["clientId"], equals: her.id } },
+        { toolInput: { path: ["appointmentId"], equals: "apt-1" } },
+      ],
+    });
+    const cards = calls.find((c) => c.model === "assistantMessage" && c.method === "deleteMany")!;
+    expect(cards.args.where).toMatchObject({ role: "approval", conversation: { tenantId: TENANT } });
+  });
+
   it("every query is limited to the salon", async () => {
     const { calls } = await run();
     for (const call of calls) {
       if (call.model === "authSession") continue; // keyed by the client ids found in the salon
       const where = call.args.where;
-      const scoped = where.tenantId === TENANT || where.campaign?.tenantId === TENANT;
+      const scoped =
+        where.tenantId === TENANT || where.campaign?.tenantId === TENANT || where.conversation?.tenantId === TENANT;
       expect({ call: `${call.model}.${call.method}`, scoped }).toEqual({ call: `${call.model}.${call.method}`, scoped: true });
     }
   });
@@ -197,7 +212,8 @@ describe("anonymizeClients", () => {
 
   it("keeps appointments but clears the free text about her", async () => {
     const { calls } = await run();
-    const appts = calls.filter((c) => c.model === "appointment");
+    // (A findMany of her appointment ids: the Copilot actions about them go.)
+    const appts = calls.filter((c) => c.model === "appointment" && c.method !== "findMany");
     expect(appts.map((c) => c.method)).toEqual(["updateMany"]);
     expect(appts[0].args.data).toEqual({ notes: null, internalNotes: null, address: null, review: null, feedback: {} });
     // Invoices are never touched: they keep their own recipient snapshot.

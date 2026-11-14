@@ -80,8 +80,9 @@ export const COPILOT_TOOLS = [
   {
     name: 'get_client_360',
     description:
-      "Return everything we know about a client: visit history, services rendered, products bought, allergies, internal notes, " +
-      "last communication. Crucial use case: '¿qué le hice a Carmen la última vez?' " +
+      "Return a client's file: name, allergies, recent visits (date, services as booked, professional, status) " +
+      "and, for managers and reception, her completed visits in the last year and total spend in euros. " +
+      "No contact details, birth date or notes are returned. Crucial use case: '¿qué le hice a Carmen la última vez?' " +
       "(what did I do to Carmen last time?). Owner/manager and reception see everything; " +
       "a `staff` user only sees clients assigned to them, and never the financial detail (spend, payment method).",
     input_schema: {
@@ -572,10 +573,15 @@ export class SalonCopilotToolsService {
           id: true,
           firstName: true,
           lastName: true,
+          // Contact details, birth date and gender stay out (Copilot audit
+          // A4 / D1): the questions the copilot answers ("¿qué le hice la
+          // última vez?") need none of them, and everything selected here
+          // goes to the AI provider. Only whether she can be written to.
           email: true,
           phone: true,
-          dateOfBirth: true,
-          gender: true,
+          // Allergies stay (D1): they matter before a dye or a chemical
+          // treatment. A health datum: the sub-processor text names the
+          // copilot (lib/salon-legal.ts).
           allergies: true,
           // The lifetime spend, in euros (as Clientas shows it); only
           // returned below to the roles that see money.
@@ -666,10 +672,8 @@ export class SalonCopilotToolsService {
       name: `${client.firstName} ${client.lastName}`.trim(),
       firstName: client.firstName,
       lastName: client.lastName,
-      email: client.email,
-      phone: client.phone,
-      birthDate: client.dateOfBirth,
-      gender: client.gender,
+      hasEmail: !!client.email?.trim(),
+      hasPhone: !!client.phone?.trim(),
       allergies: client.allergies,
       visits: allVisits,
       stats,
@@ -823,9 +827,9 @@ export class SalonCopilotToolsService {
     args: Record<string, unknown>,
     ctx: CopilotToolContext,
   ) {
-    const daysAhead = Math.max(Number(args.daysAhead ?? 7), 1);
-    const minGap = Math.max(Number(args.minGapMinutes ?? 30), 15);
-    const topN = Math.max(Number(args.topN ?? 5), 1);
+    const daysAhead = bounded(args.daysAhead, 7, 1, 30);
+    const minGap = bounded(args.minGapMinutes, 30, 15, 480);
+    const topN = bounded(args.topN, 5, 1, 10);
 
     // The salon's today, at the UTC midnight dates are stored at.
     const today = new Date(`${await this.salonDay(ctx)}T00:00:00.000Z`);
@@ -950,7 +954,7 @@ export class SalonCopilotToolsService {
         message: 'Esta vista solo está disponible para owner / admin / manager / recepcionista.',
       };
     }
-    const limit = Math.max(Number(args.limit ?? 20), 1);
+    const limit = bounded(args.limit, 20, 1, 50);
     const products = await ctx.prisma.product.findMany({
       where: {
         tenantId: ctx.tenantId,
@@ -1001,8 +1005,8 @@ export class SalonCopilotToolsService {
         message: 'Esta vista solo está disponible para owner / admin / manager / recepcionista.',
       };
     }
-    const minNoShows = Math.max(Number(args.minNoShows ?? 2), 1);
-    const daysBack = Math.max(Number(args.daysBack ?? 90), 1);
+    const minNoShows = bounded(args.minNoShows, 2, 1, 50);
+    const daysBack = bounded(args.daysBack, 90, 1, 365);
 
     const since = new Date();
     since.setDate(since.getDate() - daysBack);
@@ -1059,7 +1063,8 @@ export class SalonCopilotToolsService {
       windowDays: daysBack,
       minNoShows,
       totalFlagged: list.length,
-      flagged: list,
+      // At most 50 clients reach the model (Copilot audit M5).
+      flagged: list.slice(0, 50),
     };
   }
 
@@ -1077,7 +1082,7 @@ export class SalonCopilotToolsService {
       };
     }
     const metric = String(args.metric ?? 'spend') as 'spend' | 'visits' | 'recency';
-    const limit = Math.max(Number(args.limit ?? 10), 1);
+    const limit = bounded(args.limit, 10, 1, 50);
     const isSensitive = ['owner', 'admin', 'manager', 'saas_owner'].includes(ctx.role);
 
     let orderBy: any = { totalSpent: 'desc' };
@@ -1663,6 +1668,16 @@ private async rescheduleAppointment(
     // as done.
     return notified === 0 ? { error: 'not_delivered', ...result } : { ok: true, ...result };
   }
+}
+
+/**
+ * A number the model asked for, kept within [min, max] (Copilot audit M5):
+ * "dame todas mis clientas" used to send the whole client base to the AI in
+ * one request. Not a number: the default.
+ */
+export function bounded(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Math.floor(Number(value ?? fallback));
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
 }
 
 function timeToMinutes(t: string): number {
