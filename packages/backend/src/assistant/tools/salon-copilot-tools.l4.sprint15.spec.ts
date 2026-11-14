@@ -1,5 +1,4 @@
 import { COPILOT_TOOLS, SalonCopilotToolsService } from './salon-copilot-tools';
-import { TOOL_PREVIEW } from '../assistant.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 
 /**
@@ -115,21 +114,23 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
         ok: true,
         appointmentId: 'a-1',
         status: 'no_show',
-        feeApplied: false,
-        feeAmount: 0,
         clientFirstName: 'Carmen',
       });
+      expect(res).not.toHaveProperty('feeApplied');
       expect(appts[0].status).toBe('no_show');
     });
 
-    it('rejects when fee is requested but no amount is provided', async () => {
+    it('D6: a fee asked for anyway is ignored, nothing about money is written', async () => {
       const appts = [{ id: 'a-1', tenantId: TENANT_ID, status: 'confirmed', client: { firstName: 'C' } }];
       const prisma = makePrisma({ appointments: appts });
-      const svc = new SalonCopilotToolsService(prisma);
-      const res = await svc.execute('mark_no_show', { appointmentId: 'a-1', applyFee: true }, {
+      const appointments = appointmentsOver(prisma);
+      const spy = jest.spyOn(appointments, 'changeStatus');
+      const svc = new SalonCopilotToolsService(prisma, undefined, appointments);
+      const res = await svc.execute('mark_no_show', { appointmentId: 'a-1', applyFee: true, feeAmount: 15 }, {
         ...ctxFor('manager'), prisma,
       });
-      expect((res as any).error).toBe('invalid_feeAmount');
+      expect(res).toMatchObject({ ok: true, status: 'no_show' });
+      expect(spy.mock.calls[0][3]).toEqual({});
     });
 
     it('refuses to mutate an already-cancelled appointment', async () => {
@@ -203,8 +204,13 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       expect((data.endDate.getTime() - data.startDate.getTime()) / 864e5).toBe(6);
     });
 
-    it('asks for approval with the limits it creates, never for one client', () => {
-      const text = TOOL_PREVIEW.create_coupon({ discountPercent: 15, expiresInDays: 10, clientId: 'c-1' });
+    it('asks for approval with the limits it creates, never for one client', async () => {
+      const prisma = makePrisma({});
+      const text = await new SalonCopilotToolsService(prisma).approvalPreview(
+        'create_coupon',
+        { discountPercent: 15, expiresInDays: 10, clientId: 'c-1' },
+        { ...ctxFor('owner'), prisma },
+      );
       expect(text).toBe(
         'Crear un código de descuento del 15% para cualquier clienta, de un solo uso y válido 10 días. Se aplica al cobrar en caja (no en la reserva online).',
       );
@@ -380,5 +386,55 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
       );
       expect((res as any).error).toBe('invalid_windowStart');
     });
+  });
+});
+
+/**
+ * A1: the approval card is built from the database (who, when, with whom,
+ * the message as it will read), never from the model's words.
+ */
+describe('approvalPreview (A1)', () => {
+  const appt = {
+    id: 'a-1', tenantId: TENANT_ID, scheduledDate: new Date('2026-11-20T00:00:00.000Z'), scheduledTime: '10:00',
+    client: { firstName: 'Carmen', lastName: 'Ruiz', phone: '+34 600 111 222' },
+    professional: { firstName: 'Lucía' },
+  };
+  const prisma: any = {
+    appointment: {
+      findFirst: jest.fn(async ({ where }: any) => (where.id === appt.id && where.tenantId === TENANT_ID ? appt : null)),
+    },
+    client: {
+      findFirst: jest.fn(async ({ where }: any) => (where.id === 'c-1' && where.tenantId === TENANT_ID ? appt.client : null)),
+    },
+  };
+  const ctx = { prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'owner' as any };
+  const svc = new SalonCopilotToolsService(prisma);
+
+  it('a move names the client, the professional, the current and the new time', async () => {
+    const text = await svc.approvalPreview('reschedule_appointment', { appointmentId: 'a-1', newDate: '2026-11-21', newTime: '16:00' }, ctx);
+    expect(text).toBe('Mover la cita de Carmen R. con Lucía: viernes, 20 de noviembre, 10:00 → sábado, 21 de noviembre, 16:00. Se avisa a la clienta.');
+  });
+
+  it('a no-show says who, and that nothing is charged (D6)', async () => {
+    const text = await svc.approvalPreview('mark_no_show', { appointmentId: 'a-1', applyFee: true, feeAmount: 20 }, ctx);
+    expect(text).toContain('Carmen R.');
+    expect(text).toContain('No se cobra ninguna penalización');
+    expect(text).not.toMatch(/€/);
+  });
+
+  it('a WhatsApp shows the masked phone and the message as it will read', async () => {
+    const text = await svc.approvalPreview(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita', templateVars: { '1': 'Carmen', '2': 'Salón X', '3': 'Corte', '4': 'viernes', '5': '10:00' } },
+      ctx,
+    );
+    expect(text).toContain('Carmen R. (tel. ···· 222)');
+    expect(text).toContain('Corte');
+    expect(text).not.toMatch(/{{d}}/);
+  });
+
+  it('an appointment of another salon is flagged, not described', async () => {
+    const text = await svc.approvalPreview('reschedule_appointment', { appointmentId: 'other', newDate: '2026-11-21', newTime: '16:00' }, ctx);
+    expect(text).toBe('Cita no encontrada en tu salón: no se moverá nada.');
   });
 });

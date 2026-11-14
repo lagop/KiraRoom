@@ -127,11 +127,26 @@ export class ActionApprovalService {
       throw new BadRequestException(`approval_not_pending:${row.status}`);
     }
     if (row.expiresAt.getTime() < Date.now()) {
-      await this.prisma.actionApproval.update({
-        where: { id },
+      await this.prisma.actionApproval.updateMany({
+        where: { id, status: 'pending' },
         data: { status: 'expired', resolvedAt: new Date() },
       });
       throw new BadRequestException('approval_expired');
+    }
+
+    // Claim it before running anything: one atomic pending → approved
+    // ("being executed"). Two clicks, a retry or two tabs used to read
+    // "pending" at the same time and both run the tool (two WhatsApps, the
+    // wait list told twice). Only the call that wins the claim executes.
+    const claim = await this.prisma.actionApproval.updateMany({
+      where: { id, userId, status: 'pending', expiresAt: { gt: new Date() } },
+      data: { status: 'approved', resolvedById: userId },
+    });
+    if (claim.count !== 1) {
+      const now = await this.prisma.actionApproval.findUnique({ where: { id }, select: { status: true } });
+      throw new BadRequestException(
+        now?.status === 'pending' ? 'approval_expired' : `approval_not_pending:${now?.status ?? 'unknown'}`,
+      );
     }
 
     // Re-execute the tool with the FROZEN input. Permission checks
@@ -194,14 +209,21 @@ export class ActionApprovalService {
     if (row.status !== 'pending') {
       throw new BadRequestException(`approval_not_pending:${row.status}`);
     }
-    const updated = await this.prisma.actionApproval.update({
-      where: { id },
+    // Only while it is still pending: a reject racing an approval must not
+    // turn an action already running (or run) into "rejected".
+    const claim = await this.prisma.actionApproval.updateMany({
+      where: { id, userId, status: 'pending' },
       data: {
         status: 'rejected',
         resolvedAt: new Date(),
         resolvedById: userId,
       },
     });
+    if (claim.count !== 1) {
+      const now = await this.prisma.actionApproval.findUnique({ where: { id }, select: { status: true } });
+      throw new BadRequestException(`approval_not_pending:${now?.status ?? 'unknown'}`);
+    }
+    const updated = await this.prisma.actionApproval.findUniqueOrThrow({ where: { id } });
     return {
       id: updated.id,
       status: updated.status as ResolvedApproval['status'],
