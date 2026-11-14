@@ -15,6 +15,7 @@ function makePrisma(opts: {
   professionals?: any[];
   products?: any[];
   whatsAppConnection?: any;
+  tenant?: any;
 }): any {
   const appts = opts.appointments ?? [];
   const cls = opts.clients ?? [];
@@ -22,6 +23,7 @@ function makePrisma(opts: {
   const conn = opts.whatsAppConnection ?? null;
 
   return {
+    tenant: { findUnique: jest.fn(async () => opts.tenant ?? null) },
     appointment: {
       findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
         return appts.find((a: any) => {
@@ -42,9 +44,14 @@ function makePrisma(opts: {
     },
     client: {
       findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
+        // `appointments.some` is the staff reach rule (an appointment with her that is not cancelled).
+        const reach = where?.appointments?.some;
         return cls.find((c: any) => {
           if (c.id !== where?.id) return false;
           if (where?.tenantId && c.tenantId !== where.tenantId) return false;
+          if (reach) {
+            return appts.some((a: any) => a.clientId === c.id && a.professionalId === reach.professionalId && a.status !== 'cancelled');
+          }
           return true;
         }) ?? null;
       }),
@@ -81,16 +88,75 @@ describe('SalonCopilotToolsService (L-4) — sprint 14 write tools', () => {
       });
       expect(res).toMatchObject({
         clientId: 'c-1',
-        channel: 'whatsapp',
-        occasion: 'confirmation',
-        tone: 'warm',
-        requiresApproval: true,
-        next: 'send_message',
+        channel: 'WhatsApp',
+        occasion: 'confirmación de cita',
+        tone: 'cercano',
+        sent: false,
       });
+      // M8: no approval, and the model is told to show it and that she sends it herself.
+      expect(res).not.toHaveProperty('requiresApproval');
+      expect(res).not.toHaveProperty('next');
+      expect((res as any).instructions).toMatch(/copy it and send it herself/);
+      expect((res as any).instructions).toMatch(/send_message/);
       expect(typeof (res as any).draft).toBe('string');
       expect((res as any).draft).toContain('Carmen');
       // Network must not be touched for a draft.
       expect((prisma.whatsAppConnection.findUnique as jest.Mock).mock.calls.length).toBe(0);
+    });
+
+    it('M8: names the next appointment and the salon, in Spanish, addressing her as «tú» in both tones', async () => {
+      const prisma = makePrisma({
+        clients: [{ id: 'c-1', tenantId: TENANT_ID, firstName: 'Carmen' }],
+        appointments: [{ id: 'a-1', clientId: 'c-1', professionalId: 'p-1', status: 'confirmed', scheduledDate: new Date('2099-11-20T00:00:00.000Z'), scheduledTime: '16:00' }],
+        tenant: { name: 'Salón Rosa', timezone: 'Europe/Madrid' },
+      });
+      const svc = new SalonCopilotToolsService(prisma);
+      const ctx = { prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'owner' as const };
+      for (const tone of ['warm', 'formal']) {
+        const res: any = await svc.execute('draft_follow_up_message', { clientId: 'c-1', occasion: 'reminder', tone }, ctx);
+        expect(res.occasion).toBe('recordatorio de cita');
+        expect(res.draft).toContain('Te recordamos tu cita en Salón Rosa del');
+        expect(res.draft).toContain('a las 16:00');
+        expect(res.draft).toContain('Salón Rosa');
+        expect(res.draft).not.toMatch(/Estimad|Atentamente|usted|\bsu cita\b/i);
+        expect(res.draft).not.toMatch(/confirmation|reminder|reactivation/);
+      }
+    });
+
+    it('M8: an email draft carries a Spanish subject', async () => {
+      const prisma = makePrisma({ clients: [{ id: 'c-1', tenantId: TENANT_ID, firstName: 'Carmen' }], tenant: { name: 'Salón Rosa' } });
+      const svc = new SalonCopilotToolsService(prisma);
+      const res: any = await svc.execute('draft_follow_up_message', { clientId: 'c-1', channel: 'email', occasion: 'reactivation' }, {
+        prisma, tenantId: TENANT_ID, userId: 'u-1', role: 'manager',
+      });
+      expect(res.channel).toBe('email');
+      expect(res.occasion).toBe('volver a verla');
+      expect(res.subject).toBe('Te echamos de menos en Salón Rosa');
+      expect(res.draft).toContain('Hace tiempo que no te vemos por Salón Rosa');
+    });
+
+    it('M8: a professional only drafts for a client she has attended', async () => {
+      const prisma = makePrisma({
+        clients: [
+          { id: 'c-own', tenantId: TENANT_ID, firstName: 'Carmen' },
+          { id: 'c-other', tenantId: TENANT_ID, firstName: 'Lola' },
+        ],
+        appointments: [
+          { id: 'a-1', clientId: 'c-own', professionalId: 'p-maria', status: 'completed' },
+          { id: 'a-2', clientId: 'c-other', professionalId: 'p-jorge', status: 'completed' },
+        ],
+        professionals: [{ id: 'p-maria', userId: 'u-maria' }],
+      });
+      const svc = new SalonCopilotToolsService(prisma);
+      const ctx = { prisma, tenantId: TENANT_ID, userId: 'u-maria', role: 'staff' as const };
+      expect((await svc.execute('draft_follow_up_message', { clientId: 'c-own' }, ctx) as any).draft).toContain('Carmen');
+      expect(await svc.execute('draft_follow_up_message', { clientId: 'c-other' }, ctx)).toEqual({ error: 'client_not_found' });
+    });
+
+    it('M8: is not a write tool, so it has no approval card text of its own', async () => {
+      const { COPILOT_WRITE_TOOLS } = await import('./salon-copilot-tools');
+      expect(COPILOT_WRITE_TOOLS).not.toContain('draft_follow_up_message' as any);
+      expect(COPILOT_WRITE_TOOLS).toContain('send_message');
     });
 
     it('returns client_not_found for unknown client', async () => {

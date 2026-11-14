@@ -49,7 +49,7 @@ function makePrisma(opts: {
   const clients = opts.clients ?? [];
   const pros = opts.professionals ?? [];
 
-  return {
+  const mock: any = {
     appointment: {
       findMany: jest.fn().mockImplementation(async ({ where }: any) => {
         return appts.filter((a: any) => {
@@ -93,6 +93,8 @@ function makePrisma(opts: {
           return ax.getTime() - bx.getTime();
         });
       }),
+      // B9: the briefing counts every client at risk, not just the five shown.
+      count: jest.fn().mockImplementation(async (args: any) => (await mock.client.findMany(args)).length),
     },
     professional: {
       findFirst: jest.fn().mockImplementation(async ({ where }: any) => {
@@ -114,6 +116,7 @@ function makePrisma(opts: {
       findUnique: jest.fn().mockImplementation(async () => opts.user ?? null),
     },
   };
+  return mock;
 }
 
 function makeService(prisma: any): AssistantService {

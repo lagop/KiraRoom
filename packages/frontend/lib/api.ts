@@ -6761,14 +6761,7 @@ class ApiClient implements ApiClientInterface {
     return this.request('/assistant/tier');
   }
 
-  async getAssistantUsage(): Promise<{
-    month: string;
-    messages: Record<string, number>;
-    actionsTotal: number;
-    approvalBreakdown: Record<string, number>;
-    topConversations: Array<{ conversationId: string; messages: number }>;
-    overCostCap: boolean;
-  }> {
+  async getAssistantUsage(): Promise<AssistantUsage> {
     return this.request('/assistant/usage');
   }
 
@@ -6964,6 +6957,12 @@ export interface AssistantMessage {
   toolResult?: unknown;
   pendingActionId?: string | null;
   createdAt: string;
+  /** role=approval: what became of the action (Copilot audit M9). */
+  approval?: {
+    status: 'pending' | 'approved' | 'rejected' | 'expired' | 'executed';
+    expiresAt: string;
+    result?: unknown;
+  } | null;
 }
 
 export interface AssistantConversation {
@@ -7076,8 +7075,16 @@ export interface AssistantUsage {
   messages: Record<string, number>;
   actionsTotal: number;
   approvalBreakdown: Record<string, number>;
-  topConversations: Array<{ conversationId: string; messages: number }>;
+  topConversations: Array<{
+    conversationId: string;
+    messages: number;
+    userName?: string | null;
+    title?: string | null;
+    lastAt?: string | null;
+  }>;
   overCostCap: boolean;
+  questionsToday?: number;
+  dailyQuestionCap?: number;
 }
 
 // ---------------------------------------------------------------- loyalty

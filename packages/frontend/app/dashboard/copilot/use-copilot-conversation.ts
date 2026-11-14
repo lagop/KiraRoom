@@ -43,6 +43,9 @@ export function useCopilotConversation() {
     error: null,
   });
   const [tier, setTier] = useState<'free' | 'pro' | 'premium' | null>(null);
+  // B12: earlier conversations, to go back to one ("Nueva conversación"
+  // used to leave no way back).
+  const [conversations, setConversations] = useState<AssistantConversation[]>([]);
   const [costCapReached, setCostCapReached] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadline = useRef<number>(0);
@@ -115,13 +118,17 @@ export function useCopilotConversation() {
         const t = await apiClient.getAssistantTier();
         setTier(t.tier);
       } catch {
-        setTier('free');
+        // M11: a failed lookup is not "not in your plan" (a salon that
+        // pays was shown the upgrade notice). The server still checks the
+        // plan on every message.
+        setTier(null);
       }
 
       // P2A-staff-copilot-sprint12: one persistent thread per
       // (user, tenant) for now. Sprint 14+ supports multiple panels
       // per user via `sessionId`.
       const list = await apiClient.listAssistantConversations();
+      setConversations(list);
       let convo: AssistantConversation;
       if (list.length > 0) {
         convo = list[0];
@@ -210,11 +217,32 @@ export function useCopilotConversation() {
     [state.conversation, startPolling, stopPolling, costCapReached],
   );
 
+  /** Refetch the open conversation (after an action is approved). */
+  const refresh = useCallback(() => {
+    const id = stateRef.current.conversation?.id;
+    if (id) void fetchMessages(id);
+  }, [fetchMessages]);
+
+  /** Open an earlier conversation (B12). */
+  const openConversation = useCallback(
+    async (id: string) => {
+      const convo = conversations.find((c) => c.id === id);
+      if (!convo) return;
+      stopPolling();
+      setState({ conversation: convo, messages: [], loading: true, sending: false, error: null });
+      await fetchMessages(convo.id);
+    },
+    [conversations, fetchMessages, stopPolling],
+  );
+
   const clear = useCallback(async () => {
     try {
       // A new, empty thread: without `fresh` the server returns the
       // existing one and the old messages came back on the next reply.
+      // The one left stays in the history.
+      stopPolling();
       const fresh = await apiClient.createAssistantConversation({ fresh: true });
+      setConversations((list) => [fresh, ...list.filter((c) => c.id !== fresh.id)]);
       setState({
         conversation: fresh,
         messages: [],
@@ -225,7 +253,7 @@ export function useCopilotConversation() {
     } catch (err) {
       setState((s) => ({ ...s, error: (err as Error)?.message ?? "Error" }));
     }
-  }, []);
+  }, [stopPolling]);
 
-  return { state, send, clear, tenantId, tier, costCapReached };
+  return { state, send, clear, refresh, openConversation, conversations, tenantId, tier, costCapReached };
 }

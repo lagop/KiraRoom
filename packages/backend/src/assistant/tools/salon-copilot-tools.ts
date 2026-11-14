@@ -3,7 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
-import { VISIT_ROW_ORDER, minutesUntilFree } from '../../appointments/visit-totals';
+import { VISIT_ROW_ORDER } from '../../appointments/visit-totals';
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
 import { STANDARD_TEMPLATES, spanishDate, templateParam } from '../../whatsapp/whatsapp-templates';
@@ -14,6 +14,8 @@ import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
 import { moneyOfCatalogueCents, salonTaxBasis } from '../../payments/appointment-charge';
 import { bookedServiceName } from '../../appointments/appointment-snapshot';
 import { clientReachWhere } from '../../clients/client-reach';
+import { salonNowMinutes } from '../briefing-gaps';
+import { loadProfessionalGaps, loadWaitListCandidates, suggestForGaps } from './copilot-gaps';
 
 /**
  * P2A-staff-copilot: tools the in-app copilot exposes to the LLM.
@@ -47,9 +49,11 @@ export const COPILOT_TOOLS = [
   {
     name: 'get_my_agenda',
     description:
-      "Return today's appointments for the calling professional — or for the whole salon if the caller is owner/manager/receptionist. " +
-      'Always include the gaps ≥ 30 min between appointments and which appointments are still in `pending` confirmation. ' +
-      'This is the single most-used tool: it powers the "what\'s up today" answer on the briefing card.',
+      "Return a day's appointments (today by default) for the calling professional — or for the whole salon if the caller is owner/admin/manager/receptionist — " +
+      'and which ones are still `pending` confirmation. Also returns the free gaps of ≥ 30 min PER PROFESSIONAL ' +
+      '(`gaps`, each with professionalFirstName): inside that professional\'s working hours and the salon\'s opening hours, ' +
+      'minus closures, time off and her appointments (with cleanup time), and never earlier than now. ' +
+      'A `staff` user only gets her own agenda and gaps.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -59,7 +63,11 @@ export const COPILOT_TOOLS = [
         },
         professionalId: {
           type: 'string',
-          description: 'Optional. Restricts the agenda to one professional. Owner/manager only — ignored for `staff`.',
+          description: 'Optional. Restricts the agenda to one professional. Not for `staff` (she only sees her own).',
+        },
+        location: {
+          type: 'string',
+          description: "Optional. For salons with several locations: the location's name or id. Only the professionals who work there.",
         },
       },
     },
@@ -67,7 +75,7 @@ export const COPILOT_TOOLS = [
   {
     name: 'get_salon_agenda',
     description:
-      "Manager-only. Read the agenda for any professional by id. Use when the caller asks 'what does Jorge have on Tuesday' and the calling user is not Jorge themselves.",
+      "Owner / admin / manager only. Read the agenda and free gaps of any professional by id (same shape as get_my_agenda). Use when the caller asks 'what does Jorge have on Tuesday' and the calling user is not Jorge themselves.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -80,11 +88,12 @@ export const COPILOT_TOOLS = [
   {
     name: 'get_client_360',
     description:
-      "Return a client's file: name, allergies, recent visits (date, services as booked, professional, status) " +
-      "and, for managers and reception, her completed visits in the last year and total spend in euros. " +
-      "No contact details, birth date or notes are returned. Crucial use case: '¿qué le hice a Carmen la última vez?' " +
-      "(what did I do to Carmen last time?). Owner/manager and reception see everything; " +
-      "a `staff` user only sees clients assigned to them, and never the financial detail (spend, payment method).",
+      "Return a client's file: name, allergies, whether she has an email / a phone on file (not the contact itself), " +
+      "and her recent visits (date, time, services as booked, professional, status; each visit's total in euros for non-staff). " +
+      "For owner / admin / manager / reception also her completed visits in the last year and her total spend in euros. " +
+      "It does NOT return notes, products bought, payment methods, contact details or birth date: never claim them. " +
+      "Crucial use case: '¿qué le hice a Carmen la última vez?'. " +
+      "A `staff` user only reaches clients she has attended, only sees her own visits with them, and never any amount.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -102,17 +111,25 @@ export const COPILOT_TOOLS = [
   {
     name: 'find_filling_opportunities',
     description:
-      "Scan the salon's next 7 days for gaps ≥ 30 min between appointments, " +
-      'and return the top 5 wait-list clients who could realistically fill them ' +
-      "(ranked by recency — clients who last visited longest ago first). " +
+      "Scan the next days (from now; default 7, today included) for free gaps PER PROFESSIONAL: inside her working hours " +
+      "and the salon's opening hours, minus closures, time off and her appointments. Gaps come in date/time order " +
+      "(at most 40 listed; `totalGaps` counts them all). For owner / admin / manager each gap carries up to topN " +
+      "wait-list clients who fit it: still waiting, not blocked, her dates include that day, she asked for no " +
+      "professional or for this one, the professional performs the service and it fits in the gap " +
+      "(those who asked for this professional first, then those suggested least, then the longest waiting). " +
       "Use this when the user says 'tengo huecos esta semana' or 'a quién puedo llamar'. " +
-      'Owner/manager only — staff and receptionist see only the gap list, not the matching clients.',
+      'Staff and receptionist get the gaps without client names; a `staff` user only her own gaps.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        daysAhead: { type: 'number', description: 'Days to scan. Default 7.' },
+        daysAhead: { type: 'number', description: 'Days to scan, today included. Default 7.' },
         minGapMinutes: { type: 'number', description: 'Min gap to surface. Default 30.' },
         topN: { type: 'number', description: 'How many wait-list clients per gap. Default 5.' },
+        professionalId: { type: 'string', description: 'Optional. Only this professional. Not for `staff`.' },
+        location: {
+          type: 'string',
+          description: "Optional. For salons with several locations: the location's name or id.",
+        },
       },
     },
   },
@@ -170,22 +187,20 @@ export const COPILOT_TOOLS = [
     },
   },
 
-  // --------------------------------------------------------------------
-  //  Sprint 14: the first 3 write tools. Always require human approval.
-  //  The LLM is instructed to NEVER execute these directly; it must
-  //  produce a `pendingAction` via the orchestrator and wait for the
-  //  user to click Approve. See ActionApprovalService.
-  // --------------------------------------------------------------------
-
+  // Copilot audit M8: drafting is a READ tool (no approval card). It used
+  // to ask for an approval just to show a text, hid it behind "Ver
+  // detalle", and the model never learnt it had been approved.
   {
     name: 'draft_follow_up_message',
     description:
-      "Compose a short follow-up WhatsApp or email message for a client. " +
-      "Returns the draft text. Does NOT send. Use when the owner says " +
-      "'mándale un mensaje a Carmen para que confirme su cita' — produce " +
-      "the body, then ask for approval. Optional fields: channel ('whatsapp'" +
-      "|'email'), occasion ('confirmation'|'reminder'|'reactivation'|'custom'), " +
-      "tone ('warm'|'formal'). The default is WhatsApp / confirmation / warm.",
+      "Write a short draft of a WhatsApp or email message to a client, for the user to COPY AND SEND HERSELF " +
+      "(from her phone or email). It sends nothing and needs no approval. Show the returned `draft` text " +
+      "in your reply exactly as it comes, so she can copy it. You cannot send this free text: the only " +
+      "WhatsApp you can send is an approved template through send_message (when that action is available). " +
+      "Optional: channel ('whatsapp'|'email'), occasion ('confirmation' = confirmar la cita, 'reminder' = " +
+      "recordatorio, 'reactivation' = volver a verla, 'custom' = texto propio en customText), tone " +
+      "('warm'|'formal'; both address the client as «tú», as the salon's messages do). " +
+      "Default: WhatsApp / confirmation / warm. A `staff` user only drafts for clients she has attended.",
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -193,11 +208,18 @@ export const COPILOT_TOOLS = [
         channel: { type: 'string', enum: ['whatsapp', 'email'] },
         occasion: { type: 'string', enum: ['confirmation', 'reminder', 'reactivation', 'custom'] },
         tone: { type: 'string', enum: ['warm', 'formal'] },
-        customText: { type: 'string', description: 'Optional free-text hint; the model rewrites it in the chosen tone.' },
+        customText: { type: 'string', description: "Optional. For occasion 'custom': what the message should say, in Spanish, addressing her as «tú»." },
       },
       required: ['clientId'],
     },
   },
+
+  // --------------------------------------------------------------------
+  //  Sprint 14: write tools. Always require human approval.
+  //  The LLM is instructed to NEVER execute these directly; it must
+  //  produce a `pendingAction` via the orchestrator and wait for the
+  //  user to click Approve. See ActionApprovalService.
+  // --------------------------------------------------------------------
 
   {
     name: 'send_message',
@@ -311,9 +333,25 @@ export const COPILOT_TOOLS = [
   },
 ] as const;
 
+/**
+ * The tools that change something and so go through an approval card. Every
+ * other tool in COPILOT_TOOLS is read-only and runs straight away. Drafting a
+ * message is NOT here (Copilot audit M8): it only returns text.
+ */
+export const COPILOT_WRITE_TOOLS = [
+  'send_message',
+  'reschedule_appointment',
+  'mark_no_show',
+  'create_coupon',
+  'close_waitlist_slot',
+] as const;
+
 /* -------------------------------------------------------------------------- */
 /*  Tool implementations                                                    */
 /* -------------------------------------------------------------------------- */
+
+/** find_filling_opportunities lists at most this many gaps (Copilot audit M5: bounded payloads). */
+const MAX_LISTED_GAPS = 40;
 
 /** A staff account linked to no professional: nothing of anyone's, not the whole salon's. */
 const STAFF_NOT_LINKED = {
@@ -324,6 +362,9 @@ const STAFF_NOT_LINKED = {
 @Injectable()
 export class SalonCopilotToolsService {
   private readonly logger = new Logger(SalonCopilotToolsService.name);
+
+  /** The clock the gaps read "now" from; the specs pin it. */
+  now: () => Date = () => new Date();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -389,12 +430,6 @@ export class SalonCopilotToolsService {
     const i = (input ?? {}) as Record<string, any>;
     try {
       switch (name) {
-        case 'draft_follow_up_message': {
-          const client = await this.previewClient(i.clientId, ctx);
-          if (!client) return 'Clienta no encontrada en tu salón: no se redactará nada.';
-          const channel = i.channel === 'email' ? 'un email' : 'un WhatsApp';
-          return `Redactar ${channel} para ${client} (solo el borrador: no se envía nada).`;
-        }
         case 'send_message': {
           const client = await this.previewClient(i.clientId, ctx, true);
           if (!client) return 'Clienta no encontrada en tu salón: no se enviará nada.';
@@ -493,7 +528,7 @@ export class SalonCopilotToolsService {
    */
   private async getMyAgenda(args: Record<string, unknown>, ctx: CopilotToolContext) {
     const date = await this.parseDateOrToday(args.date, ctx);
-    const requestedProfId = args.professionalId as string | undefined;
+    const requestedProfId = typeof args.professionalId === 'string' && args.professionalId ? args.professionalId : undefined;
 
     if (ctx.role === 'staff') {
       // `ctx.userId` is the User id, not the Professional id: comparing the
@@ -511,7 +546,9 @@ export class SalonCopilotToolsService {
       return this.computeAgenda(ctx, date, own);
     }
 
-    return this.computeAgenda(ctx, date, requestedProfId);
+    const location = await this.resolveLocation(args.location, ctx);
+    if (isLocationError(location)) return location;
+    return this.computeAgenda(ctx, date, requestedProfId ?? null, location);
   }
 
   /**
@@ -699,20 +736,37 @@ export class SalonCopilotToolsService {
   }
 
   /**
-   * Build the agenda response with gaps ≥ 30 min computed in JS.
-   * Gaps are surfaced in the same shape as `appointments` (start, end,
-   * duration_minutes) so the LLM can answer "tienes un hueco a las 16:00
-   * de 1h" naturally.
+   * A day's agenda and its free gaps per professional (Copilot audit M6):
+   * each professional's bookable hours minus closures, time off and her own
+   * appointments, from now on (copilot-gaps.ts, the daily briefing's rule).
+   * It used to merge every professional into one row and report the space
+   * between consecutive appointments: a professional free all afternoon never
+   * showed and the lunch closure read as a gap.
    */
   private async computeAgenda(
     ctx: CopilotToolContext,
     date: Date,
     professionalId: string | null,
+    location: { id: string; name: string } | null = null,
   ) {
     // Dates are stored as their UTC midnight: the day is [date, date + 1).
     const dayStart = new Date(date);
     const dayEnd = new Date(dayStart);
     dayEnd.setUTCDate(dayStart.getUTCDate() + 1);
+    const day = dayStart.toISOString().slice(0, 10);
+    const clock = await this.salonClock(ctx);
+
+    const { gaps, professionals } = await loadProfessionalGaps(ctx.prisma, {
+      tenantId: ctx.tenantId,
+      fromDay: day,
+      toDay: day,
+      todayDay: clock.today,
+      nowMinutes: clock.nowMinutes,
+      openingHours: clock.openingHours,
+      professionalIds: professionalId ? [professionalId] : null,
+      locationId: location?.id ?? null,
+      minGapMinutes: 30,
+    });
 
     const where: Record<string, unknown> = {
       tenantId: ctx.tenantId,
@@ -721,6 +775,8 @@ export class SalonCopilotToolsService {
       status: { in: ['confirmed', 'pending', 'in_progress'] },
     };
     if (professionalId) where.professionalId = professionalId;
+    // One location: the appointments of the professionals who work there.
+    else if (location) where.professionalId = { in: professionals.map((p) => p.id) };
 
     const appointments = await this.prisma.appointment.findMany({
       where,
@@ -731,35 +787,16 @@ export class SalonCopilotToolsService {
         status: true,
         client: { select: { id: true, firstName: true } },
         professional: { select: { id: true, firstName: true, lastName: true } },
-        duration: true,
-        service: { select: { bufferTime: true } },
         services: {
-          select: { type: true, status: true, service: { select: { name: true, bufferTime: true } } },
+          select: { service: { select: { name: true } } },
           orderBy: VISIT_ROW_ORDER as any,
         },
       },
     });
 
-    // Compute gaps ≥ 30 min between consecutive appointments. A gap starts
-    // when the professional is free again: after the appointment and the
-    // cleanup time after it ("tiempo de limpieza").
-    const gaps: Array<{ start: string; end: string; minutes: number }> = [];
-    for (let i = 0; i + 1 < appointments.length; i++) {
-      const endA = timeToMinutes(appointments[i].scheduledTime)
-        + minutesUntilFree(appointments[i] as any, this.estimateAppointmentDuration(appointments[i]));
-      const startB = timeToMinutes(appointments[i + 1].scheduledTime);
-      const gap = startB - endA;
-      if (gap >= 30) {
-        gaps.push({
-          start: minutesToTime(endA),
-          end: minutesToTime(startB),
-          minutes: gap,
-        });
-      }
-    }
-
     return {
-      date: dayStart.toISOString().slice(0, 10),
+      date: day,
+      ...(location ? { location: location.name } : {}),
       totalAppointments: appointments.length,
       confirmed: appointments.filter((a) => a.status === 'confirmed').length,
       pending: appointments.filter((a) => a.status === 'pending').length,
@@ -769,21 +806,29 @@ export class SalonCopilotToolsService {
         status: a.status,
         client: a.client,
         professional: a.professional,
-        services: a.services.map((s) => s.service.name),
+        services: a.services.map((s) => s.service?.name).filter(Boolean),
       })),
-      gaps,  // only gaps ≥ 30 min
+      // ≥ 30 min, per professional, from now on.
+      gaps: gaps.map((g) => ({
+        professionalId: g.professionalId,
+        professionalFirstName: g.professionalFirstName,
+        start: g.start,
+        end: g.end,
+        minutes: g.minutes,
+      })),
     };
   }
 
   /**
    * The day asked for (YYYY-MM-DD) or the SALON's today, as the UTC midnight
    * dates are stored at. It used the server's clock (UTC): between midnight
-   * and 01:00/02:00 in Madrid "today" was yesterday.
+   * and 01:00/02:00 in Madrid "today" was yesterday. (The pattern had lost
+   * its backslashes, so every date asked for read as today.)
    */
   private async parseDateOrToday(input: unknown, ctx: CopilotToolContext): Promise<Date> {
-    if (typeof input === 'string' && /^d{4}-d{2}-d{2}$/.test(input)) {
+    if (typeof input === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input)) {
       const d = new Date(`${input}T00:00:00.000Z`);
-      if (!Number.isNaN(d.getTime())) return d;
+      if (!Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === input) return d;
     }
     return new Date(`${await this.salonDay(ctx)}T00:00:00.000Z`);
   }
@@ -797,18 +842,55 @@ export class SalonCopilotToolsService {
     } catch {
       timezone = undefined; // the default zone (Spain)
     }
-    return salonToday(safeTimeZone(timezone));
+    return salonToday(safeTimeZone(timezone), this.now());
+  }
+
+  /** The salon's today, its clock now (minutes since midnight) and its opening hours. */
+  private async salonClock(
+    ctx: CopilotToolContext,
+  ): Promise<{ today: string; nowMinutes: number; openingHours: unknown }> {
+    let tenant: { timezone?: string | null; openingHours?: unknown } | null = null;
+    try {
+      tenant = await this.prisma.tenant.findUnique({
+        where: { id: ctx.tenantId },
+        select: { timezone: true, openingHours: true },
+      });
+    } catch {
+      tenant = null; // the default zone (Spain), no salon hours
+    }
+    const timeZone = safeTimeZone(tenant?.timezone);
+    const now = this.now();
+    return { today: salonToday(timeZone, now), nowMinutes: salonNowMinutes(timeZone, now), openingHours: tenant?.openingHours };
   }
 
   /**
-   * Rough appointment duration from the services it bundles. Used only
-   * for gap detection — when the LLM needs a precise duration for a
-   * single appointment it should use the existing VirtualReceptionist's
-   * `get_appointment_duration` tool, not this estimate.
+   * One of the salon's locations, by id or name ("Gracia" finds "Local
+   * Gracia"); null when none was asked for; an error naming the locations
+   * when it is not one of them.
    */
-  private estimateAppointmentDuration(appt: { services: Array<{ service: { name: string } }> }): number {
-    // Conservative default 30 min if no services count.
-    return Math.max(30, appt.services.length * 30);
+  private async resolveLocation(
+    input: unknown,
+    ctx: CopilotToolContext,
+  ): Promise<{ id: string; name: string } | { error: string; message: string } | null> {
+    if (typeof input !== 'string' || !input.trim()) return null;
+    const wanted = input.trim();
+    const locations: Array<{ id: string; name: string }> =
+      (await (this.prisma as any).location?.findMany?.({
+        where: { tenantId: ctx.tenantId, isActive: true },
+        select: { id: true, name: true },
+      })) ?? [];
+    const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const found =
+      locations.find((l) => l.id === wanted) ??
+      locations.find((l) => fold(l.name) === fold(wanted)) ??
+      locations.find((l) => fold(l.name).includes(fold(wanted)));
+    if (found) return found;
+    return {
+      error: 'location_not_found',
+      message: locations.length
+        ? `No hay ningún local «${wanted}». Los locales del salón son: ${locations.map((l) => l.name).join(', ')}.`
+        : 'Este salón no tiene varios locales: pregunta sin indicar local.',
+    };
   }
 
   // --------------------------------------------------------------------
@@ -816,12 +898,13 @@ export class SalonCopilotToolsService {
   // --------------------------------------------------------------------
 
   /**
-   * P2A-staff-copilot sprint-13. Scan the next N days for gaps ≥
-   * `minGapMinutes` (default 30) and rank the top N wait-list clients
-   * who could realistically fill them (oldest lastVisit first). Owner
-   * and manager see the full result with client names and
-   * preferences; stylist/receptionist see only the gap list (no
-   * client names) to respect privacy.
+   * The free gaps of the next days, per professional (Copilot audit M6, see
+   * computeAgenda), and for owner / admin / manager the wait-list clients
+   * who fit each one: still waiting and not blocked, her dates include the
+   * day, she asked for that professional or none, the professional performs
+   * her service and it fits. It used to offer the same five clients
+   * (blocked ones included) for every gap. Staff and receptionist get the
+   * gaps without client names; staff only her own.
    */
   private async findFillingOpportunities(
     args: Record<string, unknown>,
@@ -830,116 +913,72 @@ export class SalonCopilotToolsService {
     const daysAhead = bounded(args.daysAhead, 7, 1, 30);
     const minGap = bounded(args.minGapMinutes, 30, 15, 480);
     const topN = bounded(args.topN, 5, 1, 10);
+    const requestedProfId = typeof args.professionalId === 'string' && args.professionalId ? args.professionalId : null;
 
-    // The salon's today, at the UTC midnight dates are stored at.
-    const today = new Date(`${await this.salonDay(ctx)}T00:00:00.000Z`);
-    const horizon = new Date(today);
-    horizon.setUTCDate(today.getUTCDate() + daysAhead);
-
-    // Staff: their own professional's appointments (this compared with the
-    // User id, which no appointment carries).
-    let ownProfessionalId: string | null = null;
+    // Staff: their own professional (this compared with the User id, which
+    // no appointment carries).
+    let professionalIds: string[] | null = requestedProfId ? [requestedProfId] : null;
+    let location: { id: string; name: string } | null = null;
     if (ctx.role === 'staff') {
-      ownProfessionalId = await this.findStaffProfessionalId(ctx);
-      if (!ownProfessionalId) return STAFF_NOT_LINKED;
-    }
-
-    // Fetch every appointment in the window, grouped per day.
-    const appointments = await ctx.prisma.appointment.findMany({
-      where: {
-        tenantId: ctx.tenantId,
-        isTest: false,
-        scheduledDate: { gte: today, lt: horizon },
-        status: { in: ['confirmed', 'pending'] },
-        ...(ownProfessionalId ? { professionalId: ownProfessionalId } : {}),
-      },
-      orderBy: [{ scheduledDate: 'asc' }, { scheduledTime: 'asc' }],
-      select: {
-        id: true,
-        scheduledDate: true,
-        scheduledTime: true,
-        professionalId: true,
-        duration: true,
-        service: { select: { bufferTime: true } },
-        services: {
-          select: { type: true, status: true, service: { select: { name: true, duration: true, bufferTime: true } } },
-          orderBy: VISIT_ROW_ORDER as any,
-        },
-      },
-    });
-
-    // Group by day; compute the gaps inside each day.
-    const byDay = new Map<string, typeof appointments>();
-    for (const a of appointments) {
-      const key = a.scheduledDate.toISOString().slice(0, 10);
-      if (!byDay.has(key)) byDay.set(key, []);
-      byDay.get(key)!.push(a);
-    }
-
-    const gaps: Array<{
-      date: string;
-      start: string;
-      end: string;
-      minutes: number;
-      suggestions: Array<{ clientId: string; firstName: string; lastVisit: string | null }>;
-    }> = [];
-    for (const [date, list] of byDay.entries()) {
-      for (let i = 0; i + 1 < list.length; i++) {
-        // Free again after the appointment and its cleanup time.
-        const endA =
-          timeToMinutes(list[i].scheduledTime) +
-          minutesUntilFree(list[i] as any, this.estimateAppointmentDuration(list[i]));
-        const startB = timeToMinutes(list[i + 1].scheduledTime);
-        const minutes = startB - endA;
-        if (minutes < minGap) continue;
-
-        // For manager+ we attach a top-N of wait-list clients. For
-        // lower roles we omit client names to respect privacy.
-        let suggestions: typeof gaps[number]['suggestions'] = [];
-        if (['owner', 'admin', 'manager', 'saas_owner'].includes(ctx.role)) {
-          const candidates = await ctx.prisma.waitList.findMany({
-            where: {
-              tenantId: ctx.tenantId,
-              status: 'waiting',
-              OR: [
-                { earliestDate: null },
-                { earliestDate: { lte: horizon } },
-              ],
-              AND: [
-                { OR: [{ latestDate: null }, { latestDate: { gte: today } }] },
-              ],
-            },
-            include: {
-              client: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastVisit: true,
-                },
-              },
-            },
-            orderBy: { client: { lastVisit: 'asc' } },
-            take: topN,
-          });
-          suggestions = candidates.map((w) => ({
-            clientId: w.client.id,
-            firstName: w.client.firstName,
-            lastVisit: w.client.lastVisit?.toISOString().slice(0, 10) ?? null,
-          }));
-        }
-
-        gaps.push({
-          date,
-          start: minutesToTime(endA),
-          end: minutesToTime(startB),
-          minutes,
-          suggestions,
-        });
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
+      if (requestedProfId && requestedProfId !== own) {
+        return { error: 'forbidden', message: 'Solo puedes ver tus propios huecos.' };
       }
+      professionalIds = [own];
+    } else {
+      const resolved = await this.resolveLocation(args.location, ctx);
+      if (isLocationError(resolved)) return resolved;
+      location = resolved;
     }
-    gaps.sort((a, b) => b.minutes - a.minutes);
 
-    return { totalGaps: gaps.length, daysAhead, minGapMinutes: minGap, gaps };
+    const clock = await this.salonClock(ctx);
+    const fromDay = clock.today;
+    const toDay = addDays(fromDay, daysAhead - 1);
+    const { gaps: all } = await loadProfessionalGaps(ctx.prisma, {
+      tenantId: ctx.tenantId,
+      fromDay,
+      toDay,
+      todayDay: clock.today,
+      nowMinutes: clock.nowMinutes,
+      openingHours: clock.openingHours,
+      professionalIds,
+      locationId: location?.id ?? null,
+      minGapMinutes: minGap,
+    });
+    all.sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.start.localeCompare(b.start) ||
+        a.professionalFirstName.localeCompare(b.professionalFirstName),
+    );
+    const listed = all.slice(0, MAX_LISTED_GAPS).map((g) => ({
+      date: g.date,
+      start: g.start,
+      end: g.end,
+      minutes: g.minutes,
+      professionalId: g.professionalId,
+      professionalFirstName: g.professionalFirstName,
+    }));
+
+    // Owner / admin / manager: who on the wait list fits each gap. Lower
+    // roles get no client names.
+    const seesClients = ['owner', 'admin', 'manager', 'saas_owner'].includes(ctx.role);
+    const gaps =
+      seesClients && listed.length
+        ? suggestForGaps(listed, await loadWaitListCandidates(ctx.prisma, { tenantId: ctx.tenantId, fromDay, toDay }), topN)
+        : listed.map((g) => ({ ...g, suggestions: [] as Array<never> }));
+
+    return {
+      from: fromDay,
+      to: toDay,
+      ...(location ? { location: location.name } : {}),
+      daysAhead,
+      minGapMinutes: minGap,
+      totalGaps: all.length,
+      ...(all.length > listed.length ? { listedGaps: listed.length, note: `Solo se listan los ${listed.length} primeros huecos por fecha.` } : {}),
+      gaps,
+    };
   }
 
   /**
@@ -1128,51 +1167,95 @@ export class SalonCopilotToolsService {
   // ====================================================================
   //  Sprint 14: write tools. Every one of these is gated by human
   //  approval at the AssistantService layer; here they just produce a
-  //  preview + perform the action when called for real.
+  //  preview + perform the action when called for real. Drafting a
+  //  message is the exception: a read tool (Copilot audit M8).
   // ====================================================================
 
   /**
+   * Draft a message for a client, for the salon to copy and send herself.
+   * Sends nothing and needs no approval (Copilot audit M8): it used to go
+   * through an approval card just to show a text, hidden in "Ver detalle",
+   * and the model never learnt it had been approved. The text addresses the
+   * client as «tú», like every message KiraRoom sends her, and names her
+   * next appointment when there is one.
+   */
+  private async draftFollowUpMessage(
+    args: Record<string, unknown>,
+    ctx: CopilotToolContext,
+  ) {
+    const clientId = typeof args.clientId === 'string' ? args.clientId : undefined;
+    if (!clientId) return { error: 'missing_clientId' };
 
-/**
- * Draft a follow-up message for a client. Does NOT send.
- * Returns `{ draft, channel, occasion, tone }` so the LLM can show
- * the body verbatim and ask the user to confirm before a `send_message`
- * is dispatched.
- */
-private async draftFollowUpMessage(
-  args: Record<string, unknown>,
-  ctx: CopilotToolContext,
-) {
-  const clientId = args.clientId as string | undefined;
-  if (!clientId) return { error: 'missing_clientId' };
+    const channel: DraftChannel = args.channel === 'email' ? 'email' : 'whatsapp';
+    const occasion: DraftOccasion = (DRAFT_OCCASIONS as readonly string[]).includes(String(args.occasion))
+      ? (args.occasion as DraftOccasion)
+      : 'confirmation';
+    const tone: DraftTone = args.tone === 'formal' ? 'formal' : 'warm';
 
-  const channel = (args.channel as string) ?? 'whatsapp';
-  const occasion = (args.occasion as string) ?? 'confirmation';
-  const tone = (args.tone as string) ?? 'warm';
+    // A professional drafts only for the clients she has attended, as she
+    // reads their file.
+    let reach: Record<string, unknown> = {};
+    if (ctx.role === 'staff') {
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
+      reach = clientReachWhere({ professionalId: own });
+    }
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, tenantId: ctx.tenantId, ...reach },
+      select: { id: true, firstName: true },
+    });
+    if (!client) return { error: 'client_not_found' };
 
-  const client = await this.prisma.client.findFirst({
-    where: { id: clientId, tenantId: ctx.tenantId },
-    select: { id: true, firstName: true, lastVisit: true },
-  });
-  if (!client) return { error: 'client_not_found' };
+    const tenant = await (this.prisma as any).tenant
+      ?.findUnique?.({ where: { id: ctx.tenantId }, select: { name: true, timezone: true } })
+      .catch(() => null);
+    const salonName: string | null = tenant?.name?.trim() || null;
 
-  // The draft is template-driven here (no extra LLM call). The LLM
-  // can rewrite it in the prompt context if needed. Keeping the
-  // generation deterministic keeps the L4 test simple and the audit
-  // log readable.
-  const name = client.firstName;
-  const draft = composeFollowUp({ name, channel, occasion, tone, customText: args.customText as string | undefined });
+    // Her next appointment, for a confirmation or a reminder.
+    let next: { date: Date; time: string } | null = null;
+    if (occasion === 'confirmation' || occasion === 'reminder') {
+      const today = new Date(`${salonToday(safeTimeZone(tenant?.timezone), this.now())}T00:00:00.000Z`);
+      const appt = await (this.prisma as any).appointment
+        ?.findFirst?.({
+          where: {
+            tenantId: ctx.tenantId,
+            clientId,
+            isTest: false,
+            status: { in: ['pending', 'confirmed'] },
+            scheduledDate: { gte: today },
+          },
+          orderBy: [{ scheduledDate: 'asc' }, { scheduledTime: 'asc' }],
+          select: { scheduledDate: true, scheduledTime: true },
+        })
+        .catch(() => null);
+      if (appt?.scheduledDate && appt?.scheduledTime) next = { date: appt.scheduledDate, time: appt.scheduledTime };
+    }
 
-  return {
-    clientId,
-    channel,
-    occasion,
-    tone,
-    draft,
-    requiresApproval: true,
-    next: 'send_message',
-  };
-}
+    const draft = composeFollowUp({
+      name: client.firstName,
+      salonName,
+      occasion,
+      tone,
+      next: next ? { date: spanishDate(next.date), time: next.time } : null,
+      customText: typeof args.customText === 'string' ? args.customText.slice(0, 1000) : undefined,
+    });
+
+    return {
+      clientId,
+      clientFirstName: client.firstName,
+      channel: channel === 'email' ? 'email' : 'WhatsApp',
+      occasion: DRAFT_OCCASION_LABEL[occasion],
+      tone: tone === 'formal' ? 'formal' : 'cercano',
+      ...(channel === 'email' ? { subject: draftSubject(occasion, salonName) } : {}),
+      draft,
+      sent: false,
+      instructions:
+        'This is only a draft: nothing was sent and nothing needs approving. Show the draft text in your reply exactly as ' +
+        'it is, and tell the user (in her language) to copy it and send it herself from her WhatsApp or email. ' +
+        'You cannot send this free text: the only WhatsApp you can send is an approved template through send_message, ' +
+        'and only when that action is available to her.',
+    };
+  }
 
 /**
  * Send a single WhatsApp template message to a client.
@@ -1670,6 +1753,10 @@ private async rescheduleAppointment(
   }
 }
 
+function isLocationError(v: { id: string; name: string } | { error: string; message: string } | null): v is { error: string; message: string } {
+  return !!v && 'error' in v;
+}
+
 /**
  * A number the model asked for, kept within [min, max] (Copilot audit M5):
  * "dame todas mis clientas" used to send the whole client base to the AI in
@@ -1680,55 +1767,82 @@ export function bounded(value: unknown, fallback: number, min: number, max: numb
   return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
 }
 
-function timeToMinutes(t: string): number {
-  const parts = t.split(':');
-  return Number(parts[0]) * 60 + Number(parts[1] || 0);
-}
-
-function minutesToTime(m: number): string {
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-}
-
 // --------------------------------------------------------------------
 //  Helpers for the write tools (sprint 14)
 // --------------------------------------------------------------------
 
+/* Drafts (draft_follow_up_message) */
+
+export const DRAFT_OCCASIONS = ['confirmation', 'reminder', 'reactivation', 'custom'] as const;
+export type DraftOccasion = (typeof DRAFT_OCCASIONS)[number];
+type DraftChannel = 'whatsapp' | 'email';
+type DraftTone = 'warm' | 'formal';
+
+/** What each occasion is called in the salon's words (the card used to say «de confirmation»). */
+export const DRAFT_OCCASION_LABEL: Record<DraftOccasion, string> = {
+  confirmation: 'confirmación de cita',
+  reminder: 'recordatorio de cita',
+  reactivation: 'volver a verla',
+  custom: 'mensaje propio',
+};
+
+function draftSubject(occasion: DraftOccasion, salonName: string | null): string {
+  const at = salonName ? ` en ${salonName}` : '';
+  switch (occasion) {
+    case 'confirmation':
+      return `Confirma tu cita${at}`;
+    case 'reminder':
+      return `Recordatorio de tu cita${at}`;
+    case 'reactivation':
+      return salonName ? `Te echamos de menos en ${salonName}` : 'Te echamos de menos';
+    default:
+      return salonName ?? 'Un mensaje del salón';
+  }
+}
+
 /**
- * Deterministic follow-up draft generator. Keeps the L4 tests simple
- * and the audit log human-readable. The LLM may rewrite this in its
- * final reply, but the source of truth is this template.
+ * The draft's text, deterministic (no extra model call). It addresses the
+ * client as «tú» in both tones, as every message KiraRoom sends her does
+ * ("Hola Carmen, te recordamos tu cita..."): the formal one used to open
+ * with «Estimada» and close «Atentamente» around a «te» body.
  */
-function composeFollowUp(input: {
+export function composeFollowUp(input: {
   name: string;
-  channel: string;
-  occasion: string;
-  tone: string;
+  salonName: string | null;
+  occasion: DraftOccasion;
+  tone: DraftTone;
+  /** Her next appointment, in Spanish ("jueves, 20 de noviembre"), when known. */
+  next?: { date: string; time: string } | null;
   customText?: string;
 }): string {
-  const greeting = input.tone === 'formal'
-    ? `Estimada ${input.name}`
-    : `Hola ${input.name}`;
-  const closer = input.tone === 'formal' ? 'Atentamente,' : '¡Gracias!';
+  const formal = input.tone === 'formal';
+  const greeting = formal ? `Hola, ${input.name}:` : `¡Hola, ${input.name}!`;
+  const at = input.salonName ? ` en ${input.salonName}` : '';
+  const when = input.next ? ` del ${input.next.date} a las ${input.next.time}` : '';
 
   let body: string;
   switch (input.occasion) {
     case 'reminder':
-      body = 'te escribimos para recordarte tu próxima cita. ¿Sigue en pie?';
+      body = input.next
+        ? `Te recordamos tu cita${at}${when}. ¡Te esperamos!`
+        : `Te recordamos tu próxima cita${at}. ¡Te esperamos!`;
       break;
     case 'reactivation':
-      body = 'hace tiempo que no te vemos por el salón. ¿Te gustaría reservar?';
+      body = `Hace tiempo que no te vemos${input.salonName ? ` por ${input.salonName}` : ' por el salón'}. ¿Te apetece reservar una cita? Nos encantará verte.`;
       break;
     case 'custom':
       body = input.customText?.trim() || '¿En qué podemos ayudarte?';
       break;
     case 'confirmation':
     default:
-      body = 'queremos confirmar tu cita. ¿Puedes confirmar que te viene bien?';
+      body = input.next
+        ? `Te escribimos para confirmar tu cita${at}${when}. ¿Nos confirmas que te viene bien?`
+        : `Te escribimos para confirmar tu próxima cita${at}. ¿Nos confirmas que te viene bien?`;
       break;
   }
-  return `${greeting}, ${body}\n\n${closer}\nEl equipo del salón`;
+  const closer = formal ? 'Un saludo,' : '¡Gracias!';
+  const signature = input.salonName ?? 'El equipo del salón';
+  return `${greeting}\n\n${body}\n\n${closer}\n${signature}`;
 }
 
 /**
