@@ -1,7 +1,11 @@
 import { createHmac } from "crypto";
 import { Logger } from "@nestjs/common";
 import { phoneKey } from "../common/phone";
-import { smsE164 } from "../notifications/services/sms.service";
+import { SMS_BOOKING_DIAL_CODES, smsCountryAllowed } from "../notifications/services/sms.service";
+
+// The country list lives beside sendSms, which now refuses any other number
+// for every SMS (wait list, reschedule...), not only booking ones.
+export { SMS_BOOKING_DIAL_CODES, smsCountryAllowed };
 
 /**
  * Caps on the SMS a booking made from outside the salon sends -- its public
@@ -34,26 +38,6 @@ import { smsE164 } from "../notifications/services/sms.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * The country codes a booking SMS may go to: Spain and the rest of the
- * EU/EEA (Norway, Iceland, Liechtenstein). Not the UK (44), Switzerland
- * (41) or Gibraltar (350). Andorra (376) is not in the EEA either.
- */
-export const SMS_BOOKING_DIAL_CODES: readonly string[] = [
-  "34", // Spain
-  "30", "31", "32", "33", "36", "39", "40", "43", "45", "46", "47", "48", "49",
-  "351", "352", "353", "354", "356", "357", "358", "359",
-  "370", "371", "372", "385", "386", "420", "421", "423",
-];
-
-/** Whether a booking SMS may go to this number (by its country code, as the SMS is sent). */
-export function smsCountryAllowed(phone: string): boolean {
-  const e164 = smsE164(phone ?? "");
-  if (!/^\+\d{6,15}$/.test(e164)) return false;
-  const digits = e164.slice(1);
-  // No code is a prefix of another in the list, so the first match is the one.
-  return SMS_BOOKING_DIAL_CODES.some((code) => digits.startsWith(code));
-}
 const logger = new Logger("PublicBookingSmsCap");
 
 export interface PublicSmsLimits {

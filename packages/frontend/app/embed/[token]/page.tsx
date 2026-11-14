@@ -180,6 +180,9 @@ export default function EmbedWidgetPage() {
   const [wantsWhatsAppPromotions, setWantsWhatsAppPromotions] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bookingId, setBookingId] = useState<string | null>(null);
+  // "confirmed", or waiting for the salon to confirm it (the salon's setting
+  // applies to the widget too): the end screen must not call a request booked.
+  const [bookedConfirmed, setBookedConfirmed] = useState(false);
   // Where the server booked it (POST /appointments answers with the location).
   const [bookedPlace, setBookedPlace] = useState<{ name: string; address: string } | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
@@ -363,6 +366,7 @@ export default function EmbedWidgetPage() {
         return;
       }
       setBookingId(appt.id);
+      setBookedConfirmed(appt?.status === "confirmed");
       setBookedPlace(confirmedPlace(bookingLocations(config), locationId, appt));
       setStep("done");
     } catch (err: any) {
@@ -827,13 +831,17 @@ export default function EmbedWidgetPage() {
         {step === "done" && (
           <div className="text-center space-y-3 py-12">
             <Check className="w-12 h-12 text-green-600 mx-auto" />
-            <h2 className="text-xl font-semibold text-gray-900">
-              ¡Reserva registrada!
+            <h2 data-test="widget-done-title" className="text-xl font-semibold text-gray-900">
+              {bookedConfirmed ? "¡Cita confirmada!" : "Solicitud recibida"}
             </h2>
             <p className="text-sm text-gray-500">
-              {email.trim()
-                ? "Te enviaremos un email de confirmación. Si el salón requiere firma de consentimiento, te llegará un enlace en los próximos minutos."
-                : "El salón te contactará en tu teléfono si hay algún cambio."}
+              {bookedConfirmed
+                ? email.trim()
+                  ? "Te hemos enviado un email con los datos de tu cita. Si el salón requiere firma de consentimiento, te llegará un enlace en los próximos minutos."
+                  : "El salón te contactará en tu teléfono si hay algún cambio."
+                : email.trim()
+                  ? "Hemos recibido tu solicitud. El salón te confirmará la cita y te llegará un email cuando lo haga."
+                  : "Hemos recibido tu solicitud. El salón te confirmará la cita por teléfono."}
             </p>
             {bookedPlace && (
               <p data-test="widget-booked-at" className="text-sm text-gray-700">

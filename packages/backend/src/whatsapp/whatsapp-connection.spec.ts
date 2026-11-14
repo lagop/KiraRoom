@@ -96,6 +96,7 @@ function service(
     debugToken: jest.fn(async () => ok({ data: { is_valid: true, expires_at: 0 } })),
     subscribeApp: jest.fn(async () => ok({ success: true })),
     listSubscribedApps: jest.fn(async () => ok({ data: [{ whatsapp_business_api_data: { id: "kira-app" } }] })),
+    unsubscribeApp: jest.fn(async () => ok({ success: true })),
     ...(opts.meta ?? {}),
   };
   const env: Record<string, string> = { META_APP_ID: "kira-app", ...(opts.env ?? {}) };
@@ -333,5 +334,23 @@ describe("one salon per WhatsApp number (B11, M13)", () => {
     prisma.whatsAppConnection.findMany.mockResolvedValueOnce([]);
     expect(await (s as any).lookupTenantByPhone("222")).toBeNull();
     expect(prisma.whatsAppConnection.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("a disconnect unsubscribes KiraRoom's app from the account's webhooks, then deletes the token", async () => {
+    const { s, prisma, meta } = service();
+    await s.disconnect("t1");
+    expect(meta.unsubscribeApp).toHaveBeenCalledWith("stored-token", expect.any(String));
+    expect(meta.unsubscribeApp.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.whatsAppConnection.delete.mock.invocationCallOrder[0],
+    );
+    expect(prisma.whatsAppConnection.delete).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
+  });
+
+  it("Meta refusing the unsubscribe (a token the salon revoked) never blocks the disconnect", async () => {
+    const { s, prisma } = service({
+      meta: { unsubscribeApp: jest.fn(async () => ({ ok: false, error: { code: 190, message: "Invalid token" } })) },
+    });
+    await expect(s.disconnect("t1")).resolves.toEqual({ disconnected: true });
+    expect(prisma.whatsAppConnection.delete).toHaveBeenCalled();
   });
 });

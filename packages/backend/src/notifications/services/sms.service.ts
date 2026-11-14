@@ -19,6 +19,29 @@ export function smsE164(phone: string): string {
   return cleaned;
 }
 
+/**
+ * The country codes an SMS may go to: Spain and the rest of the EU/EEA
+ * (Norway, Iceland, Liechtenstein). Not the UK (44), Switzerland (41) or
+ * Gibraltar (350). Andorra (376) is not in the EEA either. Premium-rate
+ * "SMS pumping" mostly targets far-off ranges, and the salons' clients are
+ * here.
+ */
+export const SMS_BOOKING_DIAL_CODES: readonly string[] = [
+  '34', // Spain
+  '30', '31', '32', '33', '36', '39', '40', '43', '45', '46', '47', '48', '49',
+  '351', '352', '353', '354', '356', '357', '358', '359',
+  '370', '371', '372', '385', '386', '420', '421', '423',
+];
+
+/** Whether an SMS may go to this number (by its country code, as the SMS is sent). */
+export function smsCountryAllowed(phone: string): boolean {
+  const e164 = smsE164(phone ?? '');
+  if (!/^\+\d{6,15}$/.test(e164)) return false;
+  const digits = e164.slice(1);
+  // No code is a prefix of another in the list, so the first match is the one.
+  return SMS_BOOKING_DIAL_CODES.some((code) => digits.startsWith(code));
+}
+
 export interface SmsOptions {
   to: string;
   body: string;
@@ -92,6 +115,13 @@ export class SmsService {
     if (!this.isValidPhoneNumber(formattedPhone)) {
       this.logger.error(`Invalid phone number format: ${maskPhone(options.to)}`);
       return { success: false, error: 'Invalid phone number format' };
+    }
+
+    // Every SMS, not only booking ones (the wait list and reschedule SMS
+    // went to any number): outside Spain and the EU/EEA nothing is sent.
+    if (!smsCountryAllowed(formattedPhone)) {
+      this.logger.warn(`SMS skipped: number outside Spain/EU/EEA (${maskPhone(options.to)})`);
+      return { success: false, error: 'country' };
     }
 
     try {

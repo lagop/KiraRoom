@@ -162,6 +162,10 @@ describe("WhatsApp webhook routing", () => {
     const prisma: any = {
       client: { findFirst: jest.fn(async () => null) },
       whatsAppCampaignRecipient: { findFirst: jest.fn(async () => null), updateMany: jest.fn(async () => ({ count: 1 })) },
+      notificationPreference: {
+        findUnique: jest.fn(async () => ({ preferences: { appointment_reminder: { whatsapp: true } } })),
+        upsert: jest.fn(async () => ({})),
+      },
       // The client file says "600 111 222"; Meta sends "34600111222".
       $queryRaw: jest.fn(async () => [{ id: "c1" }]),
       whatsAppOptOut: {
@@ -246,6 +250,18 @@ describe("WhatsApp webhook routing", () => {
     expect(prisma.whatsAppCampaignRecipient.updateMany).toHaveBeenCalledWith({
       where: { clientId: "c1", status: "pending" },
       data: { status: "opted_out" },
+    });
+    // The wait list's WhatsApp notice stops too (its template has no leave
+    // link); her other notice choices are kept.
+    expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({
+      where: { clientId: "c1" },
+      create: expect.anything(),
+      update: {
+        preferences: {
+          appointment_reminder: { whatsapp: true },
+          waitlist_slot_available: { whatsapp: false },
+        },
+      },
     });
   });
 

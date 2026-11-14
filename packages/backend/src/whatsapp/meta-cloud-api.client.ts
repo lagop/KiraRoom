@@ -195,6 +195,14 @@ export class MetaCloudApiClient {
     return this.graph(`${this.baseUrl()}/${encodeURIComponent(wabaId)}/subscribed_apps`, accessToken, "POST");
   }
 
+  /**
+   * Unsubscribes the token's app from the account's webhooks: once a salon
+   * disconnects, Meta stops sending its messages to KiraRoom.
+   */
+  unsubscribeApp(accessToken: string, wabaId: string): Promise<GraphCall<{ success?: boolean }>> {
+    return this.graph(`${this.baseUrl()}/${encodeURIComponent(wabaId)}/subscribed_apps`, accessToken, "DELETE");
+  }
+
   /** The apps subscribed to the account's webhooks. */
   listSubscribedApps(
     accessToken: string,
@@ -204,7 +212,7 @@ export class MetaCloudApiClient {
   }
 
   /** One Graph call: `{ ok, data }` or `{ ok: false, error }`, never throws. The URL is never logged. */
-  private async graph<T>(url: string, accessToken: string, method: "GET" | "POST" = "GET"): Promise<GraphCall<T>> {
+  private async graph<T>(url: string, accessToken: string, method: "GET" | "POST" | "DELETE" = "GET"): Promise<GraphCall<T>> {
     try {
       const resp = await fetch(url, { method, headers: { Authorization: `Bearer ${accessToken}` } });
       const json: any = await resp.json().catch(() => ({}));

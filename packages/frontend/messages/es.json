@@ -1633,6 +1633,12 @@
       "actions": {
         "saas_impersonate": "Entrada como soporte en un salón",
         "saas_impersonate_end": "Salida del modo soporte",
+        "team_access_granted": "Acceso al panel dado a una profesional",
+        "team_access_revoked": "Acceso al panel quitado a una profesional",
+        "team_password_reset": "Contraseña de una profesional cambiada por el salón",
+        "team_deactivated": "Profesional desactivada",
+        "team_reactivated": "Profesional reactivada",
+        "team_deleted": "Profesional eliminada",
         "tenant_create": "Salón creado desde la consola",
         "tenant_update": "Salón editado desde la consola",
         "tenant_suspend": "Salón dado de baja (Suspender)",

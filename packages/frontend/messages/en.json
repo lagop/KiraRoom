@@ -1633,6 +1633,12 @@
       "actions": {
         "saas_impersonate": "Entered a salon as support",
         "saas_impersonate_end": "Left support mode",
+        "team_access_granted": "Panel access given to a professional",
+        "team_access_revoked": "Panel access removed from a professional",
+        "team_password_reset": "Professional's password changed by the salon",
+        "team_deactivated": "Professional deactivated",
+        "team_reactivated": "Professional reactivated",
+        "team_deleted": "Professional deleted",
         "tenant_create": "Salon created from the console",
         "tenant_update": "Salon edited from the console",
         "tenant_suspend": "Salon subscription ended (Suspend)",
