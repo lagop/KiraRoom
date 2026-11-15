@@ -9,6 +9,12 @@ const base = (role: CopilotPromptContext['role'], language: 'es' | 'en' = 'es'):
   buildCopilotSystemPrompt({ salonName: 'Salón Rosa', assistantName: 'Kira', role, availableWriteTools: [], language });
 
 describe('copilot system prompt (B8)', () => {
+  // It offered «¿Quieres que te lo recuerde?» with no way to remind anyone.
+  it('never offers reminders or later actions it cannot do, in both languages', () => {
+    expect(base('owner', 'es')).toMatch(/no puedes crear recordatorios/);
+    expect(base('owner', 'en')).toMatch(/cannot set reminders/);
+  });
+
   it('does not tell a professional she sees the low stock or anyone’s spend', () => {
     const es = base('staff');
     expect(es).not.toMatch(/el stock bajo/i);
