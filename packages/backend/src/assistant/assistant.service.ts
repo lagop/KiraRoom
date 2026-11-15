@@ -289,23 +289,7 @@ export class AssistantService {
       take: 10,
       include: { pendingAction: { select: { status: true, resultSnapshot: true } } },
     });
-    const historyForLlm = history.reverse().flatMap((m) => {
-      if (m.role === 'assistant' || m.role === 'user') {
-        return [{ role: m.role as 'user' | 'assistant', content: m.content }];
-      }
-      if (m.role === 'tool') {
-        return [{ role: 'user' as const, content: m.content }];
-      }
-      if (m.role === 'approval') {
-        // The model never learnt what became of an action it proposed
-        // (Copilot audit M8/M9): it could not say "hecho" or carry on. A
-        // resolved one is told as an observation; a pending one is not
-        // (it would read as if the user had typed it).
-        const observation = approvalObservation(m.content, m.pendingAction?.status, m.pendingAction?.resultSnapshot);
-        return observation ? [{ role: 'user' as const, content: observation }] : [];
-      }
-      return [];
-    });
+    const historyForLlm = copilotHistoryForLlm(history.reverse());
 
     // 3. Persist the user message
     await this.prisma.assistantMessage.create({
@@ -1002,6 +986,43 @@ export const COPILOT_REFUSAL_REPLY =
  * became of it and, in a few words, the result (the coupon code, the
  * tool's own message). Null while it is pending.
  */
+/**
+ * The stored messages as the model reads them. A resolved action card is
+ * told as an observation (Copilot audit M8/M9) AFTER the reply of the turn
+ * that proposed it: the card row is written during that turn, before the
+ * reply, but it is approved or cancelled later. Told in place, the model read
+ * "aprobada y hecha (código JX8SJN)" before its own "está pendiente de tu
+ * aprobación", and then insisted the coupon had not been created. A pending
+ * card says nothing (it would read as if the user had typed it).
+ */
+export function copilotHistoryForLlm(
+  messages: Array<{ role: string; content: string; pendingAction?: { status?: string; resultSnapshot?: unknown } | null }>,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const out: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  let held: string[] = [];
+  const flush = () => {
+    for (const o of held) out.push({ role: 'user', content: o });
+    held = [];
+  };
+  for (const m of messages) {
+    if (m.role === 'assistant') {
+      out.push({ role: 'assistant', content: m.content });
+      flush();
+    } else if (m.role === 'user') {
+      // A card never answered by a reply (the turn failed): told before the next question.
+      flush();
+      out.push({ role: 'user', content: m.content });
+    } else if (m.role === 'tool') {
+      out.push({ role: 'user', content: m.content });
+    } else if (m.role === 'approval') {
+      const observation = approvalObservation(m.content, m.pendingAction?.status, m.pendingAction?.resultSnapshot);
+      if (observation) held.push(observation);
+    }
+  }
+  flush();
+  return out;
+}
+
 export function approvalObservation(preview: string, status: string | undefined, result: unknown): string | null {
   if (!status || status === 'pending') return null;
   const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
