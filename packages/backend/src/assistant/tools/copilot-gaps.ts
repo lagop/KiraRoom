@@ -10,7 +10,14 @@ import {
 } from '../../appointments/working-hours';
 import { availableWindows, dayBlocks, salonClosedOn, type TimeOffBlock } from '../../time-off/time-off-rules';
 import { timeOffBetween } from '../../time-off/time-off-query';
-import { minutesUntilFree, VISIT_ROW_ORDER } from '../../appointments/visit-totals';
+import {
+  VISIT_ROW_ORDER,
+  VISIT_ROW_SELECT,
+  appointmentBusyBlocks,
+  isLiveRow,
+  minutesUntilFree,
+  type VisitRow,
+} from '../../appointments/visit-totals';
 import { addDays } from '../../analytics/analytics-metrics';
 import type { BriefingBusy, BriefingGap, BriefingProfessional } from '../briefing-gaps';
 
@@ -34,6 +41,62 @@ import type { BriefingBusy, BriefingGap, BriefingProfessional } from '../briefin
 
 /** Appointments that hold the professional's time: everything but cancelled and no-show. */
 export const BUSY_STATUSES = ['pending', 'confirmed', 'in_progress', 'completed'] as const;
+
+/**
+ * Who an appointment keeps busy, and when, for the gaps. A visit done by its
+ * own professional reads as before: from its time until she is free again
+ * (its length, 30 min when it has none, plus the cleanup). A visit with a
+ * service done by a colleague (the rinse after the colour) keeps each one
+ * busy during her own services, as the agenda reads it
+ * (appointmentBusyBlocks): the colleague used to show as free then.
+ */
+export function visitBusy(
+  apt: {
+    professionalId: string | null;
+    scheduledTime: string;
+    duration?: number | null;
+    service?: { bufferTime?: number | null } | null;
+    services?: VisitRow[] | null;
+  },
+  timeZone: string,
+  day: string,
+): BriefingBusy[] {
+  const live = (apt.services ?? []).filter(isLiveRow);
+  const shared = live.some((r) => r.professionalId && r.professionalId !== apt.professionalId);
+  if (!shared) {
+    return [{ professionalId: apt.professionalId, start: apt.scheduledTime, minutes: minutesUntilFree(apt as any, 30) }];
+  }
+  return appointmentBusyBlocks(
+    { ...apt, professionalId: apt.professionalId ?? '', duration: Number(apt.duration) || 0 },
+    timeZone,
+    day,
+  )
+    .filter((b) => b.professionalId && b.endMinutes > b.startMinutes)
+    .map((b) => ({
+      professionalId: b.professionalId,
+      start: clockOf(Math.max(0, b.startMinutes)),
+      minutes: b.endMinutes - Math.max(0, b.startMinutes),
+    }));
+}
+
+/**
+ * The where clause for the appointments that keep `ids` busy: their own, and
+ * a colleague's visit where one of them does a service.
+ */
+export function busyAppointmentsOf(ids: string[]) {
+  return {
+    OR: [{ professionalId: { in: ids } }, { services: { some: { professionalId: { in: ids } } } }],
+  };
+}
+
+/** What visitBusy reads of an appointment. */
+export const VISIT_BUSY_SELECT = {
+  professionalId: true,
+  scheduledTime: true,
+  duration: true,
+  service: { select: { bufferTime: true } },
+  services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER as any },
+} as const;
 
 export interface DayGap extends BriefingGap {
   /** "YYYY-MM-DD" */
@@ -119,6 +182,8 @@ export async function loadProfessionalGaps(
     todayDay: string;
     nowMinutes: number;
     openingHours: unknown;
+    /** The salon's time zone, to place a shared visit's services. */
+    timeZone: string;
     professionalIds?: string[] | null;
     locationId?: string | null;
     minGapMinutes: number;
@@ -137,7 +202,8 @@ export async function loadProfessionalGaps(
 
   const from = new Date(`${q.fromDay}T00:00:00.000Z`);
   const to = new Date(`${addDays(q.toDay, 1)}T00:00:00.000Z`);
-  // Every appointment of theirs holds them, whatever the location.
+  // Every appointment of theirs holds them, whatever the location, and so
+  // does a colleague's visit where they do a service.
   const appointments: Array<{
     professionalId: string | null;
     scheduledDate: Date;
@@ -148,19 +214,9 @@ export async function loadProfessionalGaps(
       isTest: false,
       scheduledDate: { gte: from, lt: to },
       status: { in: [...BUSY_STATUSES] },
-      professionalId: { in: professionals.map((p) => p.id) },
+      ...busyAppointmentsOf(professionals.map((p) => p.id)),
     },
-    select: {
-      professionalId: true,
-      scheduledDate: true,
-      scheduledTime: true,
-      duration: true,
-      service: { select: { bufferTime: true } },
-      services: {
-        select: { type: true, status: true, service: { select: { bufferTime: true } } },
-        orderBy: VISIT_ROW_ORDER as any,
-      },
-    },
+    select: { ...VISIT_BUSY_SELECT, scheduledDate: true },
   });
   const blocks = await timeOffBetween(prisma, q.tenantId, q.fromDay, q.toDay, { locationId: q.locationId ?? null });
 
@@ -168,13 +224,10 @@ export async function loadProfessionalGaps(
   for (const a of appointments) {
     const day = a.scheduledDate.toISOString().slice(0, 10);
     const list = busyByDay.get(day) ?? [];
-    list.push({
-      professionalId: a.professionalId,
-      start: a.scheduledTime,
-      // As the briefing: free again after the appointment (30 min when it
-      // has no length) and its cleanup time.
-      minutes: minutesUntilFree(a as any, 30),
-    });
+    // As the briefing: free again after the appointment (30 min when it
+    // has no length) and its cleanup time; each professional of a shared
+    // visit during her own services.
+    list.push(...visitBusy(a as any, q.timeZone, day));
     busyByDay.set(day, list);
   }
 
