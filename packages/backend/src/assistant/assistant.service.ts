@@ -361,6 +361,15 @@ export class AssistantService {
         };
       }
       if (WRITE_TOOLS.has(name)) {
+        // Not proposed when it cannot be done (a WhatsApp with no connection):
+        // the model gets the reason and tells it, no card to approve in vain.
+        const blocked = await this.salonTools.approvalPrecheck(name, input, {
+          prisma: this.prisma,
+          tenantId: user.tenantId,
+          userId: user.id,
+          role: user.role as any,
+        });
+        if (blocked) return blocked;
         const preview = await this.salonTools.approvalPreview(name, input, {
           prisma: this.prisma,
           tenantId: user.tenantId,
