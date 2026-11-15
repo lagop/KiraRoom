@@ -375,6 +375,19 @@ export const COPILOT_WRITE_TOOLS = [
 /** find_filling_opportunities lists at most this many gaps (Copilot audit M5: bounded payloads). */
 const MAX_LISTED_GAPS = 40;
 
+type BookedServiceRow = { serviceName?: string | null; service?: { id?: string; name?: string | null } | null };
+
+/**
+ * The services of a visit, as booked. A one-service booking (the public
+ * booking page, most panel bookings) can have NO service lines: its
+ * service is on the appointment itself. The copilot read only the lines
+ * and said "la ficha no muestra los servicios" for a «Corte de Cabello».
+ */
+export function visitServices(a: BookedServiceRow & { services: BookedServiceRow[] }): Array<{ id: string | null; name: string }> {
+  const rows = a.services.length > 0 ? a.services : a.serviceName || a.service ? [a] : [];
+  return rows.map((r) => ({ id: r.service?.id ?? null, name: bookedServiceName(r, 'Servicio') }));
+}
+
 /** find_client lists at most this many matches. */
 const FIND_CLIENT_MAX = 8;
 
@@ -716,6 +729,10 @@ export class SalonCopilotToolsService {
           status: true,
           totalAmount: true,
           professional: { select: { id: true, firstName: true } },
+          // A one-service booking may keep its service only here, with no
+          // service lines (see visitServices).
+          serviceName: true,
+          service: { select: { id: true, name: true } },
           services: {
             // The services as they were booked (their snapshot), not
             // today's catalogue: a renamed service keeps its old name here.
@@ -751,10 +768,7 @@ export class SalonCopilotToolsService {
         time: a.scheduledTime,
         status: a.status,
         professional: a.professional ? { id: a.professional.id, firstName: a.professional.firstName } : null,
-        services: a.services.map((s) => ({
-          id: s.service?.id ?? null,
-          name: bookedServiceName(s, 'Servicio'),
-        })),
+        services: visitServices(a),
         // The visit's total in euros, shown to non-staff roles only.
         ...(isStaff ? {} : { totalEur: euros(a.totalAmount) }),
       }));
@@ -866,8 +880,10 @@ export class SalonCopilotToolsService {
         status: true,
         client: { select: { id: true, firstName: true } },
         professional: { select: { id: true, firstName: true, lastName: true } },
+        serviceName: true,
+        service: { select: { id: true, name: true } },
         services: {
-          select: { service: { select: { name: true } } },
+          select: { serviceName: true, service: { select: { id: true, name: true } } },
           orderBy: VISIT_ROW_ORDER as any,
         },
       },
@@ -885,7 +901,7 @@ export class SalonCopilotToolsService {
         status: a.status,
         client: a.client,
         professional: a.professional,
-        services: a.services.map((s) => s.service?.name).filter(Boolean),
+        services: visitServices(a).map((v) => v.name),
       })),
       // ≥ 30 min, per professional, from now on.
       gaps: gaps.map((g) => ({
