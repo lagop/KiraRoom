@@ -48,6 +48,7 @@ import { ConsentService } from "../consent/consent.service";
 import { publicNameOf } from "../public-site/public-professional";
 import { refreshClientStats } from "../clients/client-stats";
 import { salonInstant } from "./salon-time";
+import { NO_SHOW_BEFORE_START_MESSAGE, startsLater } from "./no-show-timing";
 import { SalonBookingAlertsService } from "./salon-booking-alerts.service";
 import { assertCanBook, assertCanReschedule, salonDayAndTime } from "./reschedule-check";
 import {
@@ -2512,6 +2513,19 @@ export class AppointmentsService {
         code: "AWAITING_ONLINE_PAYMENT",
         message:
           "Esta reserva está esperando el pago online de la clienta: se confirma sola cuando paga. Si no la quieres, cancélala.",
+        appointmentId: appointment.id,
+      });
+    }
+
+    // Nobody fails to turn up before the time: a no-show two days ahead
+    // closed the appointment and its reminder never went out.
+    if (
+      to === AppointmentStatus.no_show &&
+      startsLater(appointment, appointment.tenant?.timezone || "Europe/Madrid")
+    ) {
+      throw new ConflictException({
+        code: "NO_SHOW_BEFORE_START",
+        message: NO_SHOW_BEFORE_START_MESSAGE,
         appointmentId: appointment.id,
       });
     }

@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
 import { canTransition, transitionRefusal } from '../../appointments/appointment-status';
+import { NO_SHOW_BEFORE_START_MESSAGE, startsLater } from '../../appointments/no-show-timing';
 import { VISIT_ROW_ORDER } from '../../appointments/visit-totals';
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
@@ -512,6 +513,11 @@ export class SalonCopilotToolsService {
     input: unknown,
     ctx: CopilotToolContext,
   ): Promise<{ error: string; message?: string } | null> {
+    if (name === 'mark_no_show') {
+      if (!['owner', 'admin', 'manager', 'receptionist', 'saas_owner'].includes(ctx.role)) return null;
+      const id = (input as { appointmentId?: unknown } | null)?.appointmentId;
+      return typeof id === 'string' ? this.noShowRefusal(id, ctx) : null;
+    }
     if (name !== 'send_message') return null;
     const checked = await this.sendMessageCheck((input ?? {}) as Record<string, unknown>, ctx);
     return 'error' in checked ? checked : null;
@@ -1692,6 +1698,40 @@ private async rescheduleAppointment(
    * Receptionist / manager / owner only (stylists cannot).
    * No fee (D6, see the tool definition): it only changes the status.
    */
+  /**
+   * Why this appointment cannot be marked a no-show (null = it can): not of
+   * the salon, a status the table does not allow, or not begun yet. It runs
+   * before the approval card too.
+   */
+  private async noShowRefusal(
+    appointmentId: string,
+    ctx: CopilotToolContext,
+  ): Promise<{ error: string; message?: string } | null> {
+    const appt = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      select: {
+        id: true,
+        tenantId: true,
+        status: true,
+        scheduledDate: true,
+        scheduledTime: true,
+        tenant: { select: { timezone: true } },
+      },
+    });
+    if (!appt) return { error: 'appointment_not_found' };
+    if (appt.tenantId !== ctx.tenantId) {
+      return { error: 'forbidden', message: 'La cita no pertenece a tu salón.' };
+    }
+    // The appointments' transition table decides, here as in the panel.
+    if (!canTransition(appt.status, 'no_show')) {
+      return { error: 'invalid_status', message: transitionRefusal(appt.status, 'no_show') };
+    }
+    if (startsLater(appt, safeTimeZone(appt.tenant?.timezone), this.now())) {
+      return { error: 'not_started', message: NO_SHOW_BEFORE_START_MESSAGE };
+    }
+    return null;
+  }
+
   private async markNoShow(
     args: Record<string, unknown>,
     ctx: CopilotToolContext,
@@ -1702,18 +1742,8 @@ private async rescheduleAppointment(
     const appointmentId = args.appointmentId as string | undefined;
     if (!appointmentId) return { error: 'missing_appointmentId' };
 
-    const appt = await this.prisma.appointment.findUnique({
-      where: { id: appointmentId },
-      select: { id: true, tenantId: true, status: true, client: { select: { firstName: true } } },
-    });
-    if (!appt) return { error: 'appointment_not_found' };
-    if (appt.tenantId !== ctx.tenantId) {
-      return { error: 'forbidden', message: 'La cita no pertenece a tu salón.' };
-    }
-    // The appointments' transition table decides, here as in the panel.
-    if (!canTransition(appt.status, 'no_show')) {
-      return { error: 'invalid_status', message: transitionRefusal(appt.status, 'no_show') };
-    }
+    const refused = await this.noShowRefusal(appointmentId, ctx);
+    if (refused) return refused;
     if (!this.appointments) return { error: 'unavailable' };
 
     // The same path as the panel's "No se presentó": checked against the
@@ -1734,11 +1764,14 @@ private async rescheduleAppointment(
       throw err;
     }
 
+    const client = await this.prisma.appointment
+      .findUnique({ where: { id: appointmentId }, select: { client: { select: { firstName: true } } } })
+      .catch(() => null);
     return {
       ok: true,
       appointmentId: updated.id,
       status: updated.status,
-      clientFirstName: appt.client?.firstName ?? null,
+      clientFirstName: client?.client?.firstName ?? null,
     };
   }
 

@@ -510,14 +510,17 @@ export function canChangeStatus(from: string, to: AppointmentStatusValue): boole
  * of the visit, then "No se presentó", then "Cancelar". A no-show offers
  * "Confirmar" again for a client who arrived late.
  */
-export function statusActions(from: string): AppointmentStatusValue[] {
+export function statusActions(from: string, startsAt?: Date | null, now: Date = new Date()): AppointmentStatusValue[] {
   const byStatus: Record<string, AppointmentStatusValue[]> = {
     pending: ["confirmed", "no_show", "cancelled"],
     confirmed: ["in_progress", "no_show", "cancelled"],
     in_progress: ["completed", "cancelled"],
     no_show: ["confirmed"],
   };
-  return (byStatus[from] ?? []).filter((to) => canChangeStatus(from, to));
+  // "No se presentó" only once the appointment has begun (the server
+  // refuses it before): it closed appointments two days ahead.
+  const notYet = !!startsAt && startsAt.getTime() > now.getTime();
+  return (byStatus[from] ?? []).filter((to) => canChangeStatus(from, to) && !(notYet && to === "no_show"));
 }
 
 /**
@@ -848,4 +851,18 @@ export function buildStaffBookingPayload(input: {
       : {}),
     ...(input.allowOutsideHours ? { allowOutsideHours: true as const } : {}),
   };
+}
+
+/**
+ * A list row's start on this device's clock (the list has no salon time
+ * zone; the drawer uses the salon's). Only hides "No se presentó" until the
+ * time: the server decides on the salon's clock.
+ */
+export function appointmentStartsAt(a: { scheduledDate?: unknown; scheduledTime?: unknown }): Date | null {
+  const day = String(a.scheduledDate ?? "").slice(0, 10);
+  const time = String(a.scheduledTime ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{1,2}:\d{2}/.test(time)) return null;
+  const [hh, mm] = time.split(":").map(Number);
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(y, m - 1, d, hh, mm);
 }

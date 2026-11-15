@@ -46,6 +46,7 @@ import {
   getTotalDuration,
   getTotalPrice,
   transformAddons,
+  appointmentStartsAt,
 } from "./appointment-drawer.utils";
 
 let pass = 0;
@@ -674,4 +675,13 @@ if (fail > 0) {
   process.exit(1);
 } else {
   console.log("✓ All appointment-drawer.utils tests passed.");
+}
+// "No se presentó" only once the appointment has begun (the server refuses it before).
+{
+  const now = new Date(2026, 10, 15, 17, 0);
+  check("no no-show before the time", statusActions("confirmed", new Date(2026, 10, 17, 12, 0), now), ["in_progress", "cancelled"]);
+  check("no-show once begun", statusActions("pending", new Date(2026, 10, 15, 16, 30), now), ["confirmed", "no_show", "cancelled"]);
+  check("no start known: as before", statusActions("pending", null, now), ["confirmed", "no_show", "cancelled"]);
+  checkTrue("a row's start on this device's clock", appointmentStartsAt({ scheduledDate: "2026-11-17T00:00:00.000Z", scheduledTime: "12:00" })?.getTime() === new Date(2026, 10, 17, 12, 0).getTime());
+  checkTrue("no start without a time", appointmentStartsAt({ scheduledDate: "2026-11-17", scheduledTime: "" }) === null);
 }

@@ -909,6 +909,7 @@ export function AppointmentDrawer({
                 onCancelEdit={leaveEdit}
                 onSave={handleUpdate}
                 onStatusChange={requestStatusChange}
+                startsAt={appointment.date && appointment.time ? salonInstant(appointment.date, appointment.time, timezone) : null}
                 labels={{
                   created: t("appointments.created"),
                   viewMode: t("appointments.view_mode"),
