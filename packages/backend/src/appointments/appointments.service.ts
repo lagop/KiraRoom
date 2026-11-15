@@ -107,6 +107,7 @@ import { moneyOfCatalogueCents, salonTaxBasis, type SalonTaxBasis } from "../pay
 import { appointmentDeleteBlocker, deleteAppointmentRow } from "./appointment-delete";
 import type Stripe from "stripe";
 import { HOLD_MINUTES, OnlineBookingPaymentService } from "./online-booking-payment.service";
+import { onlinePaymentSummary } from "./online-payment-summary";
 import { isForeignKeyViolation } from "../common/prisma/history-deletes";
 import { snapshotAppointmentCommissions } from "../commissions/appointment-commission";
 import { FeatureFlagService } from "../common/feature-flags/feature-flag.service";
@@ -1581,10 +1582,26 @@ export class AppointmentsService {
       }
     }
 
-    return this.enrichAppointment(
+    const enriched = this.enrichAppointment(
       asSeenBy(appointment, own),
       appointment.tenant?.fiscalSettings !== undefined ? salonTaxBasis(appointment.tenant.fiscalSettings) : null,
     );
+    // What was paid online and given back: after a cancellation amountPaid
+    // is 0 and the file said nothing about the señal or its refund.
+    const onlinePayment = appointment.onlinePaymentKind
+      ? onlinePaymentSummary(
+          await this.prisma.payment.findMany({
+            where: { tenantId: user.tenantId, appointmentId: appointment.id, stripePaymentId: { not: null } },
+            select: {
+              amount: true,
+              status: true,
+              metadata: true,
+              refunds: { select: { amount: true, status: true, createdAt: true } },
+            },
+          }),
+        )
+      : null;
+    return onlinePayment ? Object.assign(enriched, { onlinePayment }) : enriched;
   }
 
   async update(

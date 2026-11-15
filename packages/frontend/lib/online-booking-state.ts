@@ -14,7 +14,16 @@ export interface OnlineBookingFields {
   depositPaid?: boolean | null;
   depositAmount?: number | string | null;
   totalAmount?: number | string | null;
+  /** The visit in money, tax included (the server's chargeTotal). */
+  chargeTotal?: number | string | null;
   amountPaid?: number | string | null;
+  onlinePayment?: {
+    paidCents?: number | null;
+    refundedCents?: number | null;
+    refundPendingCents?: number | null;
+    refundFailed?: boolean | null;
+    refundedAt?: string | null;
+  } | null;
 }
 
 const fields = (a: unknown): OnlineBookingFields => (a ?? {}) as OnlineBookingFields;
@@ -42,7 +51,9 @@ export function paidOnlineCents(appointment: unknown): number {
   const a = fields(appointment);
   if (!a.onlinePaymentKind || a.paymentHoldUntil) return 0;
   const paid = cents(a.amountPaid);
-  const online = a.onlinePaymentKind === "full" ? cents(a.totalAmount) : cents(a.depositAmount);
+  // The whole visit is paid in money, tax included: chargeTotal (totalAmount
+  // is the catalogue, without the tax for salons whose prices exclude it).
+  const online = a.onlinePaymentKind === "full" ? cents(a.chargeTotal ?? a.totalAmount) : cents(a.depositAmount);
   return Math.min(paid, online || paid);
 }
 
@@ -73,6 +84,45 @@ const cents0 = (v: unknown): number => {
   const n = Math.round(Number(v ?? 0));
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
+
+/**
+ * What became of the online payment once it was given back (a cancellation),
+ * for the appointment's file: amountPaid is 0 by then and the file said
+ * nothing. Null while nothing was given back nor asked back.
+ */
+export function onlineRefundState(
+  appointment: unknown,
+  locale = "es-ES",
+): { tone: "done" | "pending" | "failed"; text: string } | null {
+  const a = fields(appointment);
+  const p = a.onlinePayment;
+  if (!p) return null;
+  const paid = cents0(p.paidCents);
+  const refunded = cents0(p.refundedCents);
+  const pending = cents0(p.refundPendingCents);
+  const what = onlineKindLabel(appointment);
+  const euro = (c: number) => `${(c / 100).toFixed(2).replace(".", ",")} €`;
+  if (p.refundFailed && refunded === 0) {
+    return {
+      tone: "failed",
+      text: `La clienta pagó online ${what} (${euro(paid)}), pero Stripe no pudo devolvérselo. Devuélvelo desde Pagos.`,
+    };
+  }
+  if (refunded > 0) {
+    const d = p.refundedAt ? new Date(p.refundedAt) : null;
+    const when =
+      d && !Number.isNaN(d.getTime()) ? ` el ${d.toLocaleDateString(locale, { day: "numeric", month: "long" })}` : "";
+    const part = refunded < paid ? ` de ${euro(paid)}` : "";
+    return {
+      tone: "done",
+      text: `Pago online devuelto: ${euro(refunded)}${part} (${what})${when}. Puede tardar unos días en verse en su tarjeta.`,
+    };
+  }
+  if (pending > 0) {
+    return { tone: "pending", text: `Devolución del pago online en curso: ${euro(pending)} (${what}).` };
+  }
+  return null;
+}
 
 /** What was paid online: "señal" or "servicio completo", for a sentence. */
 export function onlineKindLabel(appointment: unknown): string {

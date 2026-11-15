@@ -4,7 +4,7 @@
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only lib/online-booking-state.spec.ts
  */
-import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, paidOnlineCents } from "./online-booking-state";
+import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, paidOnlineCents, onlineRefundState } from "./online-booking-state";
 
 let pass = 0;
 let fail = 0;
@@ -42,6 +42,35 @@ check("nothing paid online: no notice", onlineRefundNotice({ id: "a" }) === null
 check("given back: how much", /15,00/.test(onlineRefundNotice({ onlineRefund: { refundedCents: 1500, failed: 0 } })?.description ?? ""));
 check("could not be given back: a warning for the salon to act", onlineRefundNotice({ onlineRefund: { refundedCents: 0, failed: 1 } })?.variant === "destructive");
 check("a part given back and a part not: still the warning", onlineRefundNotice({ onlineRefund: { refundedCents: 800, failed: 1 } })?.variant === "destructive");
+
+console.log("\n[a cancelled booking: what went back]");
+const refunded = {
+  onlinePaymentKind: "deposit",
+  depositAmount: 500,
+  amountPaid: 0,
+  onlinePayment: { paidCents: 500, refundedCents: 500, refundPendingCents: 0, refundFailed: false, refundedAt: "2026-11-15T11:00:00.000Z" },
+};
+const r = onlineRefundState(refunded);
+check("given back: the amount, what it was and when", r?.tone === "done" && /5,00 €/.test(r.text) && /la señal/.test(r.text) && /15 de noviembre/.test(r.text), r);
+const part = onlineRefundState({ ...refunded, onlinePayment: { ...refunded.onlinePayment, refundedCents: 200 } });
+check("a part given back: of how much", /2,00 € de 5,00 €/.test(part?.text ?? ""), part);
+check(
+  "Stripe refused it: tell the salon to do it",
+  onlineRefundState({ onlinePaymentKind: "full", onlinePayment: { paidCents: 5445, refundedCents: 0, refundPendingCents: 0, refundFailed: true, refundedAt: null } })?.tone === "failed",
+);
+check(
+  "asked back, not confirmed yet",
+  onlineRefundState({ ...refunded, onlinePayment: { paidCents: 500, refundedCents: 0, refundPendingCents: 500, refundFailed: false, refundedAt: null } })?.tone === "pending",
+);
+check(
+  "nothing given back, or never paid online: nothing",
+  onlineRefundState({ ...refunded, onlinePayment: { paidCents: 500, refundedCents: 0, refundPendingCents: 0, refundFailed: false, refundedAt: null } }) === null &&
+    onlineRefundState({}) === null,
+);
+check(
+  "a prepaid visit counts what she paid, tax included (chargeTotal)",
+  paidOnlineCents({ onlinePaymentKind: "full", totalAmount: 4500, chargeTotal: 5445, amountPaid: 5445 }) === 5445,
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

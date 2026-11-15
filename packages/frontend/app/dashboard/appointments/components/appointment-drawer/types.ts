@@ -169,6 +169,19 @@ export interface Appointment {
   amountDue?: number;
   /** Cents of money (tax included). */
   amountPaid?: number;
+  /** "deposit" (señal) or "full" when it was paid online when booking. */
+  onlinePaymentKind?: string | null;
+  /** Held for her online payment until then (ISO). */
+  paymentHoldUntil?: string | null;
+  paymentStatus?: string;
+  /** What was paid online and given back (cents); see lib/online-booking-state. */
+  onlinePayment?: {
+    paidCents: number;
+    refundedCents: number;
+    refundPendingCents: number;
+    refundFailed: boolean;
+    refundedAt: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
   activity?: Array<{

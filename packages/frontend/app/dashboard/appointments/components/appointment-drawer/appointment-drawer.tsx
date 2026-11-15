@@ -32,7 +32,7 @@ import {
 import { planSlotSearch, type SlotSuggestion } from "../slot-suggestions";
 import { localDay } from "@/components/Calendar/day-grid";
 import { StatusChangeDialog } from "../StatusChangeDialog";
-import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, paidOnlineCents } from "@/lib/online-booking-state";
+import { holdUntilLabel, isAwaitingOnlinePayment, onlineKindLabel, onlineRefundNotice, onlineRefundState, paidOnlineCents } from "@/lib/online-booking-state";
 import { euros } from "@/lib/booking-payment";
 import { LocationSelect } from "@/components/Calendar/LocationSelect";
 import { useBookingLocations } from "@/lib/use-booking-locations";
@@ -948,6 +948,21 @@ export function AppointmentDrawer({
                   La clienta pagó online {onlineKindLabel(appointment)}: {euros(paidOnlineCents(appointment))}. En Caja solo se cobra lo que falta.
                 </div>
               )}
+              {(() => {
+                const refund = onlineRefundState(appointment);
+                if (!refund) return null;
+                const tone =
+                  refund.tone === "failed"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : refund.tone === "pending"
+                      ? "border-amber-200 bg-amber-50 text-amber-900"
+                      : "border-blue-200 bg-blue-50 text-blue-900";
+                return (
+                  <div data-test="drawer-online-refund" className={`mt-4 rounded-lg border p-3 text-sm ${tone}`}>
+                    {refund.text}
+                  </div>
+                );
+              })()}
 
               {/* Main Content */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">

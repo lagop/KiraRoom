@@ -700,6 +700,13 @@ export function toDrawerAppointment(
     amountPaid: numberOrNull(data.amountPaid) ?? undefined,
     chargeTotal: numberOrNull(data.chargeTotal) ?? undefined,
     amountDue: numberOrNull(data.amountDue) ?? undefined,
+    // Paid online when booking: the drawer's "pagó online" / "esperando el
+    // pago" / "devuelto" notices read these; they were dropped here, so
+    // none of them ever showed.
+    onlinePaymentKind: data.onlinePaymentKind ?? null,
+    paymentHoldUntil: data.paymentHoldUntil ?? null,
+    paymentStatus: data.paymentStatus ?? undefined,
+    onlinePayment: data.onlinePayment ?? null,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
     activity: [{ timestamp: data.createdAt, action: CREATED_ACTIVITY, details: undefined }],
