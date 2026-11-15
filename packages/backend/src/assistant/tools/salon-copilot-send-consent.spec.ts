@@ -1,4 +1,4 @@
-import { SalonCopilotToolsService, standardTemplateKind } from './salon-copilot-tools';
+import { COPILOT_TOOLS, SalonCopilotToolsService, standardTemplateKind } from './salon-copilot-tools';
 
 jest.mock('../../common/encryption/encryption.service', () => ({
   EncryptionService: class {
@@ -158,5 +158,59 @@ describe('send_message and WhatsApp promotion consent', () => {
     );
     const params = JSON.parse((fetch.mock.calls[0] as any[])[1].body).template.components[0].parameters;
     expect(params.map((x: any) => x.text)).toEqual(['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v10']);
+  });
+});
+
+/**
+ * The card used to be shown for a WhatsApp that could not go out (no
+ * connection): the owner approved and only then read «Conecta WhatsApp».
+ * And the tool's example template name, "appointment_reminder", does not
+ * exist: the model sent it.
+ */
+describe('send_message before the approval card', () => {
+  it('a WhatsApp that cannot be sent is refused before any card', async () => {
+    const prisma = makePrisma();
+    prisma.whatsAppConnection.findUnique = jest.fn(async () => null);
+    const svc = new SalonCopilotToolsService(prisma);
+    const blocked: any = await svc.approvalPrecheck(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita' },
+      ctx(prisma),
+    );
+    expect(blocked.error).toBe('whatsapp_not_connected');
+  });
+
+  it('a client without WhatsApp notices is refused before any card', async () => {
+    const prisma = makePrisma({ whatsappNotices: false });
+    const blocked: any = await new SalonCopilotToolsService(prisma).approvalPrecheck(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita' },
+      ctx(prisma),
+    );
+    expect(blocked.error).toBe('no_whatsapp_notices');
+  });
+
+  it('a WhatsApp that can go out gets its card, and nothing is sent yet', async () => {
+    const fetch = mockMeta();
+    const prisma = makePrisma();
+    const blocked = await new SalonCopilotToolsService(prisma).approvalPrecheck(
+      'send_message',
+      { clientId: 'c-1', templateName: 'kiraroom_recordatorio_cita' },
+      ctx(prisma),
+    );
+    expect(blocked).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('other actions are not prechecked', async () => {
+    const prisma = makePrisma();
+    expect(await new SalonCopilotToolsService(prisma).approvalPrecheck('create_coupon', { discountPercent: 10 }, ctx(prisma))).toBeNull();
+  });
+
+  it('the tool names the real templates, not "appointment_reminder"', () => {
+    const send = (COPILOT_TOOLS as unknown as any[]).find((t) => t.name === 'send_message');
+    const desc = send.input_schema.properties.templateName.description as string;
+    expect(desc).toContain('kiraroom_recordatorio_cita (1 Ana, 2 Salón Lucía, 3 Corte y peinado, 4 jueves 9 de octubre, 5 10:30)');
+    expect(desc).not.toContain('"appointment_reminder"');
   });
 });

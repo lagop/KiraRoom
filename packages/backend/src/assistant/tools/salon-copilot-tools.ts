@@ -274,10 +274,19 @@ export const COPILOT_TOOLS = [
       type: 'object' as const,
       properties: {
         clientId: { type: 'string' },
-        templateName: { type: 'string', description: 'Approved Meta template name, e.g. "appointment_reminder".' },
+        // The real names: the example "appointment_reminder" does not
+        // exist, and the model sent it.
+        templateName: {
+          type: 'string',
+          description:
+            'Template name. For appointment notices use one of these KiraRoom templates (variables in order, ' +
+            'with an example): ' +
+            STANDARD_TEMPLATES.map((t) => `${t.name} (${t.example.map((e, n) => `${n + 1} ${e}`).join(', ')})`).join('; ') +
+            '. Any other name only for a promotion template the salon created.',
+        },
         templateVars: {
           type: 'object',
-          description: 'Variables for the template body, e.g. { "1": "Carmen", "2": "16:00" }.',
+          description: 'Variables for the template body, all of them, in order, e.g. { "1": "Carmen", "2": "Salón Lucía", … }.',
           additionalProperties: { type: 'string' },
         },
         languageCode: { type: 'string', description: 'BCP-47 language code. Default "es".' },
@@ -494,6 +503,20 @@ export class SalonCopilotToolsService {
    * Something that does not exist in the salon says so: the action will
    * fail anyway, and the card must not look like a valid one.
    */
+  /**
+   * A write that cannot be done, told to the model before any card is shown
+   * (null = go ahead and propose it). Only send_message so far.
+   */
+  async approvalPrecheck(
+    name: string,
+    input: unknown,
+    ctx: CopilotToolContext,
+  ): Promise<{ error: string; message?: string } | null> {
+    if (name !== 'send_message') return null;
+    const checked = await this.sendMessageCheck((input ?? {}) as Record<string, unknown>, ctx);
+    return 'error' in checked ? checked : null;
+  }
+
   async approvalPreview(name: string, input: unknown, ctx: CopilotToolContext): Promise<string> {
     const i = (input ?? {}) as Record<string, any>;
     try {
@@ -1414,10 +1437,19 @@ export class SalonCopilotToolsService {
  * dispatches via Meta Cloud API. If anything is missing, returns
  * a structured error so the user can fix the connection first.
  */
-private async sendMessage(
+/**
+ * Whether a send_message would go out: everything but the send itself.
+ * It runs before the approval card too (approvalPrecheck), so the owner is
+ * not asked to approve a WhatsApp that cannot be sent (no connection, no
+ * phone, no consent): the card used to be shown and fail once approved.
+ */
+private async sendMessageCheck(
   args: Record<string, unknown>,
   ctx: CopilotToolContext,
-) {
+): Promise<
+  | { error: string; message?: string }
+  | { client: { id: string; firstName: string; phone: string }; conn: any; token: string | null }
+> {
   const clientId = args.clientId as string | undefined;
   const templateName = args.templateName as string | undefined;
   if (!clientId) return { error: 'missing_clientId' };
@@ -1445,7 +1477,7 @@ private async sendMessage(
     select: { id: true, firstName: true, phone: true },
   });
   if (!client) return { error: 'client_not_found' };
-  if (!client.phone) return { error: 'client_has_no_phone' };
+  if (!client.phone) return { error: 'client_has_no_phone', message: 'La clienta no tiene teléfono en su ficha.' };
 
   const conn: any = await (this.prisma as any).whatsAppConnection?.findUnique?.({
     where: { tenantId: ctx.tenantId },
@@ -1496,8 +1528,19 @@ private async sendMessage(
       };
     }
   }
+  return { client: { ...client, phone: client.phone }, conn, token };
+}
 
-  token = token ?? decryptAes(conn.accessTokenEnc); // best-effort: see helper below
+private async sendMessage(
+  args: Record<string, unknown>,
+  ctx: CopilotToolContext,
+) {
+  const checked = await this.sendMessageCheck(args, ctx);
+  if ('error' in checked) return checked;
+  const { client, conn } = checked;
+  const clientId = client.id;
+  const templateName = String(args.templateName);
+  const token = checked.token ?? decryptAes(conn.accessTokenEnc); // best-effort: see helper below
   // The number as Meta wants it: international, digits only ("600 111 222"
   // in the client file is "34600111222"), as the other WhatsApp senders do.
   const tenant = await this.prisma.tenant
