@@ -394,11 +394,13 @@ export class AssistantService {
             pendingActionId: id,
           },
         });
+        // Minutes, not a UTC timestamp: the model turned it into a wrong
+        // local time («caduca a las 16:18» at 15:13 in Canarias).
         return {
           kind: 'pending_approval',
           approvalId: id,
           preview,
-          expiresAt: expiresAt.toISOString(),
+          expiresInMinutes: Math.max(1, Math.round((expiresAt.getTime() - Date.now()) / 60_000)),
         };
       }
       return this.salonTools.execute(name, input, {
@@ -1045,7 +1047,9 @@ export function approvalObservation(preview: string, status: string | undefined,
   ]
     .filter(Boolean)
     .join('. ');
-  const text = `[Acción propuesta: «${preview}». Estado: ${outcome}${details ? `. ${details}` : ''}.]`;
+  // A system record, not the user's words: the model answered «según lo
+  // que indicas… no puedo verificarlo» to a card the user had approved.
+  const text = `[Registro del sistema, no escrito por la usuaria. Acción propuesta: «${preview}». Estado: ${outcome}${details ? `. ${details}` : ''}. Es el resultado real de la tarjeta.]`;
   return text.length > 600 ? text.slice(0, 597) + '…]' : text;
 }
 

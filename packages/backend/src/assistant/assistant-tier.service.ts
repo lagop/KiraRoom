@@ -94,6 +94,7 @@ export class AssistantTierService {
       'get_my_agenda',
       'get_salon_agenda',
       'find_client',
+      'list_services',
       'get_client_360',
       'find_filling_opportunities',
       'get_low_stock',
