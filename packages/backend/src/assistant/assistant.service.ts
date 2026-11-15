@@ -207,8 +207,15 @@ export class AssistantService {
       where,
       orderBy: { updatedAt: 'desc' },
       take: 50,
+      // The history dropdown showed only dates: a conversation from before
+      // titles were set is named after its first question.
+      include: {
+        messages: { where: { role: 'user' }, orderBy: { createdAt: 'asc' }, take: 1, select: { content: true } },
+      },
     });
-    return rows.map(toPublicConversation);
+    return rows.map(({ messages, ...c }) =>
+      toPublicConversation({ ...c, title: c.title ?? (messages[0] ? conversationTitle(messages[0].content) : null) }),
+    );
   }
 
   async listMessages(conversationId: string, userId: string) {
@@ -308,6 +315,15 @@ export class AssistantService {
         content: dto.content,
       },
     });
+    // The first question names the conversation in the history dropdown.
+    if (!conversation.title) {
+      const title = conversationTitle(dto.content);
+      await this.prisma.assistantConversation.updateMany({
+        where: { id: conversation.id, title: null },
+        data: { title },
+      });
+      conversation.title = title;
+    }
 
     // P2A-staff-copilot-sprint15: per-tenant tool filter. A Pro tenant
     // never sees write tools in the schema (so the LLM can't even try
@@ -907,6 +923,15 @@ export class AssistantService {
 // ----------------------------------------------------------------------
 //  mappers
 // ----------------------------------------------------------------------
+
+/** A conversation's name in the history: its first question, on one line, at most 60 characters. */
+export function conversationTitle(question: string): string {
+  const line = question.replace(/\s+/g, ' ').trim();
+  if (line.length <= 60) return line || 'Conversación';
+  const cut = line.slice(0, 59);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 30 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
 
 function toPublicConversation(
   c:

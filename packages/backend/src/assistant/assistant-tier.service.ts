@@ -93,6 +93,7 @@ export class AssistantTierService {
     const all = [
       'get_my_agenda',
       'get_salon_agenda',
+      'find_client',
       'get_client_360',
       'find_filling_opportunities',
       'get_low_stock',

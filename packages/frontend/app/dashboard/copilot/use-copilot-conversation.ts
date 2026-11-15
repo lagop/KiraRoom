@@ -188,6 +188,14 @@ export function useCopilotConversation() {
         if ((reply as any).costCapReached) {
           setCostCapReached(true);
         }
+        if (reply.conversation) {
+          const updated = reply.conversation;
+          setConversations((list) =>
+            list.some((c) => c.id === updated.id)
+              ? list.map((c) => (c.id === updated.id ? updated : c))
+              : [updated, ...list],
+          );
+        }
         setState((s) => ({
           ...s,
           sending: false,

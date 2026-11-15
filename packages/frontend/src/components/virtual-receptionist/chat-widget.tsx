@@ -3,46 +3,11 @@ import { Send, X, Minimize, Maximize, MessageCircle, Phone, RotateCcw } from 'lu
 import apiClient from '@/lib/api';
 import { useTranslations } from '@/lib/use-translation';
 import { CHAT_MAX_MESSAGE, chatErrorText, chatSessionExpired, readVisitorToken, rememberVisitorToken } from '@/lib/chat-visitor';
-import { ChatInline, parseChatMarkdown } from '@/lib/chat-markdown';
-
-function Inline({ parts }: { parts: ChatInline[] }) {
-  return (
-    <>
-      {parts.map((p, i) => (p.bold ? <strong key={i}>{p.text}</strong> : <React.Fragment key={i}>{p.text}</React.Fragment>))}
-    </>
-  );
-}
+import { ChatMarkdownText } from '@/components/ui/chat-markdown-text';
 
 /** The receptionist's reply with its bold, line breaks and lists; see chat-markdown. */
 function AssistantText({ text }: { text: string }) {
-  return (
-    <div className="text-sm space-y-2 break-words">
-      {parseChatMarkdown(text).map((block, i) => {
-        if (block.type === 'list') {
-          const List = block.ordered ? 'ol' : 'ul';
-          return (
-            <List key={i} start={block.ordered ? block.start : undefined} className={`${block.ordered ? 'list-decimal' : 'list-disc'} pl-5 space-y-0.5`}>
-              {block.items.map((item, j) => (
-                <li key={j}>
-                  <Inline parts={item} />
-                </li>
-              ))}
-            </List>
-          );
-        }
-        return (
-          <p key={i}>
-            {block.lines.map((line, j) => (
-              <React.Fragment key={j}>
-                {j > 0 && <br />}
-                <Inline parts={line} />
-              </React.Fragment>
-            ))}
-          </p>
-        );
-      })}
-    </div>
-  );
+  return <ChatMarkdownText text={text} />;
 }
 
 interface ChatMessage {

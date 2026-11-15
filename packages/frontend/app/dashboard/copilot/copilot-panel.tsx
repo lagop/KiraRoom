@@ -16,6 +16,7 @@ import { ApprovalChip } from "./approval-chip";
 import { UpgradePrompt } from "./upgrade-prompt";
 import { FeedbackBar } from "./feedback-bar";
 import { getCurrentUser } from "@/lib/utils";
+import { ChatMarkdownText } from "@/components/ui/chat-markdown-text";
 
 export interface CopilotPanelProps {
   /** When true the panel takes the full width (used on the focused /copilot page). */
@@ -289,8 +290,8 @@ function UserBubble({ content }: { content: string }) {
 function AssistantBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%] bg-white border border-gray-200 text-gray-900 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap shadow-sm">
-        {content}
+      <div className="max-w-[90%] bg-white border border-gray-200 text-gray-900 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm leading-relaxed shadow-sm">
+        <ChatMarkdownText text={content} />
       </div>
     </div>
   );
