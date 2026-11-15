@@ -139,15 +139,20 @@ export function DashboardSidebar({
   // initializing from it directly would make the first client render
   // include menu items the server didn't, triggering a hydration
   // mismatch (React detects the extra <circle> inside the icon SVGs).
-  // Initialize to null (matches server) and populate post-mount.
+  // Initialize to undefined (matches server) and populate post-mount.
   const [currentUser, setCurrentUser] = useState<ReturnType<
     typeof getCurrentUser
-  > | null>(null);
+  > | undefined>(undefined);
   useEffect(() => {
     setCurrentUser(getCurrentUser());
   }, [pathname]);
 
-  const nav = useMemo(() => navFor(currentUser?.role), [currentUser?.role]);
+  // No links until the user is read: navFor(undefined) is the staff menu,
+  // which flashed ("Mis ausencias", "Mis comisiones") before the owner's.
+  const nav = useMemo(
+    () => (currentUser === undefined ? [] : navFor(currentUser?.role)),
+    [currentUser],
+  );
 
   // Counts next to links (requests waiting for an answer), for the links
   // this role sees only; recounted on each page and when one is answered.

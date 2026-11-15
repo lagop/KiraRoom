@@ -85,7 +85,7 @@ export function DashboardHeader({
               >
                 <User className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-purple-200 p-1 text-purple-700 flex-shrink-0" />
                 <span className="hidden sm:inline text-sm font-medium text-gray-700 truncate max-w-[160px]">
-                  {currentUser?.email || "User"}
+                  {currentUser?.email ?? ""}
                 </span>
                 <ChevronDown className="hidden sm:inline h-4 w-4 text-gray-500" />
               </button>
