@@ -1,4 +1,4 @@
-import { COPILOT_REFUSAL_REPLY, approvalObservation } from './assistant.service';
+import { COPILOT_REFUSAL_REPLY, approvalObservation, copilotHistoryForLlm } from './assistant.service';
 
 describe('approvalObservation (Copilot audit M8/M9): the model learns what became of an action', () => {
   it('says nothing while the action is pending', () => {
@@ -34,5 +34,32 @@ describe('approvalObservation (Copilot audit M8/M9): the model learns what becam
 describe('B14: a refusal is not answered with the receptionist line', () => {
   it('the Copilot has its own words', () => {
     expect(COPILOT_REFUSAL_REPLY).not.toMatch(/por aquí/);
+  });
+});
+
+describe('copilotHistoryForLlm: a resolved card is told after the reply that proposed it', () => {
+  const card = (status: string, result: unknown = null) => ({
+    role: 'approval',
+    content: 'Crear un cupón del 10 %',
+    pendingAction: { status, resultSnapshot: result },
+  });
+
+  it('the turn as stored (card before the reply) reads card result after the reply', () => {
+    const out = copilotHistoryForLlm([
+      { role: 'user', content: 'Crea un cupón' },
+      card('executed', { ok: true, code: 'JX8SJN' }),
+      { role: 'assistant', content: 'Está pendiente de tu aprobación.' },
+      { role: 'user', content: '¿Se ha creado?' },
+    ]);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(out[1].content).toBe('Está pendiente de tu aprobación.');
+    expect(out[2].content).toContain('código JX8SJN');
+    expect(out[3].content).toBe('¿Se ha creado?');
+  });
+
+  it('a pending card says nothing; a card with no reply is told before the next question', () => {
+    expect(copilotHistoryForLlm([{ role: 'user', content: 'a' }, card('pending'), { role: 'assistant', content: 'b' }])).toHaveLength(2);
+    const out = copilotHistoryForLlm([{ role: 'user', content: 'a' }, card('rejected'), { role: 'user', content: 'c' }]);
+    expect(out.map((m) => m.content)).toEqual(['a', expect.stringContaining('cancelada'), 'c']);
   });
 });

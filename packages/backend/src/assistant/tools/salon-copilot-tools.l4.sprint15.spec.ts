@@ -206,14 +206,19 @@ describe('SalonCopilotToolsService (L-4) — sprint 15 write tools', () => {
 
     it('asks for approval with the limits it creates, never for one client', async () => {
       const prisma = makePrisma({});
-      const text = await new SalonCopilotToolsService(prisma).approvalPreview(
+      const svc = new SalonCopilotToolsService(prisma);
+      // 15/11 in the salon: ten days, today included, end on the 24th.
+      svc.now = () => new Date('2026-11-15T12:00:00Z');
+      const text = await svc.approvalPreview(
         'create_coupon',
         { discountPercent: 15, expiresInDays: 10, clientId: 'c-1' },
         { ...ctxFor('owner'), prisma },
       );
       expect(text).toBe(
-        'Crear un código de descuento del 15% para cualquier clienta, de un solo uso y válido 10 días. Se aplica al cobrar en caja (no en la reserva online).',
+        'Crear un código de descuento del 15% para cualquier clienta, de un solo uso y válido hasta el martes, 24 de noviembre incluido. Se aplica al cobrar en caja (no en la reserva online).',
       );
+      const oneDay = await svc.approvalPreview('create_coupon', { discountPercent: 5, expiresInDays: 1 }, { ...ctxFor('owner'), prisma });
+      expect(oneDay).toContain('válido solo hoy');
       expect(text).not.toMatch(/específica/);
     });
 
@@ -431,6 +436,17 @@ describe('approvalPreview (A1)', () => {
     expect(text).toContain('Carmen R. (tel. ···· 222)');
     expect(text).toContain('Corte');
     expect(text).not.toMatch(/{{d}}/);
+  });
+
+  it('a wait-list notice gives the day in words, not as an ISO date', async () => {
+    const p: any = { service: { findFirst: jest.fn(async () => ({ name: 'Corte' })) } };
+    const text = await new SalonCopilotToolsService(p).approvalPreview(
+      'close_waitlist_slot',
+      { serviceId: 's-1', windowStart: '2026-11-20', windowEnd: '2026-11-20', time: '09:30' },
+      { ...ctx, prisma: p },
+    );
+    expect(text).toContain('del hueco el viernes, 20 de noviembre a las 09:30');
+    expect(text).not.toMatch(/2026-11-20/);
   });
 
   it('an appointment of another salon is flagged, not described', async () => {

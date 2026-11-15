@@ -109,7 +109,7 @@ export function ApprovalChip({ approvalId, toolName, preview, approval, onResolv
   const look = LOOK[state];
   const Icon = look.icon;
   const lines = state === "done" || state === "failed" ? approvalResultLines(result) : [];
-  const title = state === "done" ? actionLabel(toolName, "done") : look.title;
+  const title = state === "done" ? actionLabel(toolName, "done", result) : look.title;
 
   return (
     <div className={`rounded-lg p-3 text-sm border flex items-start gap-2 ${look.className}`}>
@@ -160,14 +160,19 @@ const LOOK: Record<Exclude<ApprovalCardState, "pending">, { title: string; class
   },
 };
 
-function actionLabel(toolName: string, state: "pending" | "done"): string {
+function actionLabel(toolName: string, state: "pending" | "done", result?: unknown): string {
   switch (toolName) {
     case "send_message":
       return state === "pending" ? "Pendiente: enviar WhatsApp" : "WhatsApp enviado";
     case "reschedule_appointment":
       return state === "pending" ? "Pendiente: mover cita" : "Cita movida";
     case "close_waitlist_slot":
-      return state === "pending" ? "Pendiente: avisar a la lista de espera" : "Aviso a la lista de espera enviado";
+      if (state === "pending") return "Pendiente: avisar a la lista de espera";
+      // Nobody waiting for that service and day: nothing was sent (the
+      // card said "enviado" above "No se ha avisado a nadie").
+      return (result as { notified?: number } | null)?.notified === 0
+        ? "Nadie a quien avisar en la lista de espera"
+        : "Aviso a la lista de espera enviado";
     case "mark_no_show":
       return state === "pending" ? "Pendiente: marcar que no vino" : "Marcada como no presentada";
     case "create_coupon":
