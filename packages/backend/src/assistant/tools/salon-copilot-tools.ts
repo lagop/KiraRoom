@@ -1,4 +1,5 @@
 import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WaitListService, NotifyResult } from '../../wait-list/wait-list.service';
 import { AppointmentsService } from '../../appointments/appointments.service';
@@ -14,6 +15,7 @@ import { safeTimeZone } from '../../gift-cards/gift-card-expiry';
 import { moneyOfCatalogueCents, salonTaxBasis } from '../../payments/appointment-charge';
 import { bookedServiceName } from '../../appointments/appointment-snapshot';
 import { clientReachWhere } from '../../clients/client-reach';
+import { clientSearchSql, normaliseSearchText, phoneDigitVariants } from '../../clients/client-search';
 import { salonNowMinutes } from '../briefing-gaps';
 import { loadProfessionalGaps, loadWaitListCandidates, suggestForGaps } from './copilot-gaps';
 
@@ -85,6 +87,26 @@ export const COPILOT_TOOLS = [
       required: ['professionalId'],
     },
   },
+  // The other client tools take a clientId: this is how a name ("Carmen",
+  // "Marta López") becomes one. Without it the model asked the salon for
+  // the client's "ID de ficha", which nobody knows.
+  {
+    name: 'find_client',
+    description:
+      "Find clients by name (or part of it, accents and case ignored) or by phone digits. Returns up to 8 " +
+      "matches: clientId, name, last visit date and number of visits. Use it FIRST whenever the user names a " +
+      "client and you need her clientId (get_client_360, draft_follow_up_message, send_message…). If there are " +
+      "several matches, ask which one she means (by full name and last visit), never pick one yourself. " +
+      "It never returns phones or emails. A `staff` user only finds clients she has attended.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: "Name, surname or part of them (e.g. 'carmen', 'marta lopez'), or phone digits." },
+      },
+      required: ['query'],
+    },
+  },
+
   {
     name: 'get_client_360',
     description:
@@ -97,7 +119,7 @@ export const COPILOT_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        clientId: { type: 'string', description: 'Client UUID' },
+        clientId: { type: 'string', description: 'The clientId from find_client (never ask the user for it).' },
         maxVisits: { type: 'number', description: 'Max appointments to include. Default 20.' },
       },
       required: ['clientId'],
@@ -204,7 +226,7 @@ export const COPILOT_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        clientId: { type: 'string' },
+        clientId: { type: 'string', description: 'The clientId from find_client (never ask the user for it).' },
         channel: { type: 'string', enum: ['whatsapp', 'email'] },
         occasion: { type: 'string', enum: ['confirmation', 'reminder', 'reactivation', 'custom'] },
         tone: { type: 'string', enum: ['warm', 'formal'] },
@@ -353,6 +375,9 @@ export const COPILOT_WRITE_TOOLS = [
 /** find_filling_opportunities lists at most this many gaps (Copilot audit M5: bounded payloads). */
 const MAX_LISTED_GAPS = 40;
 
+/** find_client lists at most this many matches. */
+const FIND_CLIENT_MAX = 8;
+
 /** A staff account linked to no professional: nothing of anyone's, not the whole salon's. */
 const STAFF_NOT_LINKED = {
   error: 'forbidden',
@@ -388,6 +413,8 @@ export class SalonCopilotToolsService {
         return this.getMyAgenda(args, ctx);
       case 'get_salon_agenda':
         return this.getSalonAgenda(args, ctx);
+      case 'find_client':
+        return this.findClient(args, ctx);
       case 'get_client_360':
         return this.getClient360(args, ctx);
       case 'find_filling_opportunities':
@@ -577,6 +604,58 @@ export class SalonCopilotToolsService {
    *   or any `internalOnly` note.
    * - Everyone else sees everything in the tenant.
    */
+  /**
+   * find_client: a name or phone typed in the chat → the matching clients'
+   * ids. The same search as the Clientas list (accents and case ignored,
+   * phone by digits), within the salon, with the staff reach rule.
+   */
+  private async findClient(args: Record<string, unknown>, ctx: CopilotToolContext) {
+    const raw = typeof args.query === 'string' ? args.query.slice(0, 80) : '';
+    const search = normaliseSearchText(raw);
+    const phoneDigits = phoneDigitVariants(raw);
+    if (search.length < 2 && phoneDigits.length === 0) return { error: 'missing_query' };
+
+    let reach: Prisma.ClientWhereInput = {};
+    if (ctx.role === 'staff') {
+      const own = await this.findStaffProfessionalId(ctx);
+      if (!own) return STAFF_NOT_LINKED;
+      reach = clientReachWhere({ professionalId: own });
+    }
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(
+      clientSearchSql(ctx.tenantId, { search, phoneDigits }),
+    );
+    if (rows.length === 0) return { query: raw, matches: [], total: 0 };
+
+    const where: Prisma.ClientWhereInput = {
+      tenantId: ctx.tenantId,
+      isTest: false,
+      id: { in: rows.map((r) => r.id) },
+      ...reach,
+    };
+    const [clients, total] = await Promise.all([
+      this.prisma.client.findMany({
+        where,
+        orderBy: [{ lastVisit: { sort: 'desc', nulls: 'last' } }, { firstName: 'asc' }],
+        take: FIND_CLIENT_MAX,
+        select: { id: true, firstName: true, lastName: true, lastVisit: true, visitCount: true, status: true },
+      }),
+      this.prisma.client.count({ where }),
+    ]);
+    return {
+      query: raw,
+      total,
+      matches: clients.map((c) => ({
+        clientId: c.id,
+        name: `${c.firstName} ${c.lastName}`.trim(),
+        lastVisit: c.lastVisit ? c.lastVisit.toISOString().slice(0, 10) : null,
+        visitCount: c.visitCount ?? 0,
+        ...(c.status === 'active' ? {} : { status: c.status }),
+      })),
+      ...(total > clients.length ? { note: `Hay ${total} coincidencias; pide el apellido para afinar.` } : {}),
+    };
+  }
+
   private async getClient360(args: Record<string, unknown>, ctx: CopilotToolContext) {
     const clientId = args.clientId as string | undefined;
     if (!clientId) return { error: 'missing_clientId' };

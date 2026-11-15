@@ -28,6 +28,12 @@ function setup(opts: { conversations?: any[]; messages?: any[]; feedback?: any[]
   const feedback = opts.feedback ?? [];
   const prisma: any = {
     assistantConversation: {
+      // The first question names the conversation.
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const c = conversations.find((x) => x.id === where.id && !x.title);
+        if (c) Object.assign(c, data);
+        return { count: c ? 1 : 0 };
+      }),
       findFirst: jest.fn(async ({ where }: any) =>
         conversations.find(
           (c) =>
