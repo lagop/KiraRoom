@@ -107,6 +107,23 @@ export const COPILOT_TOOLS = [
     },
   },
 
+  // Same for services: without it the copilot asked the owner for the
+  // service's "identificador interno" before notifying the wait list.
+  {
+    name: 'list_services',
+    description:
+      "List the salon's active services: serviceId, name and duration in minutes (up to 100). Use it whenever " +
+      "the user names a service and you need its serviceId (close_waitlist_slot…). Optional query filters by " +
+      "name (accents and case ignored). Never ask the user for a service ID.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: "Optional. Name or part of it (e.g. 'corte', 'mechas')." },
+      },
+      required: [],
+    },
+  },
+
   {
     name: 'get_client_360',
     description:
@@ -352,7 +369,7 @@ export const COPILOT_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        serviceId: { type: 'string' },
+        serviceId: { type: 'string', description: 'The serviceId from list_services (never ask the user for it).' },
         professionalId: { type: 'string', description: 'Optional. Restrict to clients for this professional.' },
         windowStart: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         windowEnd: { type: 'string', description: 'ISO date YYYY-MM-DD' },
@@ -437,6 +454,8 @@ export class SalonCopilotToolsService {
         return this.getSalonAgenda(args, ctx);
       case 'find_client':
         return this.findClient(args, ctx);
+      case 'list_services':
+        return this.listServices(args, ctx);
       case 'get_client_360':
         return this.getClient360(args, ctx);
       case 'find_filling_opportunities':
@@ -684,6 +703,24 @@ export class SalonCopilotToolsService {
         ...(c.status === 'active' ? {} : { status: c.status }),
       })),
       ...(total > clients.length ? { note: `Hay ${total} coincidencias; pide el apellido para afinar.` } : {}),
+    };
+  }
+
+  /** list_services: a service named in the chat → its serviceId. */
+  private async listServices(args: Record<string, unknown>, ctx: CopilotToolContext) {
+    const raw = typeof args.query === 'string' ? args.query.slice(0, 80) : '';
+    const search = normaliseSearchText(raw);
+    const services = await this.prisma.service.findMany({
+      where: { tenantId: ctx.tenantId, isActive: true },
+      orderBy: { name: 'asc' },
+      take: 300,
+      select: { id: true, name: true, duration: true },
+    });
+    const matches = search ? services.filter((s) => normaliseSearchText(s.name).includes(search)) : services;
+    return {
+      ...(raw ? { query: raw } : {}),
+      total: matches.length,
+      services: matches.slice(0, 100).map((s) => ({ serviceId: s.id, name: s.name, durationMinutes: s.duration })),
     };
   }
 

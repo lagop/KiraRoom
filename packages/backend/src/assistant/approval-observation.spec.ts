@@ -10,6 +10,7 @@ describe('approvalObservation (Copilot audit M8/M9): the model learns what becam
     const text = approvalObservation('Crear un cupón del 10 %', 'executed', { ok: true, code: 'AB12CD' })!;
     expect(text).toContain('aprobada y hecha');
     expect(text).toContain('código AB12CD');
+    expect(text).toMatch(/^\[Registro del sistema, no escrito por la usuaria\./);
     expect(text).toContain('Crear un cupón del 10 %');
   });
 
