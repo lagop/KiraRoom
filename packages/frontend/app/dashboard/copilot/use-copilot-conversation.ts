@@ -192,10 +192,10 @@ export function useCopilotConversation() {
           ...s,
           sending: false,
           conversation: reply.conversation ?? s.conversation,
-          messages: [
-            ...s.messages.filter((m) => m.id !== optimisticUser.id),
-            reply.message,
-          ],
+          // Keep the question on screen: the next refetch replaces the
+          // whole list with the stored messages (the question was dropped
+          // here and only came back if that refetch worked).
+          messages: [...s.messages, reply.message],
         }));
         // If the reply references further tool calls, keep polling.
         if (reply.toolsExecuted.length > 0 || reply.pendingApprovals.length > 0) {
