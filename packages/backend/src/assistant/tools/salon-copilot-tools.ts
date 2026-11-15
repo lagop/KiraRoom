@@ -940,6 +940,7 @@ export class SalonCopilotToolsService {
       todayDay: clock.today,
       nowMinutes: clock.nowMinutes,
       openingHours: clock.openingHours,
+      timeZone: clock.timeZone,
       professionalIds: professionalId ? [professionalId] : null,
       locationId: location?.id ?? null,
       minGapMinutes: 30,
@@ -1027,7 +1028,7 @@ export class SalonCopilotToolsService {
   /** The salon's today, its clock now (minutes since midnight) and its opening hours. */
   private async salonClock(
     ctx: CopilotToolContext,
-  ): Promise<{ today: string; nowMinutes: number; openingHours: unknown }> {
+  ): Promise<{ today: string; nowMinutes: number; openingHours: unknown; timeZone: string }> {
     let tenant: { timezone?: string | null; openingHours?: unknown } | null = null;
     try {
       tenant = await this.prisma.tenant.findUnique({
@@ -1039,7 +1040,12 @@ export class SalonCopilotToolsService {
     }
     const timeZone = safeTimeZone(tenant?.timezone);
     const now = this.now();
-    return { today: salonToday(timeZone, now), nowMinutes: salonNowMinutes(timeZone, now), openingHours: tenant?.openingHours };
+    return {
+      today: salonToday(timeZone, now),
+      nowMinutes: salonNowMinutes(timeZone, now),
+      openingHours: tenant?.openingHours,
+      timeZone,
+    };
   }
 
   /**
@@ -1121,6 +1127,7 @@ export class SalonCopilotToolsService {
       todayDay: clock.today,
       nowMinutes: clock.nowMinutes,
       openingHours: clock.openingHours,
+      timeZone: clock.timeZone,
       professionalIds,
       locationId: location?.id ?? null,
       minGapMinutes: minGap,

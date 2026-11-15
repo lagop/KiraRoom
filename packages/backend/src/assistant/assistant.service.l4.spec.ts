@@ -54,7 +54,11 @@ function makePrisma(opts: {
       findMany: jest.fn().mockImplementation(async ({ where }: any) => {
         return appts.filter((a: any) => {
           if (where?.tenantId && a.tenantId !== where.tenantId) return false;
-          if (where?.professionalId && a.professionalId !== where.professionalId) return false;
+          if (where?.professionalId?.not !== undefined) {
+            if (a.professionalId === where.professionalId.not) return false;
+          } else if (where?.professionalId && a.professionalId !== where.professionalId) return false;
+          const rowPro = where?.services?.some?.professionalId;
+          if (rowPro && !(a.services ?? []).some((r: any) => r.professionalId === rowPro)) return false;
           if (where?.scheduledDate?.gte && a.scheduledDate < where.scheduledDate.gte) return false;
           if (where?.scheduledDate?.lt && a.scheduledDate >= where.scheduledDate.lt) return false;
           if (where?.status?.in && !where.status.in.includes(a.status)) return false;
@@ -267,6 +271,43 @@ describe('AssistantService.getDailyBriefing (L-4)', () => {
     const res = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
     expect(res.gaps.items).toEqual([
       { start: '10:00', end: '12:00', minutes: 120, professionalId: 'lucia', professionalFirstName: 'Lucía' },
+    ]);
+  });
+
+  // Lucía's colour, then Marta's rinse in the same visit: Marta used to show
+  // as free during the rinse.
+  it('a colleague\'s visit where she does a service is not a gap for her', async () => {
+    const shift = [{ day: 'tuesday', openTime: '10:00', closeTime: '12:00' }];
+    const row = (id: string, professionalId: string, minutes: number) => ({
+      id, professionalId, scheduledStart: null, scheduledEnd: null, isParallel: false, type: 'active', status: 'confirmed',
+      service: { name: id, duration: minutes, bufferTime: 0 },
+    });
+    const appts = [
+      {
+        id: 'v-1', tenantId: TENANT_ID, professionalId: 'lucia', scheduledDate: dayStart(), scheduledTime: '10:00', duration: 90,
+        status: 'confirmed', client: { firstName: 'C' }, professional: { firstName: 'Lucía' },
+        services: [row('colour', 'lucia', 60), row('rinse', 'marta', 30)],
+      },
+    ];
+    const pros = [
+      { id: 'lucia', firstName: 'Lucía', userId: 'u-lucia', workingHours: shift },
+      { id: 'marta', firstName: 'Marta', userId: STAFF_USER.id, workingHours: shift },
+    ];
+    const prisma = makePrisma({ appointments: appts, professionals: pros });
+
+    const manager = await makeService(prisma).getDailyBriefing({ id: MANAGER_USER.id, tenantId: TENANT_ID, role: 'manager' });
+    expect(manager.gaps.items.map((g) => [g.professionalFirstName, g.start, g.end])).toEqual([
+      ['Marta', '10:00', '11:00'],
+      ['Lucía', '11:00', '12:00'],
+      ['Marta', '11:30', '12:00'],
+    ]);
+
+    // Marta herself: not one of her appointments, but not free either.
+    const staff = await makeService(prisma).getDailyBriefing({ id: STAFF_USER.id, tenantId: TENANT_ID, role: 'staff' });
+    expect(staff.appointments.total).toBe(0);
+    expect(staff.gaps.items.map((g) => [g.start, g.end])).toEqual([
+      ['10:00', '11:00'],
+      ['11:30', '12:00'],
     ]);
   });
 

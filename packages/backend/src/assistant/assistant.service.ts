@@ -16,7 +16,8 @@ import {
 import { SalonCopilotToolsService, COPILOT_TOOLS } from './tools/salon-copilot-tools';
 import { ActionApprovalService } from './action-approval.service';
 import { AssistantTierService } from './assistant-tier.service';
-import { VISIT_ROW_ORDER, minutesUntilFree } from '../appointments/visit-totals';
+import { VISIT_ROW_ORDER, VISIT_ROW_SELECT } from '../appointments/visit-totals';
+import { VISIT_BUSY_SELECT, visitBusy } from './tools/copilot-gaps';
 import { addDays, salonToday } from '../analytics/analytics-metrics';
 import { safeTimeZone } from '../gift-cards/gift-card-expiry';
 import { timeOffBetween } from '../time-off/time-off-query';
@@ -710,12 +711,24 @@ export class AssistantService {
         professional: { select: { firstName: true } },
         duration: true,
         service: { select: { bufferTime: true } },
-        services: {
-          select: { type: true, status: true, service: { select: { bufferTime: true } } },
-          orderBy: VISIT_ROW_ORDER as any,
-        },
+        services: { select: VISIT_ROW_SELECT, orderBy: VISIT_ROW_ORDER as any },
       },
     });
+
+    // A colleague's visit where this professional does a service (the rinse
+    // after the colour) keeps her busy too: not one of her appointments, but
+    // not a gap either.
+    const sharedVisits =
+      staffProfessionalId && staffProfessionalId !== '__no_match__'
+        ? await this.prisma.appointment.findMany({
+            where: {
+              ...apptWhere,
+              professionalId: { not: staffProfessionalId },
+              services: { some: { professionalId: staffProfessionalId } },
+            },
+            select: VISIT_BUSY_SELECT as any,
+          })
+        : [];
 
     // 2. Pending confirmations — only surfaced to roles that book/manage.
     const pendingConfirmations = appts
@@ -729,7 +742,8 @@ export class AssistantService {
 
     // 3. Gaps ≥ 30 min per professional, inside their bookable hours and
     // from now on (briefing-gaps.ts). A professional is free again after the
-    // appointment (30 min when it has no length) and its cleanup time.
+    // appointment (30 min when it has no length) and its cleanup time; each
+    // professional of a shared visit is busy during her own services.
     const professionals = await this.prisma.professional.findMany({
       where: {
         tenantId: user.tenantId,
@@ -744,11 +758,7 @@ export class AssistantService {
       nowMinutes: salonNowMinutes(timeZone),
       openingHours: tenant?.openingHours,
       professionals,
-      busy: appts.map((a) => ({
-        professionalId: a.professionalId,
-        start: a.scheduledTime,
-        minutes: minutesUntilFree(a as any, 30),
-      })),
+      busy: [...appts, ...(sharedVisits as any[])].flatMap((a) => visitBusy(a as any, timeZone, todayDay)),
       blocks,
     });
 
