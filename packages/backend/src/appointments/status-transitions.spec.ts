@@ -342,9 +342,24 @@ describe("PATCH /appointments/:id with a status", () => {
   });
 
   it("no_show behaves like the no-show endpoint", async () => {
-    const b = build(S.confirmed);
+    const b = build(S.confirmed, { startsInMs: -3_600_000 });
     await b.service.update(OWNER, "apt-1", { status: S.no_show } as any);
     expect(b.sent.sendAppointmentNoShowNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  // A no-show two days ahead closed the appointment and its reminder never
+  // went out: nobody fails to turn up before the time.
+  it("no_show before the appointment's time is a 409 and nothing is written", async () => {
+    const b = build(S.confirmed, { startsInMs: 2 * DAY_MS });
+    await expect(b.service.markNoShow(OWNER, "apt-1")).rejects.toMatchObject({
+      response: { code: "NO_SHOW_BEFORE_START" },
+    });
+    expect(b.prisma.appointment.update).not.toHaveBeenCalled();
+    expect(b.sent.sendAppointmentNoShowNotifications).not.toHaveBeenCalled();
+
+    const started = build(S.pending, { startsInMs: -60_000 });
+    await started.service.markNoShow(OWNER, "apt-1");
+    expect(started.prisma.appointment.update.mock.calls[0][0].data).toMatchObject({ status: S.no_show });
   });
 
   it("an illegal change is a 409 and nothing is written, services included", async () => {
@@ -446,6 +461,21 @@ describe("the other callers", () => {
       message: "Una cita completada no puede pasar a marcada como no presentada.",
     });
     expect(done.prisma.appointment.update).not.toHaveBeenCalled();
+  });
+
+  it("the copilot refuses a no-show before the appointment's time, before any card", async () => {
+    const b = build(S.confirmed, { startsInMs: 2 * DAY_MS });
+    const copilot = new SalonCopilotToolsService(b.prisma, undefined, b.service);
+    const ctx = { prisma: b.prisma, tenantId: "t1", userId: "u1", role: "owner" as any };
+    const blocked = await copilot.approvalPrecheck("mark_no_show", { appointmentId: "apt-1" }, ctx);
+    expect(blocked).toMatchObject({ error: "not_started" });
+    const res = await copilot.execute("mark_no_show", { appointmentId: "apt-1" }, ctx);
+    expect(res).toMatchObject({ error: "not_started" });
+    expect(b.prisma.appointment.update).not.toHaveBeenCalled();
+
+    const started = build(S.confirmed, { startsInMs: -60_000 });
+    const ok = new SalonCopilotToolsService(started.prisma, undefined, started.service);
+    expect(await ok.approvalPrecheck("mark_no_show", { appointmentId: "apt-1" }, { ...ctx, prisma: started.prisma })).toBeNull();
   });
 });
 

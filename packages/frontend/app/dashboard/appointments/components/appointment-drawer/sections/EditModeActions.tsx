@@ -42,6 +42,8 @@ export interface EditModeActionsProps {
   onCancelEdit: () => void;
   onSave: () => void;
   onStatusChange: (newStatus: AppointmentStatus) => void;
+  /** The appointment's start on the salon's clock: no "No se presentó" before it. */
+  startsAt?: Date | null;
   labels: {
     created: string;
     viewMode: string;
@@ -78,6 +80,7 @@ export function EditModeActions({
   onCancelEdit,
   onSave,
   onStatusChange,
+  startsAt,
   labels,
 }: EditModeActionsProps) {
   return (
@@ -139,7 +142,7 @@ export function EditModeActions({
             </span>
           ) : (
             <>
-              {statusActions(appointment.status).map((to) => {
+              {statusActions(appointment.status, startsAt).map((to) => {
                 const button = STATUS_BUTTONS[to];
                 if (!button) return null;
                 return (

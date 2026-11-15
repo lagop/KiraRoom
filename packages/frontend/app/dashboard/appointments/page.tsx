@@ -34,6 +34,7 @@ import {
   sendStatusChange,
   serverMessage,
   statusActions,
+  appointmentStartsAt,
   type AskedStatus,
 } from "./components/appointment-drawer.utils";
 import { StatusChangeDialog } from "./components/StatusChangeDialog";
@@ -493,7 +494,8 @@ function AppointmentsPageContent() {
       {/* Only what the server's transition table allows: the next step,
           "No se presentó", "Cancelar". */}
       {withStatus &&
-        statusActions(appointment.status).map((to) => {
+        // No "No se presentó" before its time (the server refuses it too).
+        statusActions(appointment.status, appointmentStartsAt(appointment)).map((to) => {
           const ui = statusActionUi[to];
           if (!ui) return null;
           return (
