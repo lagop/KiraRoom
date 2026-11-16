@@ -34,15 +34,15 @@ function socketOriginOf(origin) {
 }
 
 /**
- * @param {{ apiUrl?: string, dev?: boolean }} opts
- * @returns {string}
- */
-/**
  * Cloudflare Turnstile, the captcha on signup, forgot-password and (after
  * failures) login: its script and its iframe come from this origin.
  */
 const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
 
+/**
+ * @param {{ apiUrl?: string, dev?: boolean }} [opts]
+ * @returns {string}
+ */
 function buildCsp({ apiUrl, dev = false } = {}) {
   const api = apiUrl ? originOf(apiUrl) : null;
   const apiSocket = socketOriginOf(api);
@@ -95,6 +95,10 @@ function cspHeaders({ apiUrl, dev = false } = {}) {
  * The page policy plus the widget's frame-ancestors directive when it has
  * one (null: any site may frame it). lib/embed-frame.ts builds and checks
  * that directive.
+ *
+ * @param {string} policy
+ * @param {string | null} frameAncestors
+ * @returns {string}
  */
 function withFrameAncestors(policy, frameAncestors) {
   return frameAncestors ? `${policy}; ${frameAncestors}` : policy;
