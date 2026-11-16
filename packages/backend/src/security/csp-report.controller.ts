@@ -11,8 +11,8 @@ const MAX_TRACKED = 500;
 /**
  * Receives the browsers' Content Security Policy reports (see
  * packages/frontend/csp.js) and writes each distinct violation to the log
- * as a warning. While the policy is report-only, that log is how we learn
- * whether enforcing it would break a real page.
+ * as a warning. The policy is enforced, so that log is how we learn that
+ * it blocked something a real page needs.
  */
 @ApiExcludeController()
 @Controller("csp-report")

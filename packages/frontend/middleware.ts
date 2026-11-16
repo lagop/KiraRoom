@@ -11,6 +11,13 @@ import {
 import { retiredClientAreaRedirect } from "./lib/client-area-redirect";
 import { embedToken, frameAncestorsHeader } from "./lib/embed-frame";
 import { GONE_SALON_HTML, movedSitePath, sitePathSlug } from "./lib/salon-legal";
+import { buildCsp, withFrameAncestors } from "./csp";
+
+/** The policy every page sends (csp.js); the widget's page gets it here, with its frame-ancestors. */
+const PAGE_CSP: string = buildCsp({
+  apiUrl: process.env.NEXT_PUBLIC_API_URL,
+  dev: process.env.NODE_ENV !== "production",
+});
 
 // All authentication for `/saas/*` is enforced server-side by the NestJS
 // `SaasOwnerGuard` on the corresponding API endpoints. This middleware is
@@ -208,12 +215,13 @@ export async function middleware(request: NextRequest) {
   const host = bareHost(request.headers.get("host"));
 
   // /embed/<token>: the salon's booking widget, framed on its own site.
-  // Only the sites it allowed may frame it.
+  // Only the sites it allowed may frame it. Its whole policy is set here
+  // (next.config.js leaves /embed/* out), so the two cannot clash.
   const widgetToken = embedToken(request.nextUrl.pathname);
   if (widgetToken) {
     const response = NextResponse.next();
-    const header = await embedFrameHeader(widgetToken);
-    if (header) response.headers.set("Content-Security-Policy", header);
+    const frameAncestors = await embedFrameHeader(widgetToken);
+    response.headers.set("Content-Security-Policy", withFrameAncestors(PAGE_CSP, frameAncestors));
     return response;
   }
 

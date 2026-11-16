@@ -9,13 +9,14 @@ const { cspHeaders } = require('./csp')
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1'
 
+const csp = cspHeaders({ apiUrl, dev: process.env.NODE_ENV !== 'production' })
+
 const securityHeaders = [
   { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-  // Report-only for now: see csp.js.
-  ...cspHeaders({ apiUrl, dev: process.env.NODE_ENV !== 'production' }),
+  ...csp.reporting,
 ]
 
 /**
@@ -53,7 +54,8 @@ const nextConfig = {
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },
-      { source: '/((?!embed/).*)', headers: [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }] },
+      // The widget's policy comes from middleware.ts, with its frame-ancestors (see csp.js).
+      { source: '/((?!embed/).*)', headers: [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }, csp.policy] },
     ]
   },
   webpack(config, { dev, isServer }) {
