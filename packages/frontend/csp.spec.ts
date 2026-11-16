@@ -1,11 +1,11 @@
 /**
- * The Content Security Policy every page sends (report-only for now).
+ * The Content Security Policy every page sends, enforced.
  *
  * Run: npx ts-node --project tsconfig.test.json --transpile-only csp.spec.ts
  */
 export {};
 
-const { buildCsp, cspHeaders } = require("./csp");
+const { buildCsp, cspHeaders, withFrameAncestors } = require("./csp");
 
 let pass = 0;
 let fail = 0;
@@ -54,12 +54,39 @@ check("next dev gets eval and its reload socket", dev["script-src"].includes("'u
 
 const headers = cspHeaders({ apiUrl: API });
 check(
-  "sent as Report-Only, so nothing breaks while the reports come in",
-  headers[0].key === "Content-Security-Policy-Report-Only" && !headers.some((h: any) => h.key === "Content-Security-Policy"),
+  "enforced, no longer report-only",
+  headers.policy.key === "Content-Security-Policy" && headers.policy.value === buildCsp({ apiUrl: API }),
   headers,
 );
-check("with the Reporting-Endpoints header Chromium needs", headers[1]?.value === `csp="${API}/csp-report"`, headers);
+check("with the Reporting-Endpoints header Chromium needs", headers.reporting[0]?.value === `csp="${API}/csp-report"`, headers);
 check("a trailing slash in the API URL does not double up", buildCsp({ apiUrl: `${API}/` }).includes(`${API}/csp-report`));
+
+// The booking widget's page: one policy, the page's plus its frame-ancestors.
+const page = buildCsp({ apiUrl: API });
+const widget = directives(withFrameAncestors(page, "frame-ancestors 'self' https://salon.example"));
+check(
+  "the widget keeps the whole page policy and adds its frame-ancestors",
+  widget["script-src"].join(" ") === prod["script-src"].join(" ") &&
+    widget["frame-ancestors"]?.join(" ") === "'self' https://salon.example",
+  widget,
+);
+check("a widget any site may frame gets the page policy alone", withFrameAncestors(page, null) === page);
+
+// next.config.js leaves /embed/* out of its policy, and middleware.ts sets the widget's.
+{
+  const fs = require("fs");
+  const path = require("path");
+  const config: string = fs.readFileSync(path.join(__dirname, "next.config.js"), "utf8");
+  const middleware: string = fs.readFileSync(path.join(__dirname, "middleware.ts"), "utf8");
+  check(
+    "next.config.js sends the policy only outside /embed/",
+    /source:\s*'\/\(\(\?!embed\/\)\.\*\)'[^\n]*csp\.policy/.test(config) && !/'\/:path\*'[^\n]*csp\.policy/.test(config),
+  );
+  check(
+    "middleware.ts sends the widget's policy with its frame-ancestors",
+    /Content-Security-Policy",\s*withFrameAncestors\(PAGE_CSP, frameAncestors\)/.test(middleware),
+  );
+}
 
 // The production image copies next.config.js on its own (packages/frontend/Dockerfile),
 // so every local file it requires must be copied too. csp.js was not, and the

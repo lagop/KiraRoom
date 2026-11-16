@@ -2,8 +2,8 @@ import { CspReportController } from "./csp-report.controller";
 import { cleanUrl, parseCspReport } from "./csp-report";
 
 /**
- * While the Content Security Policy is report-only, these reports are how we
- * learn whether enforcing it would break a page. Both browser formats are
+ * The Content Security Policy is enforced; these reports are how we learn
+ * that it blocked something a page needs. Both browser formats are
  * read, query strings (which can carry tokens) are dropped, and a repeated
  * violation is logged once an hour.
  */

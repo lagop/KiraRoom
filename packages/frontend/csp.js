@@ -1,11 +1,10 @@
 /**
- * Content Security Policy for every page, sent for now as
- * Content-Security-Policy-Report-Only: the browser enforces nothing and
- * reports what the policy would have blocked to the API (/csp-report),
- * whose log shows whether a real page needs something the policy forgets.
- * Once a week of reports is clean, the same policy becomes enforcing.
+ * Content Security Policy for every page, enforced. It ran report-only from
+ * October to November 2026 with no violation from a real page; the browser
+ * still reports what it blocks to the API (/csp-report), whose log shows a
+ * page that needs something the policy forgets.
  *
- * What it limits, once enforced:
+ * What it limits:
  * - scripts only from the app itself: an injected <script src> from another
  *   host does not load. Inline scripts stay allowed ('unsafe-inline'),
  *   because Next.js bootstraps every page with them; nonces would make
@@ -77,13 +76,28 @@ function buildCsp({ apiUrl, dev = false } = {}) {
   return parts.join('; ');
 }
 
-/** The headers next.config.js adds to every page. */
+/**
+ * The headers next.config.js adds: `policy` to every page but the booking
+ * widget (/embed/*), whose policy middleware.ts sends together with the
+ * widget's own frame-ancestors (two enforced policies on one page would both
+ * apply, and which of next.config and middleware wins on the same header is
+ * not ours to pick); `reporting` to every page.
+ */
 function cspHeaders({ apiUrl, dev = false } = {}) {
-  const headers = [{ key: 'Content-Security-Policy-Report-Only', value: buildCsp({ apiUrl, dev }) }];
-  if (apiUrl) {
-    headers.push({ key: 'Reporting-Endpoints', value: `csp="${apiUrl.replace(/\/+$/, '')}/csp-report"` });
-  }
-  return headers;
+  const policy = { key: 'Content-Security-Policy', value: buildCsp({ apiUrl, dev }) };
+  const reporting = apiUrl
+    ? [{ key: 'Reporting-Endpoints', value: `csp="${apiUrl.replace(/\/+$/, '')}/csp-report"` }]
+    : [];
+  return { policy, reporting };
 }
 
-module.exports = { buildCsp, cspHeaders };
+/**
+ * The page policy plus the widget's frame-ancestors directive when it has
+ * one (null: any site may frame it). lib/embed-frame.ts builds and checks
+ * that directive.
+ */
+function withFrameAncestors(policy, frameAncestors) {
+  return frameAncestors ? `${policy}; ${frameAncestors}` : policy;
+}
+
+module.exports = { buildCsp, cspHeaders, withFrameAncestors };
