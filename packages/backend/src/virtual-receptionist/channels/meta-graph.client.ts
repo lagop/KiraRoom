@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { metaApiVersion } from "../../whatsapp/meta-api-version";
 
 /** Graph API error body: `{ error: { message, type, code } }`. */
 export interface GraphError {
@@ -54,7 +55,7 @@ export class MetaGraphClient {
   constructor(private readonly config: ConfigService) {}
 
   private version(): string {
-    return this.config.get<string>("META_API_VERSION") || "v21.0";
+    return metaApiVersion(this.config.get<string>("META_API_VERSION"));
   }
 
   private base(): string {

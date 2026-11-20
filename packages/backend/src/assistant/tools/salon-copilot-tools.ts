@@ -9,6 +9,7 @@ import { VISIT_ROW_ORDER } from '../../appointments/visit-totals';
 import { clientsWhoAcceptedWhatsAppMarketing } from '../../consent/marketing-consent';
 import { normalizePhone } from '../../common/phone';
 import { STANDARD_TEMPLATES, spanishDate, templateParam } from '../../whatsapp/whatsapp-templates';
+import { metaGraphBaseUrl } from '../../whatsapp/meta-api-version';
 import { noticeChannelsOf } from '../../consent/client-notices';
 import { maskedPhone } from '../../clients/client-reach';
 import { addDays, salonToday } from '../../analytics/analytics-metrics';
@@ -1570,7 +1571,7 @@ private async sendMessage(
   ];
 
   const resp = await metaFetch(
-    `https://graph.facebook.com/v20.0/${conn.phoneNumberId}/messages`,
+    `${metaGraphBaseUrl(process.env.META_API_VERSION)}/${conn.phoneNumberId}/messages`,
     {
       method: 'POST',
       headers: {
@@ -2132,7 +2133,7 @@ async function templateCategory(token: string, wabaId: string | null | undefined
   if (!wabaId) return null;
   try {
     const resp = await metaFetch(
-      `https://graph.facebook.com/v20.0/${wabaId}/message_templates?fields=name,category&name=${encodeURIComponent(name)}`,
+      `${metaGraphBaseUrl(process.env.META_API_VERSION)}/${wabaId}/message_templates?fields=name,category&name=${encodeURIComponent(name)}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!resp.ok) return null;

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { EncryptionService } from "../common/encryption/encryption.service";
+import { metaGraphBaseUrl } from "./meta-api-version";
 
 export interface MetaCloudApiResponse<T = any> {
   messaging_product: "whatsapp";
@@ -19,8 +20,7 @@ export class MetaCloudApiClient {
   ) {}
 
   private baseUrl(): string {
-    const version = this.config.get<string>("META_API_VERSION") || "v20.0";
-    return `https://graph.facebook.com/${version}`;
+    return metaGraphBaseUrl(this.config.get<string>("META_API_VERSION"));
   }
 
   encryptToken(plain: string): string {
