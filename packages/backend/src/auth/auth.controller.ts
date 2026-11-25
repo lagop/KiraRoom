@@ -173,7 +173,7 @@ export class AuthController {
   async acceptTerms(@CurrentUser() user: PanelUser, @Body() _dto: AcceptTermsDto, @Req() req: Request) {
     staffOnly(user);
     if (user.impersonatedBy) {
-      throw new ForbiddenException("Los términos los acepta la dueña del salón, no una sesión de soporte.");
+      throw new ForbiddenException("Los términos los acepta la dirección del salón, no una sesión de soporte.");
     }
     return this.authService.acceptCurrentTerms(user.id, clientIp(req));
   }

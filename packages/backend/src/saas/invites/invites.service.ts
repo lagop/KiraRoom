@@ -169,7 +169,7 @@ export class InvitesService {
     });
     if (existingUser) {
       throw new ConflictException(
-        `${email} ya tiene una cuenta en KiraRoom. Si se une a un equipo, la dueña del salón la añade desde su panel.`,
+        `${email} ya tiene una cuenta en KiraRoom. Si se une a un equipo, la dirección del salón la añade desde su panel.`,
       );
     }
 

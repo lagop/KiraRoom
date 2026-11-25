@@ -92,7 +92,7 @@ export default function InviteTenantPage() {
       </div>
 
       <p className="text-sm text-slate-600 mb-6">
-        La dueña recibirá un email con un enlace válido durante 7
+        La cuenta titular recibirá un email con un enlace válido durante 7
         días. Al hacer clic completará un wizard de 3 pasos (contraseña,
         dirección del salón, zona horaria) y la cuenta + tenant se
         crearán automáticamente con 14 días de prueba del plan Pro.
@@ -117,14 +117,14 @@ export default function InviteTenantPage() {
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">
-            Email de la dueña
+            Email de la cuenta titular
           </label>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            placeholder="dueno@glamour-studio.com"
+            placeholder="hola@glamour-studio.com"
             className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>

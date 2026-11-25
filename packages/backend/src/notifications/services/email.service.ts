@@ -724,7 +724,7 @@ export class EmailService {
             </td></tr>
           </table>
           <p style="font-size:12px;color:#64748b;line-height:1.5;margin:0;">
-            Te llega porque eres dueña o administradora del salón. Puedes dejar de recibir estos avisos en
+            Te llega porque diriges o administras el salón. Puedes dejar de recibir estos avisos en
             <a href="${this.escapeHtml(data.settingsUrl)}" style="color:#64748b;">Ajustes &gt; Seguridad</a>.
           </p>
         </td></tr>

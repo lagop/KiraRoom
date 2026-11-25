@@ -137,9 +137,9 @@ export class WebAddressService {
     input: string,
     now: Date = new Date(),
   ) {
-    if (actor.role !== "owner") throw new ForbiddenException("Solo la dueña del salón puede cambiar la dirección web.");
+    if (actor.role !== "owner") throw new ForbiddenException("Solo la dirección del salón puede cambiar su dirección web.");
     if (actor.impersonatedBy) {
-      throw new ForbiddenException("La dirección web la cambia la dueña del salón, no una sesión de soporte.");
+      throw new ForbiddenException("La dirección web la cambia la dirección del salón, no una sesión de soporte.");
     }
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },

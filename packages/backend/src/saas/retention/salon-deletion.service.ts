@@ -91,7 +91,7 @@ export class SalonDeletionService {
     credentials: { password?: string; code?: string },
     now: Date = new Date(),
   ): Promise<DeletionStatus> {
-    if (actor.role !== "owner") throw new ForbiddenException("Solo la dueña del salón puede borrarlo.");
+    if (actor.role !== "owner") throw new ForbiddenException("Solo la dirección del salón puede borrarlo.");
     await this.checkCredentials(actor.id, tenantId, credentials, now);
 
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
@@ -140,7 +140,7 @@ export class SalonDeletionService {
   }
 
   async cancel(tenantId: string, actor: { id: string; role: string }, now: Date = new Date()): Promise<DeletionStatus> {
-    if (actor.role !== "owner") throw new ForbiddenException("Solo la dueña del salón puede anular el borrado.");
+    if (actor.role !== "owner") throw new ForbiddenException("Solo la dirección del salón puede anular el borrado.");
     const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant || tenant.deletedAt || tenant.anonymizedAt) throw new NotFoundException("Salón no encontrado");
     if (!tenant.deletionRequestedAt) throw new ConflictException(DELETION_NOT_PENDING);

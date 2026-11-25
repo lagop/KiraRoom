@@ -1846,7 +1846,7 @@ export class AppointmentsService {
       const others = [...rowsBefore, ...rowsAfter].some((r) => (r.professionalId ?? mine) !== mine);
       if (others) {
         throw new ForbiddenException(
-          "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la cambie.",
+          "Esta cita la comparten varios profesionales: pide a la dirección del salón o a un encargado que la cambie.",
         );
       }
     }
@@ -2883,7 +2883,7 @@ export class AppointmentsService {
     // The controller already says so; checked here too, since a staff
     // member used this to mark their own appointments paid for any amount.
     if (user?.role !== "owner" && user?.role !== "admin") {
-      throw new ForbiddenException("Solo la dueña o un encargado pueden corregir el pago de una cita.");
+      throw new ForbiddenException("Solo la dirección del salón o un encargado pueden corregir el pago de una cita.");
     }
     const appointment = await this.findOne(user, id);
 
@@ -2940,7 +2940,7 @@ export class AppointmentsService {
     const staffOwn = await this.staffVisitCheck(user, visit);
     if (staffOwn) {
       if (input.scope !== "visit") {
-        throw new ForbiddenException("Mover solo un servicio de la visita es cosa de la dueña o del encargado.");
+        throw new ForbiddenException("Mover solo un servicio de la visita es cosa de la dirección del salón o de un encargado.");
       }
       if (input.professionalId && input.professionalId !== staffOwn) {
         throw new ForbiddenException("Solo puedes mover tus citas dentro de tu agenda.");
@@ -3031,7 +3031,7 @@ export class AppointmentsService {
     if (!own) throw new NotFoundException("No tienes permiso para modificar esta cita");
     if (!visit.services.every((s) => s.professionalId === own.id)) {
       throw new ForbiddenException(
-        "Esta cita la comparten varios profesionales: pide a la dueña o al encargado que la mueva.",
+        "Esta cita la comparten varios profesionales: pide a la dirección del salón o a un encargado que la mueva.",
       );
     }
     return own.id;

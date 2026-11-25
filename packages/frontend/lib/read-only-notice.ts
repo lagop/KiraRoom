@@ -45,8 +45,8 @@ export function readOnlyNotice(ctx: {
       (owner
         ? ""
         : suspended
-          ? " Pide a la dueña del salón que actualice el pago."
-          : " Pide a la dueña del salón que elija un plan."),
+          ? " Pide a la dirección del salón que actualice el pago."
+          : " Pide a la dirección del salón que elija un plan."),
     cta: owner ? (suspended ? "Actualizar el pago" : "Elegir un plan") : null,
   };
 }

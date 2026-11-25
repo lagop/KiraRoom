@@ -465,7 +465,7 @@ export class AuthService {
   async acceptCurrentTerms(userId: string, ip: string | null): Promise<{ accepted: true; version: string }> {
     const row = await this.prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true, role: true } });
     if (!row || row.role !== "owner") {
-      throw new ForbiddenException("Solo la dueña del salón puede aceptar los términos.");
+      throw new ForbiddenException("Solo la dirección del salón puede aceptar los términos.");
     }
     const already = await this.prisma.legalAcceptance.count({
       where: { tenantId: row.tenantId, termsVersion: TERMS_VERSION },
