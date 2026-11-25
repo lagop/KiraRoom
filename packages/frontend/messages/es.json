@@ -3490,13 +3490,13 @@
         "title": "Gestión de clientas",
         "description": "Historial completo, notas, etiquetas, fidelidad y más."
       },
-      "profesional_tools": {
+      "professional_tools": {
         "title": "Herramientas para profesionales",
         "description": "Gestiona tu equipo, comisiones, horarios y servicios."
       },
       "loyalty": {
         "title": "Fidelización y promociones",
-        "description": "Programas de puntos, gift cards y campanas de email automáticas."
+        "description": "Programas de puntos, gift cards y campañas de email automáticas."
       },
       "multi_location": {
         "title": "Multi-local",
