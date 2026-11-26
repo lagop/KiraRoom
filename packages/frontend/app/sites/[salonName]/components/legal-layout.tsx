@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { salonLegalNoticePath, salonPrivacyPath } from "@/lib/salon-legal";
+import { KIRAROOM_SITE, salonLegalNoticePath, salonPrivacyPath } from "@/lib/salon-legal";
 
 /**
  * The frame of a salon's privacy page and aviso legal: plain, readable on a
@@ -36,7 +36,12 @@ export function SalonLegalLayout({
         <a href={salonPrivacyPath(slug)} className="hover:text-purple-700 hover:underline">
           Privacidad
         </a>
-        <p className="mt-2">Web de reservas gestionada por KiraRoom</p>
+        <p className="mt-2">
+          Web de reservas gestionada por{" "}
+          <a href={KIRAROOM_SITE} className="hover:text-purple-700 hover:underline">
+            KiraRoom
+          </a>
+        </p>
       </footer>
     </div>
   );

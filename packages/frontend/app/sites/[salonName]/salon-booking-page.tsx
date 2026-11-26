@@ -24,6 +24,7 @@ import {
   closedDayRanges,
   closedRangeText,
   directionsUrl,
+  KIRAROOM_SITE,
   salonLegalNoticePath,
   salonPrivacyHref,
   whatsappHref,
@@ -1629,7 +1630,13 @@ export default function SalonBookingPage({
               {t("sites.privacy")}
             </a>
           </p>
-          <p className="mt-2">{t("sites.poweredBy")}</p>
+          {/* A plain link back to kiraroom.com: every salon page names who runs it. */}
+          <p className="mt-2">
+            {t("sites.poweredBy")}{" "}
+            <a href={KIRAROOM_SITE} className="hover:text-purple-700 hover:underline">
+              KiraRoom
+            </a>
+          </p>
         </div>
       </footer>
 
