@@ -13,6 +13,8 @@
 /** KiraRoom's product domain, and the mailbox its privacy texts give (the public contact, info@kiraroom.com). */
 export const KIRAROOM_DOMAIN = "kiraroom.net";
 export const KIRAROOM_PRIVACY_EMAIL = "info@kiraroom.com";
+/** KiraRoom's public website, linked from the foot of every salon page. */
+export const KIRAROOM_SITE = "https://kiraroom.com/";
 
 /**
  * Who is behind KiraRoom (LSSI art. 10: the provider's identification; RGPD
