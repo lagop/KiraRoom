@@ -163,7 +163,7 @@ const defaultSettingsData = {
       label: "Avisar por email de las solicitudes de ausencia",
       type: "switch",
       description:
-        "Cada solicitud nueva llega por email a la dueña y a los administradores, y cada respuesta al profesional que la pidió. Desactivado, solo se avisa en las notificaciones del panel.",
+        "Cada solicitud nueva llega por email a la dirección del salón y a los administradores, y cada respuesta al profesional que la pidió. Desactivado, solo se avisa en las notificaciones del panel.",
     },
   ],
   receptionist: [

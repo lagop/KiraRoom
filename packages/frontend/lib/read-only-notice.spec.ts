@@ -40,7 +40,7 @@ check(
 
 const forAdmin = readOnlyNotice({ ...base, subscriptionStatus: "cancelled", canManageBilling: false });
 check("an admin or staff gets no link to Facturación (owner only)", forAdmin?.cta === null, forAdmin);
-check("and is told to ask the owner", !!forAdmin?.body.endsWith("Pide a la dueña del salón que elija un plan."), forAdmin?.body);
+check("and is told to ask the owner", !!forAdmin?.body.endsWith("Pide a la dirección del salón que elija un plan."), forAdmin?.body);
 const suspendedStaff = readOnlyNotice({ ...base, subscriptionStatus: "suspended", canManageBilling: false });
 check("suspended: ask the owner to fix the payment", !!suspendedStaff?.body.endsWith("que actualice el pago."), suspendedStaff?.body);
 

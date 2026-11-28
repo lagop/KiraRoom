@@ -175,7 +175,7 @@ export const CONSOLE_EDIT_MESSAGES = {
     "La prueba de este salón ya ha terminado. Para volver a ponerlo en prueba, indica una nueva fecha de fin de prueba.",
   trialEndPast: "La nueva fecha de fin de prueba tiene que ser posterior a hoy.",
   cancelInStripe:
-    "Este salón tiene una suscripción activa en Stripe: darlo de baja aquí no deja de cobrarle. Cancélala en Stripe (o pide a la dueña que lo haga desde Facturación).",
+    "Este salón tiene una suscripción activa en Stripe: darlo de baja aquí no deja de cobrarle. Cancélala en Stripe (o pide a la dirección del salón que lo haga desde Facturación).",
   /** Audit 8 D4 / D6: status changes have their own buttons now. */
   useCourtesy: "Para que un salón funcione sin pagar, usa «Cortesía» (con plan y fecha de fin).",
   useSuspend: "Para dar de baja un salón, usa «Suspender»: cancela su cobro y le avisa por email.",
@@ -189,7 +189,7 @@ export const CONSOLE_EDIT_MESSAGES = {
 /** Reactivating a salon whose owner asked to delete it (audit 8 T4). */
 export function pendingDeletionMessage(requestedAt: Date): string {
   const day = requestedAt.toLocaleDateString("es-ES", { timeZone: "Europe/Madrid", day: "numeric", month: "long", year: "numeric" });
-  return `La dueña pidió borrar este salón el ${day}. Darle cortesía anula esa petición: marca «Anular también el borrado pendiente» para confirmarlo.`;
+  return `La dirección del salón pidió borrarlo el ${day}. Darle cortesía anula esa petición: marca «Anular también el borrado pendiente» para confirmarlo.`;
 }
 
 /**

@@ -160,7 +160,7 @@ describe("T4: Cortesía clears the old retention state", () => {
     const requested = new Date("2026-10-20T09:00:00Z");
     const { svc, tenants } = makeService(tenantRow({ ...stale, deletionRequestedAt: requested, deletionRestore: { status: "active" } }));
     await expect(svc.courtesyTenant("t-1", { plan: "pro", until: until() })).rejects.toThrow(ConflictException);
-    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: until() })).rejects.toThrow(/pidió borrar este salón/);
+    await expect(svc.courtesyTenant("t-1", { plan: "pro", until: until() })).rejects.toThrow(/pidió borrarlo el/);
     expect(tenants.get("t-1").subscriptionStatus).toBe("cancelled");
     expect(tenants.get("t-1").deletionRequestedAt).toBe(requested);
   });

@@ -330,7 +330,7 @@ export const CO_PILOT_SCENARIOS: CopilotScenario[] = [
       { kind: 'noPendingApproval' },
       {
         kind: 'containsAny',
-        values: ['no puedo', 'no es', 'no está', 'permiso', 'dueño', 'owner', 'gerencia', 'administrador', 'administrativa'],
+        values: ['no puedo', 'no es', 'no está', 'permiso', 'dirección', 'dueño', 'owner', 'gerencia', 'administrador', 'administrativa'],
       },
     ],
   },

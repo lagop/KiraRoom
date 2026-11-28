@@ -27,8 +27,8 @@ check("the message is Spanish", FORBIDDEN_MESSAGE.startsWith("No tienes permiso"
 console.log("the server's own messages are kept");
 check(
   "a 403 the server explained",
-  apiErrorMessage(403, "Solo la dueña o un encargado pueden corregir el pago de una cita.", "x"),
-  "Solo la dueña o un encargado pueden corregir el pago de una cita.",
+  apiErrorMessage(403, "Solo la dirección del salón o un encargado pueden corregir el pago de una cita.", "x"),
+  "Solo la dirección del salón o un encargado pueden corregir el pago de una cita.",
 );
 check("a validation failure, one sentence per field", apiErrorMessage(400, ["a is wrong", "b is wrong"], "x"), "a is wrong. b is wrong");
 check("a 404's message", apiErrorMessage(404, "Cita no encontrada", "x"), "Cita no encontrada");

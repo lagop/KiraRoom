@@ -47,6 +47,6 @@ export class CreateInviteDto {
    */
   @ApiPropertyOptional({ enum: ["owner"], default: "owner" })
   @IsOptional()
-  @IsIn([UserRole.owner], { message: "Una invitación solo puede crear la cuenta de la dueña del salón (owner)." })
+  @IsIn([UserRole.owner], { message: "Una invitación solo puede crear la cuenta titular del salón (owner)." })
   role?: UserRole;
 }
