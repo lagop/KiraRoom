@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import apiClient, { type CommissionPayout, type CommissionSettings } from "@/lib/api";
 import { useTranslations } from "@/lib/use-translation";
@@ -113,6 +113,10 @@ export default function CommissionsPage() {
     null,
   );
   const [loading, setLoading] = useState(true);
+  // Reloads after paying, undoing a payment or saving the settings keep the page
+  // on screen; only the first load shows the page spinner.
+  const [refreshing, setRefreshing] = useState(false);
+  const loadedOnce = useRef(false);
   // The summary could not be loaded (not an empty salon): shown with "Reintentar".
   const [loadError, setLoadError] = useState<string | null>(null);
   // The plan does not include commissions (403 FEATURE_NOT_IN_PLAN).
@@ -158,15 +162,18 @@ export default function CommissionsPage() {
 
   const loadCommissions = async () => {
     try {
-      setLoading(true);
+      if (loadedOnce.current) setRefreshing(true);
+      else setLoading(true);
       setLoadError(null);
       const data = await apiClient.getAllCommissionSummaries();
       setCommissions(data);
+      loadedOnce.current = true;
     } catch (error) {
       if (isPlanBlocked(error)) setPlanBlocked(true);
       else setLoadError(errorMessage(error, t("commissions.load_error")));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -509,7 +516,10 @@ export default function CommissionsPage() {
 
       {/* Summary Tab */}
       {activeTab === "summary" && (
-        <div className="space-y-6">
+        <div
+          aria-busy={refreshing}
+          className={`space-y-6 transition-opacity ${refreshing ? "opacity-60" : ""}`}
+        >
           {loadError ? (
             <div role="alert" className="bg-white rounded-lg shadow p-12 text-center">
               <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
@@ -793,7 +803,8 @@ export default function CommissionsPage() {
             <h3 className="text-lg font-semibold text-gray-900">{t("commissions.payouts_title")}</h3>
             <p className="text-sm text-gray-500">{t("commissions.payouts_hint")}</p>
           </div>
-          {payoutsLoading && (
+          {/* A reload after undoing keeps the list on screen while it refreshes. */}
+          {payoutsLoading && !payouts && (
             <div className="flex items-center justify-center h-32" aria-busy="true">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             </div>
@@ -808,13 +819,16 @@ export default function CommissionsPage() {
               </button>
             </div>
           )}
-          {!payoutsLoading && !payoutsError && payouts && payouts.length === 0 && (
+          {!payoutsError && payouts && payouts.length === 0 && (
             <div className="bg-white rounded-lg shadow p-12 text-center text-gray-500">
               {t("commissions.payouts_empty")}
             </div>
           )}
-          {!payoutsLoading && !payoutsError && payouts && payouts.length > 0 && (
-            <div className="bg-white rounded-lg shadow overflow-hidden">
+          {!payoutsError && payouts && payouts.length > 0 && (
+            <div
+              aria-busy={payoutsLoading}
+              className={`bg-white rounded-lg shadow overflow-hidden transition-opacity ${payoutsLoading ? "opacity-60" : ""}`}
+            >
               <div className="overflow-x-auto">
                 <table className="min-w-[860px] w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
@@ -855,7 +869,7 @@ export default function CommissionsPage() {
                           {p.canUndo && !p.undoneAt && (
                             <button
                               onClick={() => setPendingUndo(p)}
-                              disabled={undoing}
+                              disabled={undoing || payoutsLoading}
                               className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
                             >
                               {t("commissions.undo_last")}
